@@ -442,7 +442,7 @@ fn place_on(att: &SplineAttachment, spline: &MapSpline, origin: DVec2, index: Op
             let (u, side, turn) = if backwards { (len - along, -x, 180.0) } else { (along, x, 0.0) };
             let pos = curve.offset_point(u, side, h);
             let heading = curve.heading_at(u) + turn + att.rot[0];
-            let (mut pitch, mut bank) = (att.rot[1], att.rot[2]);
+            let [_, mut pitch, mut bank] = omsi_geometry::map_rotation(att.rot);
             if att.tilt {
                 let sign = if backwards { -1.0 } else { 1.0 };
                 pitch += sign * curve.slope_at(u).atan().to_degrees();

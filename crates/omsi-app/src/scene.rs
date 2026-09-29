@@ -3120,14 +3120,14 @@ impl World {
             let place = if absolute {
                 Placement::Pose(Pose {
                     pos: DVec3::new(x, y, o.pos[2]),
-                    rot: object_rotation(o.rot),
+                    rot: object_rotation(omsi_geometry::map_rotation(o.rot)),
                 })
             } else {
                 Placement::Ground {
                     x,
                     y,
                     z: o.pos[2],
-                    rot: o.rot,
+                    rot: omsi_geometry::map_rotation(o.rot),
                 }
             };
             out.objects.push(StagedObject {
@@ -3159,7 +3159,7 @@ impl World {
                     parent,
                     index: o.attach_index,
                     instance: o.instance,
-                    rot: o.rot,
+                    rot: omsi_geometry::map_rotation(o.rot),
                 },
                 rules: o.rules.clone(),
                 extra: o.extra.clone(),

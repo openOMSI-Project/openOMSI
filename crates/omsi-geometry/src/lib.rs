@@ -601,6 +601,18 @@ pub fn object_rotation(rot_deg: [f64; 3]) -> Mat4 {
     Mat4::from_quat(q)
 }
 
+/// A map file's heading, pitch and bank (`[object]`, `[attachObj]`, `[splineAttachement]`)
+/// in the terms [`object_rotation`] takes. The file keeps the angles of Direct3D's
+/// left-handed frame, where a positive pitch lowers the nose and a positive bank raises the
+/// right side; going over to the right-handed world turns every sense of rotation round.
+/// `object_rotation` already turns the heading, and pitch and bank have to turn as well: taken
+/// as they stand, TH_Wald's rocks tipped the other way and stood as boxes with a grass lid
+/// beside the road instead of a rock face. (Pitch and bank that openOMSI works out itself -
+/// a parked car on a slope, an object tilted with its spline - are world angles already.)
+pub fn map_rotation(rot_deg: [f64; 3]) -> [f64; 3] {
+    [rot_deg[0], -rot_deg[1], -rot_deg[2]]
+}
+
 /// Convert an `.o3d`/`.x` mesh to [`MeshData`] (one range per material).
 pub fn mesh_from_o3d(m: &omsi_o3d::Mesh) -> MeshData {
     // Vertices are stored in the parent (object/vehicle) frame already; the matrix in the
@@ -674,6 +686,21 @@ pub fn mesh_from_o3d(m: &omsi_o3d::Mesh) -> MeshData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A map object pitched and banked by the file's positive angles: the nose goes down
+    /// and the right side up, as in Direct3D's frame the file keeps them in.
+    #[test]
+    fn map_pitch_lowers_the_nose_and_bank_raises_the_right() {
+        let r = object_rotation(map_rotation([0.0, 30.0, 0.0]));
+        let forward = r.transform_vector3(Vec3::Y);
+        assert!(forward.z < -0.4, "{forward:?}");
+        let r = object_rotation(map_rotation([0.0, 0.0, 30.0]));
+        let up = r.transform_vector3(Vec3::Z);
+        assert!(up.x < -0.4, "{up:?}");
+        // the heading stays as the file has it (clockwise from north)
+        let r = object_rotation(map_rotation([90.0, 0.0, 0.0]));
+        assert!(r.transform_vector3(Vec3::Y).x > 0.99);
+    }
 
     /// A kerb: road at 0, pavement at 0.15 from x = 10 on, a bridge deck at 6 m over it all.
     #[test]
