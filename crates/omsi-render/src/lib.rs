@@ -1,8 +1,19 @@
 //! wgpu renderer.
 
-mod dlss;
-mod upscaler;
+pub struct RenderOptions {
+    pub msaa: u32,
+    pub anisotropy: u16,
+    pub shadow_size: u32,
+    pub ssao: bool,
 
+    pub render_scale: f32,
+
+    pub upscaler: Upscaler,
+    pub dlss_quality: DlssQuality,
+
+    // resto das opções...
+}
+    
 pub use dlss::{DlssRenderer, DlssSettings};
 pub use upscaler::{DlssQuality, Upscaler};
 
@@ -1187,7 +1198,7 @@ pub struct Renderer {
     started: std::time::Instant,
     /// `[matl_texadress_clamp]`: the diffuse of the next material is sampled clamped.
     clamp_sampler: wgpu::Sampler,
-    pub clamp_next: std::cell::Cell<bool>,
+    pub clamp_next: std::cell::Cell<bool>,      
     /// The next material is lit at night by the tile light maps (`[LightMapMapping]`, the
     /// splines) instead of the map's lamps.
     pub light_map_next: std::cell::Cell<bool>,
@@ -1330,6 +1341,8 @@ impl Default for RenderOptions {
             max_obj_dist: 0.0,
             omsi_shadow_casters: false,
             reflections: true,
+            upscaler: Upscaler::Native,
+            dlss_quality: DlssQuality::Quality,
         }
     }
 }
