@@ -703,6 +703,8 @@ pub struct Prepared {
     /// Spline meshes are local to the tile origin.
     /// Spline meshes (local to the tile origin), their type and whether they cast a shadow.
     splines: Vec<(Arc<MeshData>, Arc<SplineType>, bool, DVec3)>,
+    /// Terrain-mapped spline faces pooled across types within spatial cells.
+    ground_splines: Vec<Arc<MeshData>>,
     objects: Vec<PlacedObject>,
     /// (type, texture, position, height, width, heading)
     trees: Vec<(Arc<ObjectType>, String, DVec3, f64, f64, f64)>,
@@ -730,6 +732,7 @@ struct Placing {
     phase: u8,
     /// The next spline or tree of the phase.
     next: usize,
+    ground_next: usize,
     night_slots: Vec<(usize, usize, MaterialId, MaterialId)>,
     night_modes: Vec<NightMode>,
     light_objects: Vec<LightObject>,
@@ -902,6 +905,116 @@ impl FreeList {
         }
         n
     }
+}
+
+/// Short static spline segments with matching materials share a mesh within a 48 m cell.
+/// Their coordinates, material order, terrain mapping and shadow flag stay intact; long segments retain
+/// their own culling bounds. The original meshes remain in the staging/collision data.
+fn batch_static_splines(
+    splines: Vec<(Arc<MeshData>, Arc<SplineType>, bool, DVec3)>,
+) -> Vec<(Arc<MeshData>, Arc<SplineType>, bool, DVec3)> {
+    if omsi_cfg::env::var_os("OMSI_NO_SPLINE_BATCHING").is_some() {
+        return splines;
+    }
+    let mut groups: Vec<(Vec<Arc<MeshData>>, Arc<SplineType>, bool, DVec3)> = Vec::new();
+    let mut cells = HashMap::new();
+    let mut signatures = HashMap::new();
+    let mut type_materials = HashMap::new();
+    let material_batching = omsi_cfg::env::var_os("OMSI_NO_MATERIAL_SPLINE_BATCHING").is_none();
+    for (mesh, ty, casts, sort_origin) in splines {
+        let (lo, hi) = mesh.positions.iter().fold(
+            (glam::Vec3::splat(f32::INFINITY), glam::Vec3::splat(f32::NEG_INFINITY)),
+            |(lo, hi), &p| (lo.min(p), hi.max(p)),
+        );
+        let centre = (lo + hi) * 0.5;
+        // Blended segments retain their individual placement origins and draw order.
+        let blended = mesh.ranges.iter().any(|r| ty.def.textures.get(r.2 as usize).is_some_and(|t| t.alpha >= 2));
+        let short = !blended && centre.is_finite() && (hi - lo).length() <= 48.0;
+        let group = if short {
+            let slots: Vec<_> = mesh.ranges.iter().map(|r| r.2).collect();
+            // UV generation is already complete. Only the textures of the remaining
+            // ranges matter now; an unused terrain slot must not split identical curbs.
+            // Keep the lookup directory and alpha mode exact so similarly named files
+            // in different content packs cannot be combined.
+            let material_type = if material_batching && slots.iter().all(|&s| (s as usize) < ty.def.textures.len()) {
+                (true, *type_materials.entry((Arc::as_ptr(&ty) as usize, slots.clone())).or_insert_with(|| {
+                    let signature = (ty.dir.clone(), slots.iter().map(|&s| {
+                        let texture = &ty.def.textures[s as usize];
+                        (s, texture.file.clone(), texture.alpha)
+                    }).collect::<Vec<_>>());
+                    let next = signatures.len();
+                    *signatures.entry(signature).or_insert(next)
+                }))
+            } else {
+                (false, Arc::as_ptr(&ty) as usize)
+            };
+            let key = (
+                material_type,
+                (centre.x / 48.0).floor() as i32,
+                (centre.y / 48.0).floor() as i32,
+                casts,
+                mesh.one_sided,
+                slots,
+            );
+            *cells.entry(key).or_insert_with(|| {
+                let i = groups.len();
+                groups.push((Vec::new(), ty.clone(), casts, sort_origin));
+                i
+            })
+        } else {
+            let i = groups.len();
+            groups.push((Vec::new(), ty, casts, sort_origin));
+            i
+        };
+        groups[group].0.push(mesh);
+    }
+    groups.into_iter().map(|(mut meshes, ty, casts, sort_origin)| {
+        let mesh = if meshes.len() == 1 {
+            meshes.pop().unwrap()
+        } else {
+            Arc::new(MeshData::merge_static(&meshes.iter().map(AsRef::as_ref).collect::<Vec<_>>()))
+        };
+        (mesh, ty, casts, sort_origin)
+    }).collect()
+}
+
+/// These faces all use the tile's ground materials, irrespective of the source .sli.
+/// Pool them before upload so grass widths and curb types can share a ground draw.
+fn batch_ground_splines(meshes: Vec<Arc<MeshData>>) -> Vec<Arc<MeshData>> {
+    let mut groups: Vec<Vec<Arc<MeshData>>> = Vec::new();
+    let mut cells = HashMap::new();
+    for mesh in meshes {
+        let (lo, hi) = mesh.positions.iter().fold(
+            (glam::Vec3::splat(f32::INFINITY), glam::Vec3::splat(f32::NEG_INFINITY)),
+            |(lo, hi), &p| (lo.min(p), hi.max(p)),
+        );
+        let centre = (lo + hi) * 0.5;
+        let group = if centre.is_finite() && (hi - lo).length() <= 48.0 {
+            let key = (
+                (centre.x / 48.0).floor() as i32,
+                (centre.y / 48.0).floor() as i32,
+                (centre.z / 48.0).floor() as i32,
+                mesh.one_sided,
+            );
+            *cells.entry(key).or_insert_with(|| {
+                let i = groups.len();
+                groups.push(Vec::new());
+                i
+            })
+        } else {
+            let i = groups.len();
+            groups.push(Vec::new());
+            i
+        };
+        groups[group].push(mesh);
+    }
+    groups.into_iter().map(|mut meshes| {
+        if meshes.len() == 1 {
+            meshes.pop().unwrap()
+        } else {
+            Arc::new(MeshData::merge_static(&meshes.iter().map(AsRef::as_ref).collect::<Vec<_>>()))
+        }
+    }).collect()
 }
 
 /// The GPU side of the loaded tiles: shared resources with their users, and the freed ids
@@ -4657,11 +4770,39 @@ impl World {
         }
         // the whole spline meshes go to the GPU from here (a later load reads the tile again)
         let meshes = st.meshes.lock().take().unwrap_or_default();
-        let splines = meshes
+        let splines: Vec<_> = meshes
             .into_iter()
             .zip(st.splines.iter())
             .map(|(m, sp)| (m, sp.ty.clone(), sp.casts_shadow, sp.sort_origin))
             .collect();
+        let (splines, ground_splines) = if omsi_cfg::env::var_os("OMSI_NO_GROUND_SPLINE_BATCHING").is_some()
+            || omsi_cfg::env::var_os("OMSI_NO_SPLINE_BATCHING").is_some()
+        {
+            (splines, Vec::new())
+        } else {
+            let mut slots_by_type = HashMap::new();
+            let mut rest = Vec::new();
+            let mut ground = Vec::new();
+            for (mesh, ty, casts, sort_origin) in splines {
+                let slots: &Vec<usize> = slots_by_type.entry(Arc::as_ptr(&ty) as usize).or_insert_with(|| {
+                    let dirs = texture_dirs(&self.root, &ty.dir);
+                    let dirs: Vec<&Path> = dirs.iter().map(|p| p.as_path()).collect();
+                    ty.def.textures.iter().enumerate()
+                        .filter(|(_, t)| self.textures.cfg(&t.file, &dirs).terrain_mapping)
+                        .map(|(i, _)| i).collect()
+                });
+                if slots.is_empty() {
+                    rest.push((mesh, ty, casts, sort_origin));
+                    continue;
+                }
+                let faces = terrain_ground(&mesh, slots, st.origin, Mat4::IDENTITY, st.origin);
+                if !faces.is_empty() { ground.push(Arc::new(faces)); }
+                let mesh = terrain_rest(&mesh, slots);
+                if !mesh.ranges.is_empty() { rest.push((Arc::new(mesh), ty, casts, sort_origin)); }
+            }
+            (rest, batch_ground_splines(ground))
+        };
+        let splines = batch_static_splines(splines);
         Some(Prepared {
             tx,
             ty,
@@ -4670,6 +4811,7 @@ impl World {
             paint: Vec::new(),
             water: st.water,
             splines,
+            ground_splines,
             objects,
             trees,
             origin: st.origin,
@@ -5490,6 +5632,7 @@ impl World {
                 mats.push(base);
             }
             let id = gpu.add_mesh(renderer, scene, mesh);
+            scene.meshes[id].source = Some(ot.sco.path.display().to_string());
             t.meshes.push((
                 id,
                 if mats.is_empty() {
@@ -5555,6 +5698,7 @@ impl World {
                     mats.push(mat);
                 }
                 let id = gpu.add_mesh(renderer, scene, mesh);
+                scene.meshes[id].source = Some(ot.sco.path.display().to_string());
                 l.push((
                     id,
                     if mats.is_empty() {
@@ -5975,6 +6119,23 @@ impl World {
                     done_some = true;
                 }
                 1 => {
+                    if !only_object && pl.ground_next < p.ground_splines.len() {
+                        let mesh = &p.ground_splines[pl.ground_next];
+                        pl.ground_next += 1;
+                        let id = gpu.add_mesh(renderer, scene, mesh);
+                        scene.meshes[id].source = Some("terrain-mapped spline cells".to_string());
+                        tg.meshes.push(id);
+                        for &(mat, _) in &pl.ground_mats {
+                            let si = instance!(renderer.add_surface_instance(scene, id, p.origin, Mat4::from_translation(glam::Vec3::Z * OMSI_SURFACE_LIFT), vec![mat]));
+                            if let Some(inst) = scene.instances.get_mut(si) {
+                                inst.render_phase = RenderPhase::Spline;
+                                inst.surface_bias = false;
+                            }
+                        }
+                        done_some = true;
+                        pl.secs[1] += t_phase.elapsed().as_secs_f64();
+                        continue;
+                    }
                     if only_object || pl.next >= p.splines.len() {
                         pl.phase = 2;
                         pl.next = 0;
@@ -6070,6 +6231,7 @@ impl World {
                     } else {
                         let ground = terrain_ground(mesh, &terrain, p.origin, Mat4::IDENTITY, p.origin);
                         let gid = gpu.add_mesh(renderer, scene, &ground);
+                        scene.meshes[gid].source = Some(st.def.path.display().to_string());
                         tg.meshes.push(gid);
                         for &(mat, _) in &pl.ground_mats {
                             let terrain_instance = instance!(renderer.add_surface_instance(
@@ -6088,6 +6250,7 @@ impl World {
                         gpu.add_mesh(renderer, scene, &terrain_rest(mesh, &terrain))
                     };
                     tg.meshes.push(id);
+                    scene.meshes[id].source = Some(st.def.path.display().to_string());
                     let si = instance!(renderer.add_surface_instance(
                         scene,
                         id,
@@ -6251,6 +6414,7 @@ impl World {
                             .zip(type_meshes.iter())
                             .map(|(m, (_, mats))| {
                                 let id = gpu.add_mesh(renderer, scene, m);
+                                scene.meshes[id].source = Some(ot.sco.path.display().to_string());
                                 tg.meshes.push(id);
                                 (id, mats.clone())
                             })
@@ -6285,12 +6449,14 @@ impl World {
                             // rest of every other object is the same for all its placements)
                             let rest_id = if level == 0 && warped.is_some() {
                                 let id = gpu.add_mesh(renderer, scene, &terrain_rest(src, &slots));
+                                scene.meshes[id].source = Some(ot.sco.path.display().to_string());
                                 tg.meshes.push(id);
                                 id
                             } else if let Some(&(_, id)) = gpu.types[&tkey].terrain_rest.iter().find(|r| r.0 == (level, mi)) {
                                 id
                             } else {
                                 let id = gpu.add_mesh(renderer, scene, &terrain_rest(src, &slots));
+                                scene.meshes[id].source = Some(ot.sco.path.display().to_string());
                                 if let Some(t) = gpu.types.get_mut(&tkey) {
                                     t.terrain_rest.push(((level, mi), id));
                                 }
@@ -6305,6 +6471,7 @@ impl World {
                                 slot.0 = rest_id;
                             }
                             let ground_id = gpu.add_mesh(renderer, scene, &ground);
+                            scene.meshes[ground_id].source = Some(ot.sco.path.display().to_string());
                             tg.meshes.push(ground_id);
                             ground_meshes.push((level, mi, ground_id));
                         }
@@ -10431,6 +10598,7 @@ impl World {
             }
         };
         mesh_ids.insert(key.clone(), (id, 1));
+        scene.meshes[id].source = Some(vt.def.path.display().to_string());
         keys.push(key);
         id
     }
@@ -11410,6 +11578,89 @@ fn object_lanes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spline_batches_keep_materials_cells_shadows_and_long_segments_separate() {
+        use omsi_scenery::sli::SplineTexture;
+        let def = |file: &str| Spline {
+            textures: vec![SplineTexture { file: file.into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let ty = Arc::new(SplineType { def: def("curb.dds"), dir: PathBuf::new() });
+        let other = Arc::new(SplineType { def: def("other.dds"), dir: PathBuf::new() });
+        let other_dir = Arc::new(SplineType { def: def("curb.dds"), dir: PathBuf::from("another_pack") });
+        let mut tested = def("curb.dds");
+        tested.textures[0].alpha = 1;
+        let tested = Arc::new(SplineType { def: tested, dir: PathBuf::new() });
+        let mut blended = def("curb.dds");
+        blended.textures[0].alpha = 2;
+        let blended = Arc::new(SplineType { def: blended, dir: PathBuf::new() });
+        let mut compatible = def("curb.dds");
+        compatible.path = PathBuf::from("another_profile.sli");
+        compatible.textures.push(SplineTexture { file: "unused-grass.dds".into(), ..Default::default() });
+        let compatible = Arc::new(SplineType { def: compatible, dir: PathBuf::new() });
+        let mesh = |x: f32, length: f32| Arc::new(MeshData {
+            positions: vec![glam::Vec3::new(x, 0.0, 0.0), glam::Vec3::new(x + length, 0.0, 0.0), glam::Vec3::new(x, 1.0, 0.0)],
+            normals: vec![glam::Vec3::Z; 3],
+            uvs: vec![glam::Vec2::ZERO; 3],
+            indices: vec![0, 1, 2],
+            ranges: vec![(0, 3, 0)],
+            one_sided: true,
+        });
+        let batched = batch_static_splines(vec![
+            (mesh(1.0, 2.0), ty.clone(), false, DVec3::ZERO),
+            (mesh(5.0, 2.0), ty.clone(), false, DVec3::ZERO),
+            (mesh(9.0, 2.0), compatible, false, DVec3::ZERO),
+            (mesh(49.0, 2.0), ty.clone(), false, DVec3::ZERO),
+            (mesh(1.0, 2.0), other, false, DVec3::ZERO),
+            (mesh(1.0, 2.0), other_dir, false, DVec3::ZERO),
+            (mesh(1.0, 2.0), tested, false, DVec3::ZERO),
+            (mesh(1.0, 2.0), ty.clone(), true, DVec3::ZERO),
+            (mesh(1.0, 100.0), ty.clone(), false, DVec3::ZERO),
+            (mesh(1.0, 100.0), ty, false, DVec3::ZERO),
+            (mesh(1.0, 2.0), blended.clone(), false, DVec3::new(1.0, 2.0, 3.0)),
+            (mesh(5.0, 2.0), blended, false, DVec3::new(4.0, 5.0, 6.0)),
+        ]);
+        assert_eq!(batched.len(), 10);
+        assert_eq!(batched[8].0.indices.len(), 3);
+        assert_eq!(batched[9].0.indices.len(), 3);
+        assert_eq!(batched[8].3, DVec3::new(1.0, 2.0, 3.0));
+        assert_eq!(batched[9].3, DVec3::new(4.0, 5.0, 6.0));
+        assert_eq!(batched[0].0.indices.len(), 9);
+        assert_eq!(batched[0].0.ranges, vec![(0, 9, 0)]);
+        assert_eq!(batched.iter().filter(|b| b.2).count(), 1);
+        assert_eq!(batched.iter().map(|b| b.0.indices.len()).sum::<usize>(), 36);
+    }
+
+    #[test]
+    fn ground_spline_batches_preserve_faces_and_uvs_with_local_bounds() {
+        let mesh = |x: f32, z: f32, length: f32, one_sided: bool| Arc::new(MeshData {
+            positions: vec![glam::Vec3::new(x, 0.0, z), glam::Vec3::new(x + length, 0.0, z), glam::Vec3::new(x, 1.0, z)],
+            normals: vec![glam::Vec3::Z; 3],
+            uvs: vec![glam::Vec2::new(x / 300.0, z / 300.0); 3],
+            indices: vec![0, 1, 2],
+            ranges: vec![(0, 3, 0)],
+            one_sided,
+        });
+        let a = mesh(1.0, 0.0, 2.0, true);
+        let b = mesh(5.0, 0.0, 2.0, true);
+        let batched = batch_ground_splines(vec![
+            a.clone(), b.clone(),
+            mesh(49.0, 0.0, 2.0, true),
+            mesh(1.0, 49.0, 2.0, true),
+            mesh(1.0, 0.0, 2.0, false),
+            mesh(1.0, 0.0, 100.0, true),
+            mesh(1.0, 0.0, 100.0, true),
+        ]);
+        assert_eq!(batched.len(), 6);
+        let combined = &batched[0];
+        assert_eq!(combined.positions, [a.positions.clone(), b.positions.clone()].concat());
+        assert_eq!(combined.normals, [a.normals.clone(), b.normals.clone()].concat());
+        assert_eq!(combined.uvs, [a.uvs.clone(), b.uvs.clone()].concat());
+        assert_eq!(combined.indices, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(combined.ranges, vec![(0, 6, 0)]);
+        assert_eq!(batched.iter().map(|m| m.indices.len()).sum::<usize>(), 21);
+    }
 
     /// A light map covers the 3x3 tiles around its own: a lamp's pool in the middle of the
     /// picture is in the middle of the tile, one in a neighbour's third is left out, and the

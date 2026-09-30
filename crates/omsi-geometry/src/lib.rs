@@ -22,6 +22,38 @@ pub struct MeshData {
 }
 
 impl MeshData {
+    /// Join static meshes with the same ordered material slots and winding. Each range
+    /// keeps its place in the material order, but draws all segments in one call.
+    /// Positions must already be expressed in the same coordinate frame.
+    pub fn merge_static(meshes: &[&MeshData]) -> MeshData {
+        let Some(first) = meshes.first() else { return MeshData::default() };
+        let mut out = MeshData { one_sided: first.one_sided, ..Default::default() };
+        let mut ranges = vec![Vec::new(); first.ranges.len()];
+        for mesh in meshes {
+            assert_eq!(mesh.one_sided, first.one_sided);
+            assert_eq!(mesh.ranges.len(), first.ranges.len());
+            let base = out.positions.len() as u32;
+            out.positions.extend_from_slice(&mesh.positions);
+            out.normals.extend_from_slice(&mesh.normals);
+            out.uvs.extend_from_slice(&mesh.uvs);
+            for (i, &(start, count, slot)) in mesh.ranges.iter().enumerate() {
+                assert_eq!(slot, first.ranges[i].2);
+                ranges[i].extend(mesh.indices[start as usize..(start + count) as usize].iter().map(|v| base + v));
+            }
+        }
+        for (indices, &(_, _, slot)) in ranges.into_iter().zip(&first.ranges) {
+            let start = out.indices.len() as u32;
+            let count = indices.len() as u32;
+            out.indices.extend(indices);
+            // Adjacent profiles using the same slot have identical draw parameters.
+            match out.ranges.last_mut() {
+                Some((_, n, s)) if *s == slot => *n += count,
+                _ => out.ranges.push((start, count, slot)),
+            }
+        }
+        out
+    }
+
     pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
     }
@@ -881,6 +913,32 @@ pub fn reverse_winding(data: &mut MeshData) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn static_mesh_merge_preserves_geometry_uvs_and_material_order() {
+        let a = MeshData {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z],
+            normals: vec![Vec3::Z; 4],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::ONE],
+            indices: vec![0, 1, 2, 1, 2, 3, 0, 2, 3],
+            ranges: vec![(0, 3, 0), (3, 3, 1), (6, 3, 0)],
+            one_sided: true,
+        };
+        let mut b = a.clone();
+        for p in &mut b.positions { *p += Vec3::splat(20.0); }
+        let merged = MeshData::merge_static(&[&a, &b]);
+        assert_eq!(merged.positions, [a.positions.clone(), b.positions.clone()].concat());
+        assert_eq!(merged.normals, [a.normals.clone(), b.normals.clone()].concat());
+        assert_eq!(merged.uvs, [a.uvs.clone(), b.uvs.clone()].concat());
+        assert_eq!(merged.indices, vec![0, 1, 2, 4, 5, 6, 1, 2, 3, 5, 6, 7, 0, 2, 3, 4, 6, 7]);
+        assert_eq!(merged.ranges, vec![(0, 6, 0), (6, 6, 1), (12, 6, 0)]);
+        assert!(merged.one_sided);
+        // Same-slot adjacent profiles need only one draw and keep their triangle order.
+        b.ranges = vec![(0, 3, 0), (3, 3, 0), (6, 3, 1)];
+        let merged = MeshData::merge_static(&[&b, &b]);
+        assert_eq!(merged.ranges, vec![(0, 12, 0), (12, 6, 1)]);
+        assert_eq!(merged.indices.len(), b.indices.len() * 2);
+    }
 
     /// A map object turned, pitched and banked a good deal at once stands as Omsi.exe puts
     /// it: `v · RotationX(pitch) · RotationZ(bank) · RotationY(heading)` in Direct3D's

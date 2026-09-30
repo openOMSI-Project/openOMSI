@@ -3233,6 +3233,7 @@ dependencies = [
  "omsi-geometry",
  "omsi-texture",
  "pollster",
+ "rayon",
  "wgpu",
  "windows 0.62.2",
  "winit",

@@ -2121,6 +2121,10 @@ impl ApplicationHandler for App {
                     }
                     self.total_frames += 1;
                     if self.fps_t.elapsed().as_secs_f32() >= 1.0 {
+                        if omsi_cfg::env::var_os("OMSI_PROFILE").is_some() {
+                            let secs = self.fps_t.elapsed().as_secs_f32();
+                            log::info!("profile interval: {:.1} fps over {secs:.2} s", self.frames as f32 / secs);
+                        }
                         let speed = self
                             .player
                             .as_ref()

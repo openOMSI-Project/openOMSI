@@ -4,6 +4,19 @@ Every push to `main` is released as `MAJOR.MINOR.COMMIT` (see
 [docs/VERSIONING.md](docs/VERSIONING.md)); the downloads are on the
 [Releases](https://github.com/turbo-devv/openOMSI/releases) page.
 
+## 0.1.342 - 2026-09-30
+
+### Performance
+- Busy spline scenes cost far less CPU: short static kerb, grass and pavement splines are
+  drawn together per 48 m cell, and `[terrainmapping]` spline faces share the tile's ground
+  materials (#340, by TruckiHD; for #284).
+
+### Multiplayer
+- Another player's articulated bus has its rear section lit, with its displays and its
+  sounds (#338); its roller blind shows the line number (#334); a passenger in another
+  player's bus hears it from inside (#330) - all by Jaja80330. The network format changed
+  with #334: players and servers need this version together.
+
 ## 0.1.330 - 2026-09-30
 
 ### Driving

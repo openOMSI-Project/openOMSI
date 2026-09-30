@@ -623,6 +623,8 @@ pub struct GpuMesh {
     pub bounds_radius: f32,
     /// Back faces are culled (a content mesh, see `MeshData::one_sided`).
     pub one_sided: bool,
+    /// Source asset for the optional draw-cost audit.
+    pub source: Option<String>,
 }
 
 /// An RGBA picture borrowed for an upload.
@@ -805,6 +807,30 @@ struct MaterialMaps {
     pbr: Option<PbrMaps>,
 }
 
+#[derive(Clone, Copy, Default)]
+struct InstanceBounds {
+    centre: Vec3,
+    radius: f32,
+    scale: f32,
+}
+
+impl InstanceBounds {
+    fn new(mesh: &GpuMesh, transform: Mat4) -> Self {
+        let scale = transform_scale(transform);
+        Self {
+            centre: transform.transform_point3(mesh.bounds_center),
+            radius: mesh.bounds_radius * scale,
+            scale,
+        }
+    }
+}
+
+fn transform_scale(transform: Mat4) -> f32 {
+    transform.x_axis.truncate().length_squared()
+        .max(transform.y_axis.truncate().length_squared())
+        .max(transform.z_axis.truncate().length_squared()).sqrt()
+}
+
 /// The ordered world passes used by OMSI for ground and scenery geometry.
 ///
 /// Keep these phases separate in the main pass: a later phase must be able to sit over an
@@ -867,6 +893,9 @@ pub struct Instance {
     pub interior_lamps: u32,
     /// First entry of this instance in the per-draw storage buffers (set by `prepare`).
     base: u32,
+    /// Transformed local bounds, refreshed with the GPU instance data. The floating
+    /// render origin is applied per view, so changing it cannot leave stale spheres.
+    bounds: InstanceBounds,
     /// Surface geometry classification (roads, markings, crossings), used for culling and
     /// weather/shading. `surface_bias` independently selects the rasterizer's depth bias.
     pub surface: bool,
@@ -978,6 +1007,9 @@ pub struct Scene {
     /// because one bus moved was the biggest single CPU cost of a frame.
     changed: Vec<usize>,
     changed_mark: Vec<bool>,
+    cache_bounds: bool,
+    bounds_meshes: Vec<bool>,
+    bounds_dirty: bool,
     /// What the per-draw buffers hold, kept on the CPU: changed entries are written here
     /// and uploaded as a few merged ranges. Every `write_buffer` makes a new staging buffer
     /// on the GPU, and one per changed vehicle or person was a hundred of them a frame.
@@ -1266,6 +1298,10 @@ pub struct Renderer {
     /// passed the culling and draws per pass.
     pub counts: std::cell::RefCell<std::collections::BTreeMap<&'static str, f64>>,
     profiling: bool,
+    draw_audit_at: std::time::Instant,
+    /// Reuse a small set of encoding workers instead of creating OS threads for each
+    /// main/mirror picture. Keep these separate from simulation's worker queue.
+    encoding_pool: Option<rayon::ThreadPool>,
     /// Vertex data of changed meshes (skinned people, the driver) waiting for the next
     /// picture: (mesh, bytes). Written with one staging buffer and a copy each at the start
     /// of the frame - a `write_buffer` per mesh made wgpu create a staging buffer for every
@@ -3754,6 +3790,16 @@ impl Renderer {
             stats: Default::default(),
             counts: Default::default(),
             profiling: omsi_cfg::env::var_os("OMSI_PROFILE").is_some(),
+            draw_audit_at: std::time::Instant::now(),
+            encoding_pool: if omsi_cfg::env::var_os("OMSI_NO_RENDER_POOL").is_some() {
+                None
+            } else {
+                let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2)
+                    .saturating_sub(1).clamp(1, 3);
+                rayon::ThreadPoolBuilder::new().num_threads(workers)
+                    .thread_name(|i| format!("omsi-render-{i}"))
+                    .build().ok()
+            },
             pending_meshes: Default::default(),
             freed: std::cell::OnceCell::new(),
         }
@@ -3878,6 +3924,9 @@ impl Renderer {
             dirty: true,
             changed: Vec::new(),
             changed_mark: Vec::new(),
+            cache_bounds: omsi_cfg::env::var_os("OMSI_NO_BOUNDS_CACHE").is_none(),
+            bounds_meshes: Vec::new(),
+            bounds_dirty: false,
             uploaded_instances: 0,
             uploaded_entries: 0,
             cpu_models: Vec::new(),
@@ -3938,6 +3987,7 @@ impl Renderer {
         if !positions.is_empty() {
             m.bounds_center = (lo + hi) * 0.5;
             m.bounds_radius = (hi - m.bounds_center).length();
+            Self::mesh_bounds_changed(scene, id);
         }
     }
 
@@ -5198,6 +5248,7 @@ impl Renderer {
             interior: 0.0,
             interior_lamps: 0,
             base: 0,
+            bounds: InstanceBounds::default(),
             surface: false,
             presurface: false,
             render_phase: RenderPhase::Normal,
@@ -5247,6 +5298,7 @@ impl Renderer {
             interior: 0.0,
             interior_lamps: 0,
             base: 0,
+            bounds: InstanceBounds::default(),
             surface: true,
             presurface: false,
             render_phase: RenderPhase::Normal,
@@ -5474,17 +5526,49 @@ impl Renderer {
     /// through the instance transform (the model matrix is that transform moved by the
     /// origin, so no matrix product is needed), the radius scaled by the largest axis.
     fn bounding_sphere(scene: &Scene, i: &Instance) -> (Vec3, f32) {
-        let m = &scene.meshes[i.mesh];
-        let c = i.transform.transform_point3(m.bounds_center)
-            + (i.origin - scene.render_origin).as_vec3();
-        let s2 = i
-            .transform
-            .x_axis
-            .truncate()
-            .length_squared()
-            .max(i.transform.y_axis.truncate().length_squared())
-            .max(i.transform.z_axis.truncate().length_squared());
-        (c, m.bounds_radius * s2.sqrt())
+        let b = if scene.cache_bounds { i.bounds } else { InstanceBounds::new(&scene.meshes[i.mesh], i.transform) };
+        (b.centre + (i.origin - scene.render_origin).as_vec3(), b.radius)
+    }
+
+    fn instance_scale(scene: &Scene, i: &Instance) -> f32 {
+        if scene.cache_bounds { i.bounds.scale } else { transform_scale(i.transform) }
+    }
+
+    fn mesh_bounds_changed(scene: &mut Scene, mesh: MeshId) {
+        scene.bounds_meshes.resize(scene.meshes.len(), false);
+        scene.bounds_meshes[mesh] = true;
+        scene.bounds_dirty = true;
+    }
+
+    fn prepare_bounds(scene: &mut Scene) {
+        if !scene.cache_bounds { return; }
+        if scene.dirty {
+            for i in &mut scene.instances {
+                i.bounds = InstanceBounds::new(&scene.meshes[i.mesh], i.transform);
+            }
+        } else {
+            for i in &mut scene.instances[scene.uploaded_instances..] {
+                i.bounds = InstanceBounds::new(&scene.meshes[i.mesh], i.transform);
+            }
+            for &idx in &scene.changed {
+                if let Some(i) = scene.instances.get_mut(idx) {
+                    i.bounds = InstanceBounds::new(&scene.meshes[i.mesh], i.transform);
+                }
+            }
+            if scene.bounds_dirty {
+                // Skinning can alter a shared mesh without changing any model matrix.
+                // Scan once per pose update, rather than once per shadow/mirror view.
+                for i in &mut scene.instances {
+                    if scene.bounds_meshes.get(i.mesh).copied().unwrap_or(false) {
+                        i.bounds = InstanceBounds::new(&scene.meshes[i.mesh], i.transform);
+                    }
+                }
+            }
+        }
+        if scene.bounds_dirty {
+            scene.bounds_meshes.fill(false);
+            scene.bounds_dirty = false;
+        }
     }
 
     /// A dynamic alpha value is never allowed to fade an opaque body panel; only
@@ -6068,6 +6152,7 @@ impl Renderer {
     }
 
     pub fn prepare(&self, scene: &mut Scene) {
+        Self::prepare_bounds(scene);
         scene.bind_groups.clear();
         if !scene.dirty
             && scene.instances.len() > scene.uploaded_instances
@@ -7360,8 +7445,7 @@ impl Renderer {
         // an instance's screen size as the camera pass measures it for the LOD choice
         let lod_fov = camera.fov_deg.to_radians().max(1e-3);
         let lod_size = |inst: &Instance| -> f32 {
-            let t = &inst.transform;
-            let scale = t.x_axis.truncate().length_squared().max(t.y_axis.truncate().length_squared()).max(t.z_axis.truncate().length_squared()).sqrt();
+            let scale = Self::instance_scale(scene, inst);
             let radius = if inst.object_radius > 0.0 { inst.object_radius } else { scene.meshes[inst.mesh].bounds_radius } * scale;
             let d = ((inst.origin - scene.render_origin).as_vec3() - cam_rel).length();
             if d <= radius { f32::MAX } else { 2.0 * radius / (d.max(0.01) * lod_fov) }
@@ -7623,14 +7707,7 @@ impl Renderer {
                     // `set_object_culling`), else of the mesh alone. Surfaces and terrain
                     // are never dropped for it.
                     let size = if inst.object_radius > 0.0 {
-                        let t = &inst.transform;
-                        let scale = t
-                            .x_axis
-                            .truncate()
-                            .length_squared()
-                            .max(t.y_axis.truncate().length_squared())
-                            .max(t.z_axis.truncate().length_squared())
-                            .sqrt();
+                        let scale = Self::instance_scale(scene, inst);
                         let radius = inst.object_radius * scale;
                         let ov = view.transform_point3((inst.origin - scene.render_origin).as_vec3());
                         let (od, oz) = (ov.length(), -ov.z);
@@ -7938,8 +8015,8 @@ impl Renderer {
                 // at the car/bus silhouette - the only measured difference was in the bus's own
                 // overlapping window/dirt/interior layers, which is exactly this sort's stated
                 // job. If the reported artefact is real, its cause is still open and elsewhere.
-                let near_by_origin: Vec<(DVec3, f32)> = if self.blend_by_origin {
-                    Vec::new()
+                let near_by_origin = if self.blend_by_origin {
+                    HashMap::new()
                 } else {
                     nearest_by_origin(blended.iter().filter_map(|&i| {
                         let inst = &scene.instances[i];
@@ -7977,9 +8054,8 @@ impl Renderer {
                             ((inst.origin - ro).as_vec3() - cam_rel).length()
                         } else {
                             near_by_origin
-                                .iter()
-                                .find(|(o, _)| *o == inst.origin)
-                                .map(|(_, d)| *d)
+                                .get(&origin_key(inst.origin))
+                                .copied()
                                 .unwrap_or(0.0)
                         };
                         (rank, dist, i)
@@ -8051,6 +8127,8 @@ impl Renderer {
             let mut c = self.counts.borrow_mut();
             *c.entry("visible instances").or_default() += visible.len() as f64;
             *c.entry("main draws").or_default() += (main_draws[0] + main_draws[1]) as f64;
+            *c.entry("opaque draws").or_default() += main_draws[0] as f64;
+            *c.entry("blended draws").or_default() += main_draws[1] as f64;
             *c.entry("main batches").or_default() += main_batches.len() as f64;
             *c.entry("prepass batches").or_default() += prepass_batches.len() as f64;
             *c.entry("shadow batches").or_default() +=
@@ -8062,6 +8140,21 @@ impl Renderer {
             *c.entry("ktris shadow near").or_default() += tris(&shadow_batches[0]);
             *c.entry("ktris shadow far").or_default() += tris(&shadow_batches[1]);
             *c.entry("ktris shadow close").or_default() += tris(&shadow_batches[2]);
+        }
+        if self.profiling && with_overlays && self.draw_audit_at.elapsed().as_secs() >= 10 {
+            self.draw_audit_at = std::time::Instant::now();
+            let mut assets: HashMap<&str, (usize, usize)> = HashMap::new();
+            for b in &main_batches {
+                let source = scene.meshes[b.mesh as usize].source.as_deref().unwrap_or("procedural / vehicle");
+                let cost = assets.entry(source).or_default();
+                cost.0 += 1;
+                cost.1 += b.instances.len();
+            }
+            let mut assets: Vec<_> = assets.into_iter().collect();
+            assets.sort_unstable_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(b.0)));
+            for (source, (batches, draws)) in assets.into_iter().take(12) {
+                log::info!("draw audit: {batches} batches, {draws} draws: {source}");
+            }
         }
         stage(self, "items", "mirror.items");
         self.upload_draw_list(scene, &list);
@@ -8078,6 +8171,7 @@ impl Renderer {
             };
             record_bundles(
                 &self.device,
+                self.encoding_pool.as_ref(),
                 scene,
                 &main_batches,
                 pp,
@@ -8726,24 +8820,68 @@ impl Renderer {
         // helper threads while this one finishes the picture.
         let big =
             shadow_batches.iter().map(|b| b.len()).sum::<usize>() + prepass_batches.len() > 64;
-        let (shadow_commands, prepass_commands, commands) = if big {
+        let profiling = self.profiling;
+        let finish = |encoder: wgpu::CommandEncoder| {
+            let start = profiling.then(std::time::Instant::now);
+            let commands = encoder.finish();
+            (commands, start.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0))
+        };
+        let (shadow_commands, prepass_commands, commands, finish_times) = if big && self.encoding_pool.is_some() {
+            self.encoding_pool.as_ref().unwrap().in_place_scope_fifo(|scope| {
+                let (shadow_tx, shadow_rx) = std::sync::mpsc::sync_channel(1);
+                let (prepass_tx, prepass_rx) = std::sync::mpsc::sync_channel(1);
+                let finish = &finish;
+                scope.spawn_fifo(move |_| { let _ = shadow_tx.send(finish(shadow_encoder)); });
+                scope.spawn_fifo(move |_| { let _ = prepass_tx.send(finish(prepass_encoder)); });
+                let (commands, main_secs) = finish(encoder);
+                let wait = std::time::Instant::now();
+                let (shadow_commands, shadow_secs) = shadow_rx.recv().expect("command encoding worker");
+                let shadow_wait = wait.elapsed().as_secs_f64();
+                let wait = std::time::Instant::now();
+                let (prepass_commands, prepass_secs) = prepass_rx.recv().expect("command encoding worker");
+                (shadow_commands, prepass_commands, commands,
+                    [shadow_secs, prepass_secs, main_secs, shadow_wait, wait.elapsed().as_secs_f64()])
+            })
+        } else if big {
             std::thread::scope(|scope| {
-                let shadow = scope.spawn(move || shadow_encoder.finish());
-                let prepass = scope.spawn(move || prepass_encoder.finish());
-                let commands = encoder.finish();
+                let finish = &finish;
+                let shadow = scope.spawn(move || finish(shadow_encoder));
+                let prepass = scope.spawn(move || finish(prepass_encoder));
+                let (commands, main_secs) = finish(encoder);
+                let wait = std::time::Instant::now();
+                let (shadow_commands, shadow_secs) = shadow.join().expect("command encoding thread");
+                let shadow_wait = wait.elapsed().as_secs_f64();
+                let wait = std::time::Instant::now();
+                let (prepass_commands, prepass_secs) = prepass.join().expect("command encoding thread");
                 (
-                    shadow.join().expect("command encoding thread"),
-                    prepass.join().expect("command encoding thread"),
+                    shadow_commands,
+                    prepass_commands,
                     commands,
+                    [shadow_secs, prepass_secs, main_secs, shadow_wait, wait.elapsed().as_secs_f64()],
                 )
             })
         } else {
+            let (shadow, shadow_secs) = finish(shadow_encoder);
+            let (prepass, prepass_secs) = finish(prepass_encoder);
+            let (main, main_secs) = finish(encoder);
             (
-                shadow_encoder.finish(),
-                prepass_encoder.finish(),
-                encoder.finish(),
+                shadow,
+                prepass,
+                main,
+                [shadow_secs, prepass_secs, main_secs, 0.0, 0.0],
             )
         };
+        if self.profiling {
+            // These overlap across helper threads; do not add them to the stage totals.
+            let keys = if with_overlays {
+                ["finish.shadow", "finish.prepass", "finish.main", "finish.wait shadow", "finish.wait prepass"]
+            } else {
+                ["mirror.finish.shadow", "mirror.finish.prepass", "mirror.finish.main", "mirror.finish.wait shadow", "mirror.finish.wait prepass"]
+            };
+            for (key, secs) in keys.into_iter().zip(finish_times) {
+                *self.stats.borrow_mut().entry(key).or_default() += secs;
+            }
+        }
         stage(self, "finish", "mirror.finish");
         self.queue
             .submit([shadow_commands, prepass_commands, commands]);
@@ -8903,6 +9041,7 @@ fn make_mesh(device: &wgpu::Device, queue: &wgpu::Queue, data: &MeshData) -> Gpu
         bounds_center: center,
         bounds_radius: (hi - center).length(),
         one_sided: data.one_sided,
+        source: None,
     }
 }
 
@@ -9504,17 +9643,22 @@ fn pass_timer<'a>(
     })
 }
 
-/// For each distinct origin among `items`, the smallest distance paired with it - an
-/// object's nearest blended mesh to the camera, used instead of the single point every mesh
-/// of that object shares (see the blended sort in `render_to_image`: a long vehicle's own
-/// origin can be well behind, or ahead of, the window nearest the camera).
-fn nearest_by_origin(items: impl IntoIterator<Item = (DVec3, f32)>) -> Vec<(DVec3, f32)> {
-    let mut out: Vec<(DVec3, f32)> = Vec::new();
+fn origin_key(origin: DVec3) -> [u64; 3] {
+    // DVec3 equality treats -0 and +0 alike. Keep that property in the hash key.
+    origin.to_array().map(|v| if v == 0.0 { 0 } else { v.to_bits() })
+}
+
+/// For each distinct origin, the object's nearest blended mesh distance, rather than
+/// the single point all its meshes share (a long vehicle's origin can be far from its
+/// window nearest the camera). Full coordinates and the existing float equality apply.
+fn nearest_by_origin(items: impl IntoIterator<Item = (DVec3, f32)>) -> HashMap<[u64; 3], f32> {
+    let mut out: HashMap<[u64; 3], f32> = HashMap::new();
     for (origin, d) in items {
-        match out.iter_mut().find(|(o, _)| *o == origin) {
-            Some((_, best)) => *best = best.min(d),
-            None => out.push((origin, d)),
+        // NaN origins never compared equal in the old lookup either.
+        if origin.is_nan() {
+            continue;
         }
+        out.entry(origin_key(origin)).and_modify(|best| *best = best.min(d)).or_insert(d);
     }
     out
 }
@@ -9767,6 +9911,7 @@ fn culls_back_faces(scene: &Scene, inst: &Instance) -> bool {
 /// blended ones are far to near).
 fn record_bundles(
     device: &wgpu::Device,
+    pool: Option<&rayon::ThreadPool>,
     scene: &Scene,
     batches: &[Batch],
     pp: &PassPipelines,
@@ -9812,12 +9957,30 @@ fn record_bundles(
             }
         }
     };
-    let parts = (batches.len() / 250).clamp(1, 4);
+    let max_parts = pool.map(|p| p.current_num_threads() + 1).unwrap_or(4);
+    let parts = (batches.len() / 250).clamp(1, max_parts);
     if parts == 1 {
         return record(batches).into_iter().collect();
     }
     let chunks: Vec<&[Batch]> = batches.chunks(batches.len().div_ceil(parts)).collect();
     let record = &record;
+    if let Some(pool) = pool {
+        return pool.in_place_scope_fifo(|scope| {
+            let (tx, rx) = std::sync::mpsc::sync_channel(chunks.len() - 1);
+            for (i, chunk) in chunks[1..].iter().enumerate() {
+                let tx = tx.clone();
+                scope.spawn_fifo(move |_| { let _ = tx.send((i + 1, record(chunk))); });
+            }
+            let mut bundles = vec![None; chunks.len()];
+            bundles[0] = record(chunks[0]);
+            // Preserve draw order even if a later worker finishes first.
+            for _ in 1..chunks.len() {
+                let (i, bundle) = rx.recv().expect("bundle encoding worker");
+                bundles[i] = bundle;
+            }
+            bundles.into_iter().flatten().collect()
+        });
+    }
     std::thread::scope(|scope| {
         let helpers: Vec<_> = chunks[1..]
             .iter()
@@ -10034,6 +10197,7 @@ impl Renderer {
         m.ranges.clear();
         m.bounds_center = Vec3::ZERO;
         m.bounds_radius = 0.0;
+        Self::mesh_bounds_changed(scene, id);
     }
 
     /// Release a texture (a material still using it keeps it alive until it is freed too).
@@ -10147,6 +10311,7 @@ impl Renderer {
         }
         let m = scene.meshes.pop().unwrap();
         scene.meshes[into] = m;
+        Self::mesh_bounds_changed(scene, into);
         into
     }
 
@@ -10203,6 +10368,63 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires a graphics adapter; run with --ignored on a GPU host"]
+    fn cached_bounds_follow_transforms_skinning_and_recycled_resources() {
+        let adapter = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let renderer = pollster::block_on(Renderer::new_with(
+            &adapter, None, Some(wgpu::TextureFormat::Rgba8UnormSrgb),
+            RenderOptions { msaa: 1, shadow_size: 1024, ..Default::default() },
+        )).expect("test renderer");
+        let mut scene = renderer.new_scene();
+        scene.cache_bounds = true;
+        let material = renderer.add_material(&mut scene, None, AlphaMode::Opaque, [1.0; 4], true);
+        let data = MeshData {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+            normals: vec![Vec3::Z; 3], uvs: vec![glam::Vec2::ZERO; 3],
+            indices: vec![0, 1, 2], ranges: vec![(0, 3, 0)], ..Default::default()
+        };
+        let mesh = renderer.add_mesh(&mut scene, &data);
+        let origin = DVec3::new(1_000_000.000_001, 2_000_000.0, 12.0);
+        let i = renderer.add_instance(&mut scene, mesh, origin, Mat4::IDENTITY, vec![material]);
+        let check = |scene: &Scene, i: usize| {
+            let inst = &scene.instances[i];
+            let expected = InstanceBounds::new(&scene.meshes[inst.mesh], inst.transform);
+            assert_eq!(Renderer::bounding_sphere(scene, inst),
+                (expected.centre + (inst.origin - scene.render_origin).as_vec3(), expected.radius));
+            assert_eq!(Renderer::instance_scale(scene, inst), expected.scale);
+        };
+        renderer.prepare(&mut scene);
+        check(&scene, i);
+        let transform = Mat4::from_scale_rotation_translation(
+            Vec3::new(-2.0, 3.0, 4.0), glam::Quat::from_rotation_z(0.7), Vec3::new(10.0, 20.0, 30.0));
+        renderer.set_transform(&mut scene, i, origin, transform);
+        renderer.prepare(&mut scene);
+        check(&scene, i);
+        let posed: Vec<_> = data.positions.iter().map(|p| *p * 5.0 + Vec3::Z).collect();
+        renderer.update_mesh(&mut scene, mesh, &posed, &data.normals, &data.uvs);
+        renderer.prepare(&mut scene);
+        check(&scene, i);
+        renderer.set_render_origin(&mut scene, origin - DVec3::new(0.25, 0.5, 0.75));
+        renderer.prepare(&mut scene);
+        check(&scene, i);
+        renderer.free_mesh(&mut scene, mesh);
+        renderer.prepare(&mut scene);
+        check(&scene, i);
+        let new = renderer.add_mesh(&mut scene, &data);
+        assert_eq!(renderer.recycle_mesh(&mut scene, new, mesh), mesh);
+        renderer.prepare(&mut scene);
+        check(&scene, i);
+        let replacement = renderer.add_instance(&mut scene, mesh, origin, Mat4::IDENTITY, vec![material]);
+        assert_eq!(renderer.recycle_instance(&mut scene, replacement, i), i);
+        renderer.prepare(&mut scene);
+        check(&scene, i);
+        let other = renderer.add_mesh(&mut scene, &data);
+        renderer.set_instance_mesh(&mut scene, i, other);
+        renderer.prepare(&mut scene);
+        check(&scene, i);
+    }
 
     #[test]
     #[ignore = "requires a graphics adapter; run with --ignored on a GPU host"]
@@ -10429,12 +10651,16 @@ mod tests {
         // the default window and a 2560x1080 screen are drawn at full size
         assert_eq!(scene_scale_for(0.0, 1600, 900), 1.0);
         assert_eq!(scene_scale_for(0.0, 2560, 1080), 1.0);
-        // a Retina window of 1600x900 points gets about 2.8 million pixels
+        // Mac/Android cap this at 2.8 million pixels; desktops keep it at full size.
         let s = scene_scale_for(0.0, 3200, 1800);
-        assert!((s - 0.697).abs() < 0.01, "{s}");
-        assert!((3200.0 * s * 1800.0 * s - AUTO_SCALE_PIXELS).abs() < 1.0);
+        if cfg!(target_os = "macos") || cfg!(target_os = "android") {
+            assert!((s - 0.697).abs() < 0.01, "{s}");
+            assert!((3200.0 * s * 1800.0 * s - AUTO_SCALE_PIXELS).abs() < 1.0);
+        } else {
+            assert_eq!(s, 1.0);
+        }
         // never below half size
-        assert_eq!(scene_scale_for(0.0, 7680, 4320), 0.5);
+        assert_eq!(scene_scale_for(0.0, 16384, 16384), 0.5);
         // what is asked for, within 0.5..1
         assert_eq!(scene_scale_for(0.75, 3200, 1800), 0.75);
         assert_eq!(scene_scale_for(0.3, 1600, 900), 0.5);
@@ -10494,8 +10720,8 @@ mod tests {
         let bus = DVec3::new(0.0, 0.0, 0.0);
         let car = DVec3::new(1.0, 0.0, 0.0);
         let by_origin = nearest_by_origin([(bus, 14.0), (bus, 3.0), (car, 8.0)]);
-        let bus_dist = by_origin.iter().find(|(o, _)| *o == bus).unwrap().1;
-        let car_dist = by_origin.iter().find(|(o, _)| *o == car).unwrap().1;
+        let bus_dist = by_origin[&origin_key(bus)];
+        let car_dist = by_origin[&origin_key(car)];
         assert_eq!(
             bus_dist, 3.0,
             "the object's distance is its nearest mesh, not the first or an average"
@@ -10509,6 +10735,17 @@ mod tests {
             2,
             "one entry per distinct origin, not per mesh"
         );
+    }
+
+    #[test]
+    fn origin_lookup_keeps_float_equality_and_large_coordinates() {
+        let a = DVec3::new(-0.0, 1_000_000.000_001, 2.0);
+        let b = DVec3::new(0.0, a.y, 2.0);
+        let c = DVec3::new(0.0, a.y + 0.000_001, 2.0);
+        let distances = nearest_by_origin([(a, 8.0), (b, 3.0), (c, 5.0), (DVec3::NAN, 1.0)]);
+        assert_eq!(distances.len(), 2);
+        assert_eq!(distances[&origin_key(a)], 3.0);
+        assert_eq!(distances[&origin_key(c)], 5.0);
     }
 
     /// Every shader module parses and validates as the device will see it, translates to
