@@ -1,19 +1,5 @@
 //! wgpu renderer.
 
-pub struct RenderOptions {
-    pub msaa: u32,
-    pub anisotropy: u16,
-    pub shadow_size: u32,
-    pub ssao: bool,
-
-    pub render_scale: f32,
-
-    pub upscaler: Upscaler,
-    pub dlss_quality: DlssQuality,
-
-    // resto das opções...
-}
-    
 pub use dlss::{DlssRenderer, DlssSettings};
 pub use upscaler::{DlssQuality, Upscaler};
 
