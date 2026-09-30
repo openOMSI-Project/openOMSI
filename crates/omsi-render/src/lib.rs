@@ -10782,3 +10782,13 @@ pub fn catch<R>(f: impl FnOnce() -> R) -> Option<R> {
     CATCHING.with(|c| c.set(was));
     r.ok()
 }
+
+{
+    {
+
+mod dlss;
+mod upscaler;
+
+pub use dlss::{DlssRenderer, DlssSettings};
+pub use upscaler::{DlssQuality, Upscaler};
+}
