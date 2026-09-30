@@ -4,6 +4,10 @@ pub struct RenderOptions {
     pub shadow_size: u32,
     pub ssao: bool,
     pub render_scale: f32,
+
+    pub upscaler: Upscaler,
+    pub dlss_quality: DlssQuality,
+
     pub compress_textures: bool,
     pub fxaa: bool,
     pub min_obj_size: f32,
@@ -11,26 +15,3 @@ pub struct RenderOptions {
     pub omsi_shadow_casters: bool,
     pub reflections: bool,
 }
-
-pub enum Upscaler {
-    Off,
-    Fsr,
-    Dlss,
-}
-
-pub enum DlssQuality {
-    UltraPerformance,
-    Performance,
-    Balanced,
-    Quality,
-    UltraQuality,
-}
-
-pub struct RenderOptions {
-    // ...
-
-    upscaler: Upscaler::Native,
-    dlss_quality: DlssQuality::Quality,
-}
-
-pub fn scene_scale(&self, width: u32, height: u32) -> f32
