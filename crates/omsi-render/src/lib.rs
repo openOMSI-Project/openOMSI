@@ -1,43 +1,10 @@
 //! wgpu renderer.
 
-pub struct RenderOptions {
-    pub msaa: u32,
-    pub anisotropy: u16,
-    pub shadow_size: u32,
-    pub ssao: bool,
+mod dlss;
+mod upscaler;
 
-    pub render_scale: f32,
-
-    pub upscaler: Upscaler,
-    pub dlss_quality: DlssQuality,
-
-    // resto das opções...
-}
-    
 pub use dlss::{DlssRenderer, DlssSettings};
 pub use upscaler::{DlssQuality, Upscaler};
-
-pub struct RenderOptions {
-    pub msaa: u32,
-    pub anisotropy: u16,
-    pub shadow_size: u32,
-    pub ssao: bool,
-
-    pub render_scale: f32,
-
-    pub upscaler: Upscaler,
-    pub dlss_quality: DlssQuality,
-
-    pub compress_textures: bool,
-    pub fxaa: bool,
-
-    pub min_obj_size: f32,
-    pub max_obj_dist: f32,
-
-    pub omsi_shadow_casters: bool,
-    pub reflections: bool,
-}
-
 
 pub mod atmosphere;
 pub mod clouds;
@@ -1361,6 +1328,10 @@ pub struct RenderOptions {
     /// The materials' reflection maps (`[matl_envmap]`: the shine of paint, chrome and
     /// glass). Off, nothing mirrors the sky photo - some players find it too strong.
     pub reflections: bool,
+    
+    pub upscaler: Upscaler,
+    pub dlss_quality: DlssQuality,
+
 }
 
 impl Default for RenderOptions {
