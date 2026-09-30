@@ -1,5 +1,33 @@
 //! wgpu renderer.
 
+mod dlss;
+mod upscaler;
+
+pub use dlss::{DlssRenderer, DlssSettings};
+pub use upscaler::{DlssQuality, Upscaler};
+
+pub struct RenderOptions {
+    pub msaa: u32,
+    pub anisotropy: u16,
+    pub shadow_size: u32,
+    pub ssao: bool,
+
+    pub render_scale: f32,
+
+    pub upscaler: Upscaler,
+    pub dlss_quality: DlssQuality,
+
+    pub compress_textures: bool,
+    pub fxaa: bool,
+
+    pub min_obj_size: f32,
+    pub max_obj_dist: f32,
+
+    pub omsi_shadow_casters: bool,
+    pub reflections: bool,
+}
+
+
 pub mod atmosphere;
 pub mod clouds;
 
@@ -10781,14 +10809,4 @@ pub fn catch<R>(f: impl FnOnce() -> R) -> Option<R> {
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
     CATCHING.with(|c| c.set(was));
     r.ok()
-}
-
-{
-    {
-
-mod dlss;
-mod upscaler;
-
-pub use dlss::{DlssRenderer, DlssSettings};
-pub use upscaler::{DlssQuality, Upscaler};
 }
