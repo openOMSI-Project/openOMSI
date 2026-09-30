@@ -1,6 +1,5 @@
 //! wgpu renderer.
 mod dlss;
-mod upscaler;
 
 pub use dlss::{DlssRenderer, DlssSettings};
 pub use upscaler::{DlssQuality, Upscaler};
