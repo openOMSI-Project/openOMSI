@@ -1,6 +1,4 @@
 //! wgpu renderer.
-//! wgpu renderer.
-
 mod dlss;
 mod upscaler;
 
