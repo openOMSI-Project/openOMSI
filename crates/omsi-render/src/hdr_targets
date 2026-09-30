@@ -1,0 +1,15 @@
+fn hdr_targets(&mut self, w: u32, h: u32) -> bool
+
+Rgba16Float
+
+Color
+
+Depth
+
+Motion Vectors
+
+Exposure
+
+Upscaled Color
+
+Upscaled Color
