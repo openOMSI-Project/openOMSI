@@ -29,8 +29,8 @@ pub enum DlssQuality {
 pub struct RenderOptions {
     // ...
 
-    pub upscaler: Upscaler,
-    pub dlss_quality: DlssQuality,
+    upscaler: Upscaler::Native,
+    dlss_quality: DlssQuality::Quality,
 }
 
 pub fn scene_scale(&self, width: u32, height: u32) -> f32
