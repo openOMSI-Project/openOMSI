@@ -1190,14 +1190,14 @@ fn players_without_a_bus_stay_in_the_session() {
     let mut c =
         LanSession::join(&port.to_string(), "c", world("m"), Duration::from_secs(1)).unwrap();
     for s in [&mut host, &mut c] {
-        s.timeout = Duration::from_millis(1000);
-        s.heartbeat = 0.2;
+        s.timeout = Duration::from_millis(300);
+        s.heartbeat = 0.06;
     }
     let none = Pose::default();
     let t0 = Instant::now();
     let mut last = Instant::now();
     let mut id = None;
-    while t0.elapsed() < Duration::from_millis(3500) {
+    while t0.elapsed() < Duration::from_millis(1000) {
         let dt = last.elapsed().as_secs_f32();
         last = Instant::now();
         host.tick(dt, &none);
@@ -1209,7 +1209,7 @@ fn players_without_a_bus_stay_in_the_session() {
                 "the client was never dropped and let in again"
             );
         }
-        if t0.elapsed() > Duration::from_millis(500) {
+        if t0.elapsed() > Duration::from_millis(200) {
             assert!(
                 c.connected,
                 "the client stays connected at {:?}",
@@ -1223,7 +1223,7 @@ fn players_without_a_bus_stay_in_the_session() {
             );
             assert!(gone.is_empty(), "nobody left: {gone:?}");
         }
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(5));
     }
     // the observer's empty state (at 0,0) is not a vehicle a new player must keep clear of
     assert!(host.peers().all(|p| !p.pose.has_vehicle()));

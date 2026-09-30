@@ -54,11 +54,12 @@ image = { version = "0.25", default-features = false, features = ["png", "bmp", 
 [profile.release]
 opt-level = 3
 debug = 1
-codegen-units = 4
+codegen-units = 16
 lto = "thin"
 
 [profile.dev]
 opt-level = 1
+debug = 1
 
 # the Android build (scripts/build-android.sh): the release profile without debug info (a
 # phone's app carries no 300 MB of symbols)

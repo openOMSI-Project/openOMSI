@@ -1,7 +1,7 @@
 # The main thread's stack on Windows is 1 MB unless the program says otherwise; macOS and
 # Linux give 8 MB. The game does the same work on every system, so Windows gets 8 MB too.
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "link-arg=/STACK:8388608"]
+rustflags = ["-C", "link-arg=/STACK:8388608", "-C", "linker=rust-lld"]
 
 [target.aarch64-pc-windows-msvc]
 rustflags = ["-C", "link-arg=/STACK:8388608"]

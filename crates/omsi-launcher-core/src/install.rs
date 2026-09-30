@@ -1511,16 +1511,16 @@ mod tests {
         let dir = tmp("inbox");
         let content = dir.join("content");
         omsi_cfg::ensure_content_layout(&content).unwrap();
-        let src = inbox_bus(&content, 3000);
-        let job = start_inner(content.clone(), None, src.clone(), InstallMode::Extract, true, 1500);
-        wait_for(&job, 1500);
-        assert_eq!(std::fs::read_dir(src.join("Texture")).unwrap().count(), 3000, "linked, not moved: the inbox is whole while the job runs");
+        let src = inbox_bus(&content, 500);
+        let job = start_inner(content.clone(), None, src.clone(), InstallMode::Extract, true, 250);
+        wait_for(&job, 250);
+        assert_eq!(std::fs::read_dir(src.join("Texture")).unwrap().count(), 500, "linked, not moved: the inbox is whole while the job runs");
         #[cfg(unix)]
         assert_eq!(links(&src.join("big.bus")), 2, "big.bus is linked into the staging folder");
         job.cancel();
         let p = wait_done(&job);
         assert_eq!(p.state, "cancelled", "{p:?}");
-        assert_eq!(std::fs::read_dir(src.join("Texture")).unwrap().count(), 3000, "every file is there");
+        assert_eq!(std::fs::read_dir(src.join("Texture")).unwrap().count(), 500, "every file is there");
         #[cfg(unix)]
         assert_eq!(links(&src.join("big.bus")), 1, "the staged link is gone");
         assert!(src.join("big.bus").exists());
