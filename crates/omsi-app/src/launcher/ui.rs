@@ -118,6 +118,10 @@ pub struct Ui {
     date_popup: Option<DatePopup>,
     /// Text fields: caret position (chars) and the time it last moved.
     caret: HashMap<Id, (usize, f32)>,
+    /// Text fields: selection anchor and caret position (chars).
+    selection: HashMap<Id, (usize, usize)>,
+    /// Text fields: pending mouse position for placing the caret.
+    text_click: HashMap<Id, f32>,
     pub cursor: winit::window::CursorIcon,
     pub clipboard_out: Option<String>,
     pub clipboard_in: Option<String>,
@@ -147,6 +151,8 @@ impl Ui {
             popup: None,
             date_popup: None,
             caret: HashMap::new(),
+            selection: HashMap::new(),
+            text_click: HashMap::new(),
             cursor: winit::window::CursorIcon::Default,
             clipboard_out: None,
             clipboard_in: None,
@@ -574,13 +580,13 @@ impl Ui {
         }
         if h && self.input.pressed {
             self.focus = Some(id);
-            let n = value.chars().count();
-            self.caret.insert(id, (n, self.time));
+            self.text_click.insert(id, self.input.mouse.x);
         } else if self.input.pressed && self.focus == Some(id) && !h {
             self.focus = None;
         }
         let focused = self.focus == Some(id);
         let before = value.clone();
+        let click_x = self.text_click.remove(&id);
         if focused {
             let (mut caret, mut moved) = self.caret.get(&id).copied().unwrap_or((value.chars().count(), self.time));
             let n = value.chars().count();
@@ -592,18 +598,52 @@ impl Ui {
                     Key::Right => caret = (caret + 1).min(value.chars().count()),
                     Key::Home => caret = 0,
                     Key::End => caret = value.chars().count(),
-                    Key::Backspace if caret > 0 => {
-                        let b0 = byte(value, caret - 1);
-                        let b1 = byte(value, caret);
-                        value.replace_range(b0..b1, "");
-                        caret -= 1;
+                    Key::Backspace => {
+                        if let Some(&(a, b)) = self.selection.get(&id) {
+                            let (start, end) = (a.min(b), a.max(b));
+                            if start != end {
+                                let b0 = byte(value, start);
+                                let b1 = byte(value, end);
+                                value.replace_range(b0..b1, "");
+                                caret = start;
+                                self.selection.insert(id, (caret, caret));
+                            } else if caret > 0 {
+                                let b0 = byte(value, caret - 1);
+                                let b1 = byte(value, caret);
+                                value.replace_range(b0..b1, "");
+                                caret -= 1;
+                            }
+                        } else if caret > 0 {
+                            let b0 = byte(value, caret - 1);
+                            let b1 = byte(value, caret);
+                            value.replace_range(b0..b1, "");
+                            caret -= 1;
+                        }
                     }
-                    Key::Delete if caret < value.chars().count() => {
-                        let b0 = byte(value, caret);
-                        let b1 = byte(value, caret + 1);
-                        value.replace_range(b0..b1, "");
+                    Key::Delete => {
+                        if let Some(&(a, b)) = self.selection.get(&id) {
+                            let (start, end) = (a.min(b), a.max(b));
+                            if start != end {
+                                let b0 = byte(value, start);
+                                let b1 = byte(value, end);
+                                value.replace_range(b0..b1, "");
+                                caret = start;
+                                self.selection.insert(id, (caret, caret));
+                            } else if caret < value.chars().count() {
+                                let b0 = byte(value, caret);
+                                let b1 = byte(value, caret + 1);
+                                value.replace_range(b0..b1, "");
+                            }
+                        } else if caret < value.chars().count() {
+                            let b0 = byte(value, caret);
+                            let b1 = byte(value, caret + 1);
+                            value.replace_range(b0..b1, "");
+                        }
                     }
-                    Key::SelectAll => caret = value.chars().count(),
+                    Key::SelectAll => {
+                        self.selection.insert(id, (0, value.chars().count()));
+                        caret = value.chars().count();
+                    }
                     Key::Copy => self.clipboard_out = Some(value.clone()),
                     Key::Cut => {
                         self.clipboard_out = Some(value.clone());
@@ -625,9 +665,22 @@ impl Ui {
             }
             if !self.input.text.is_empty() {
                 let t: String = self.input.text.chars().filter(|c| !c.is_control()).collect();
+
+                if let Some(&(a, b)) = self.selection.get(&id) {
+                    let (start, end) = (a.min(b), a.max(b));
+
+                    if start != end {
+                        let b0 = byte(value, start);
+                        let b1 = byte(value, end);
+                        value.replace_range(b0..b1, "");
+                        caret = start;
+                    }
+                }
+
                 let b = byte(value, caret);
                 value.insert_str(b, &t);
                 caret += t.chars().count();
+                self.selection.insert(id, (caret, caret));
                 moved = self.time;
             }
             self.caret.insert(id, (caret, moved));
@@ -643,21 +696,88 @@ impl Ui {
         let inner = Rect::new(x, r.y, r.right() - x - 10.0, r.h);
         self.push_clip(inner, 0.0);
         let px = 13.0;
+
+        if let Some(click_x) = click_x {
+                let local_x = (click_x - inner.x).clamp(0.0, inner.w);
+                
+                let mut best = 0;
+                let mut best_dist = f32::MAX;
+
+                for i in 0..=value.chars().count() {
+                    let upto: String = value.chars().take(i).collect();
+                    let cx = self.width(&upto, px, Weight::Regular);
+                    let dist = (cx - local_x).abs();
+                    
+                    if dist < best_dist {
+                        best_dist = dist;
+                        best = i;
+                    }
+                }
+
+                self.caret.insert(id, (best, self.time));
+                self.selection.insert(id, (best, best));
+            }
+        if self.focus == Some(id) && self.input.down {
+            let mouse_x = self.input.mouse.x;
+            let local_x = (mouse_x - inner.x).clamp(0.0, inner.w);
+
+            let mut best = 0;
+            let mut best_dist = f32::MAX;
+
+            for i in 0..=value.chars().count() {
+                let upto: String = value.chars().take(i).collect();
+                let cx = self.width(&upto, px, Weight::Regular);
+                let dist = (cx - local_x).abs();
+            
+                if dist < best_dist {
+                    best_dist = dist;
+                    best = i;
+                }
+            }
+        
+            if let Some(&(anchor, _)) = self.selection.get(&id) {
+                self.selection.insert(id, (anchor, best));
+                self.caret.insert(id, (best, self.time));
+            }
+        }
         if value.is_empty() && !focused {
             self.text_in(placeholder, inner, px, Weight::Regular, TEXT_FAINT, Align::Left);
         } else {
             let (caret, moved) = self.caret.get(&id).copied().unwrap_or((0, 0.0));
             let upto: String = value.chars().take(caret).collect();
             let cw = self.width(&upto, px, Weight::Regular);
+            if let Some(&(a, b)) = self.selection.get(&id) {
+                let start = a.min(b);
+                let end = a.max(b);
+
+                if start != end {
+                    let before: String = value.chars().take(start).collect();
+                    let selected: String = value.chars().skip(start).take(end - start).collect();
+
+                    let sx = self.width(&before, px, Weight::Regular);
+                    let sw = self.width(&selected, px, Weight::Regular);
+
+                    self.p().rect(
+                        Rect::new(inner.x + sx, r.y + 5.0, sw, r.h - 10.0),
+                        ACCENT.alpha(0.35),
+                    );
+                }
+            }
             // keep the caret in view
             let shift = (cw - inner.w + 4.0).max(0.0);
             self.text_in(value, Rect::new(inner.x - shift, inner.y, inner.w + shift + 2000.0, inner.h), px, Weight::Regular, TEXT, Align::Left);
-            if focused && ((self.time - moved) % 1.0) < 0.55 {
-                self.p().rect(Rect::new(inner.x - shift + cw + 0.5, r.center().y - 8.5, 1.5, 17.0), ACCENT);
+            if focused 
+                && self.selection.get(&id).is_none_or(|&(a, b)| a == b)
+                && ((self.time - moved) % 1.0) < 0.55
+            {
+                self.p().rect(
+                    Rect::new(inner.x - shift + cw + 0.5, r.center().y -8.5, 1.5, 17.0),
+                    ACCENT,
+                );
             }
-            if value.is_empty() {
-                self.text_in(placeholder, inner, px, Weight::Regular, TEXT_FAINT, Align::Left);
-            }
+        }
+        if value.is_empty() {
+            self.text_in(placeholder, inner, px, Weight::Regular, TEXT_FAINT, Align::Left);
         }
         self.pop_clip();
         *value != before

@@ -99,7 +99,9 @@ pub use wire::{
 /// 5: the tour a player drives in `INFO` (the host's timetable leaves it out), riders of
 /// the players' buses in the world frames (`world::PLAYER_BUS`), and the players' people
 /// passed on to the other players.
-pub const PROTOCOL: u32 = 5;
+/// 6: up to 63 sound and moving-part values in a state (a 6-bit count: the AA-FR Agora's
+/// sound variables alone filled the 31 there was room for).
+pub const PROTOCOL: u32 = 6;
 pub const DEFAULT_PORT: u16 = 27015;
 /// Ports a host tries after the default one when that is taken (a second session on the
 /// same machine).
@@ -122,6 +124,9 @@ pub const LOAD_TIMEOUT: Duration = Duration::from_secs(120);
 pub const HEARTBEAT: f32 = 1.0;
 /// Seconds between two INFO messages of a player whose info has not changed.
 pub const INFO_EVERY: f32 = 2.0;
+/// The shortest time (s) between two `INFO`s: well inside what a host takes from a player
+/// (`MESSAGE_RATE`), with room for its other messages.
+pub const INFO_MIN_GAP: f32 = 0.25;
 /// Seconds between two CLOCK messages of the host.
 pub const CLOCK_EVERY: f32 = 5.0;
 /// At most this many other players: a host turns away the next one, a client ignores more.
@@ -2340,7 +2345,10 @@ impl LanSession {
             }
         }
         let info = p.encode_info();
-        if info != self.last_info || self.info_acc >= INFO_EVERY {
+        // Sent when it changes, but no more often than INFO_MIN_GAP: a roller blind turning
+        // through its numbers or a pilot screen changes the `[matl_freetex]` pictures many
+        // times a second, and the host took ten messages a second and dropped the rest.
+        if (info != self.last_info && self.info_acc >= INFO_MIN_GAP) || self.info_acc >= INFO_EVERY {
             self.info_acc = 0.0;
             match self.role {
                 Role::Host => self.broadcast(info.as_bytes(), None),

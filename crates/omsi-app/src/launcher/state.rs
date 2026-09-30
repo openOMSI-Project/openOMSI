@@ -175,6 +175,10 @@ pub struct State {
     pub profile: Option<core::Profile>,
     pub settings: serde_json::Value,
     pub settings_dirty: f32,
+    /// `settings.cfg` as last read or written here: a game changes it too (its Options
+    /// in the pause menu), and the launcher's copy from before must not be written back
+    /// over that.
+    settings_file: Option<String>,
     pub keybindings: serde_json::Value,
     pub keybindings_error: String,
     pub instances: Vec<core::Instance>,
@@ -236,6 +240,7 @@ impl State {
             profile: None,
             settings,
             settings_dirty: 0.0,
+            settings_file: read_settings_file(),
             keybindings,
             keybindings_error: String::new(),
             instances: Vec::new(),
@@ -556,6 +561,21 @@ impl State {
         self.spawn(move || Msg::Launched(core::launch(&d).map_err(|e| format!("{e:#}"))));
     }
 
+    /// Settings a game changed while it ran: taken over, unless the launcher's own changes
+    /// wait to be saved (those win, as the later ones).
+    fn reload_changed_settings(&mut self) {
+        if self.settings_dirty > 0.0 {
+            return;
+        }
+        let now = read_settings_file();
+        if now.is_some() && now != self.settings_file {
+            if let Ok(v) = core::get_settings() {
+                self.settings = v;
+            }
+            self.settings_file = now;
+        }
+    }
+
     fn save_pending_settings(&mut self) -> bool {
         if self.settings_dirty <= 0.0 {
             return true;
@@ -563,6 +583,7 @@ impl State {
         match core::save_settings(&self.settings) {
             Ok(()) => {
                 self.settings_dirty = 0.0;
+                self.settings_file = read_settings_file();
                 true
             }
             Err(e) => {
@@ -586,6 +607,7 @@ impl State {
         if self.poll_t <= 0.0 {
             self.poll_t = 2.5;
             self.poll_now();
+            self.reload_changed_settings();
         }
         if self.choice_dirty > 0.0 {
             self.choice_dirty -= dt;
@@ -599,7 +621,10 @@ impl State {
             self.settings_dirty -= dt;
             if self.settings_dirty <= 0.0 {
                 match core::save_settings(&self.settings) {
-                    Ok(()) => self.set_status("Settings saved.", false),
+                    Ok(()) => {
+                        self.settings_file = read_settings_file();
+                        self.set_status("Settings saved.", false)
+                    }
                     Err(e) => self.set_status(format!("{e:#}"), true),
                 }
             }
@@ -1053,4 +1078,8 @@ mod crash_tests {
         assert!(super::crash_of(&p).unwrap().0.contains("device was lost"));
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+fn read_settings_file() -> Option<String> {
+    std::fs::read_to_string(core::data_dir().join("settings.cfg")).ok()
 }

@@ -127,7 +127,8 @@ main { margin-left: var(--drawer-w); padding-top: 64px; min-height: 100vh; displ
 .card-warning p { color: var(--on-surface); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; margin: 24px 0; }
 .dl-card { display: flex; flex-direction: column; gap: 6px; }
-.dl-card .btn { margin-top: 12px; align-self: flex-start; }
+.dl-card .btn { margin-top: auto; align-self: flex-start; }
+.dl-card p:last-of-type { margin-bottom: 12px; }
 .section-title { font-size: 24px; font-weight: 400; margin: 40px 0 12px; }
 .lead { font-size: 17px; }
 .steps li { margin: 6px 0; }
@@ -214,3 +215,7 @@ main { margin-left: var(--drawer-w); padding-top: 64px; min-height: 100vh; displ
   .donate { right: 14px; bottom: 14px; }
   .donate-fab { padding: 10px 14px 10px 12px; }
 }
+.dl-mine { outline: 2px solid var(--primary); }
+.dl-mine { outline-offset: -2px; }
+.dl-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dl-badge { white-space: nowrap; font-size: 12px; font-weight: 600; line-height: 1; padding: 5px 10px; border-radius: 999px; background: var(--primary); color: #fff; }

@@ -277,8 +277,10 @@ impl Devices {
                 let pad = g.gamepad(ev.id);
                 match ev.event {
                     EventType::Connected => log::info!("game controller connected: {}", pad.name()),
-                    // (on Windows DirectInput tells the buttons of every device)
-                    EventType::ButtonPressed(_, code) | EventType::ButtonReleased(_, code) if !di => {
+                    // DirectInput handles wheels on Windows; system-mapped gamepads
+                    // such as Xbox controllers are listed through gilrs.
+                    EventType::ButtonPressed(_, code) | EventType::ButtonReleased(_, code)
+                        if use_gilrs_buttons(di, pad.mapping_source() == gilrs::MappingSource::Driver) => {
                         out.push((pad.name().to_string(), button_number(&pad, code), matches!(ev.event, EventType::ButtonPressed(..))));
                     }
                     _ => {}
@@ -361,6 +363,10 @@ impl Devices {
         }
         v
     }
+}
+
+fn use_gilrs_buttons(direct_input: bool, system_gamepad: bool) -> bool {
+    !direct_input || system_gamepad
 }
 
 /// A DirectInput name of an Xbox-type pad (which gilrs lists with the system's layout).
@@ -518,7 +524,7 @@ impl Controllers {
                             _ => ((v + 1.0 - 2.0 * dz).max(0.0) / (1.0 - dz)) - 1.0,
                         };
                         // a pedal travels the whole range, -1 up to 1 down
-                        let pedal = ((v + 1.0) * 0.5).clamp(0.0, 1.0);
+                        let pedal = crate::settings::pedal_ends(((v + 1.0) * 0.5).clamp(0.0, 1.0));
                         match f {
                             Func::Steering => {
                                 let v = v * self.steer_gain;
@@ -968,6 +974,13 @@ mod tests {
     fn an_xbox_named_ff_wheel_stays_visible_in_the_launcher() {
         assert!(super::include_direct_input_device("G920 Driving Force Racing Wheel for Xbox One", true, true));
         assert!(!super::include_direct_input_device("Controller (Xbox One)", false, true));
+    }
+
+    #[test]
+    fn system_gamepad_buttons_work_alongside_direct_input_wheels() {
+        assert!(super::use_gilrs_buttons(true, true));
+        assert!(!super::use_gilrs_buttons(true, false));
+        assert!(super::use_gilrs_buttons(false, false));
     }
 }
 

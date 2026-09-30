@@ -379,7 +379,10 @@ fn session_codes() {
     let chars: Vec<char> = text.chars().collect();
     for i in (5..chars.len()).filter(|i| chars[*i] != '-') {
         let mut bad = chars.clone();
-        bad[i] = if bad[i] == 'A' { 'B' } else { 'A' };
+        // (its top bit, which is always data: the lowest bits of the last character may be
+        // the zeros that fill up the last byte, and changing them changes nothing)
+        let k = ALPHABET.iter().position(|c| *c as char == bad[i]).unwrap();
+        bad[i] = ALPHABET[k ^ 16] as char;
         let bad: String = bad.into_iter().collect();
         assert_ne!(SessionCode::decode(&bad).ok(), Some(multi.clone()), "{bad}");
     }
@@ -840,10 +843,11 @@ fn old_protocol_is_turned_away() {
         .unwrap();
     let mut buf = [0u8; 512];
     // a protocol 2 game: its hello, and its poses sent blindly
+    let told = format!("protocol {PROTOCOL}, your game protocol 2");
     for (msg, want) in [
         (
             "HELLO|2|-|someone|Vehicles/x.bus|m|1989-05-30|32400||0|0|0|0|12|2.5",
-            "protocol 5, your game protocol 2",
+            told.as_str(),
         ),
         (
             "POSE|2|someone|Vehicles/x.bus||1|2|3|0|0|0|0|0000|0|0|||12|2.5|-|0",
@@ -862,7 +866,7 @@ fn old_protocol_is_turned_away() {
             }
         }
         assert!(
-            answers.iter().all(|a| a.starts_with("REJECT|5|"))
+            answers.iter().all(|a| a.starts_with(&format!("REJECT|{PROTOCOL}|")))
                 && answers.iter().any(|a| a.contains(want)),
             "{answers:?}"
         );

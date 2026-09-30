@@ -196,7 +196,7 @@ impl BusService {
     }
 
     /// Arrived at the front stop: what now.
-    fn arrive(&mut self, ctx: &Ctx, depart: f64) {
+    fn arrive(&mut self, ctx: &Ctx, depart: f64, at: (usize, f32)) {
         if omsi_cfg::env::var_os("OMSI_DEBUG_STOPS").is_some() {
             log::info!("t={:.1}: timetable bus {} serves its stop", ctx.day_time, ctx.id);
         }
@@ -217,11 +217,12 @@ impl BusService {
         self.delay = (ctx.day_time + (self.boarding as f64).max(wait)) - depart;
         if ctx.debug {
             log::info!(
-                "t={:.1}: timetable bus {} at its stop, {:.0} s to its departure ({:?})",
+                "t={:.1}: timetable bus {} at its stop, {:.0} s to its departure ({:?}) at {:?}",
                 ctx.day_time,
                 ctx.id,
                 depart - ctx.day_time,
-                self.phase
+                self.phase,
+                ctx.net.lanes.get(at.0).map(|l| { let p = l.at(at.1).0; (p.x.round(), p.y.round()) })
             );
         }
     }
@@ -335,7 +336,7 @@ impl BusService {
             if stop.ri < st.route_index {
                 if crept_past {
                     self.near_d = f32::INFINITY;
-                    self.arrive(ctx, stop.depart);
+                    self.arrive(ctx, stop.depart, (st.lane, st.s));
                     return Some(st.front);
                 }
                 // behind it already (the route was cut short)
@@ -363,7 +364,7 @@ impl BusService {
             let queued = speed < 0.3 && ctx.stopped > 6.0 && d < 45.0 && d >= 2.0;
             if (d < 2.0 && speed < 0.3) || queued || (d < -2.0 && crept_past) {
                 self.near_d = f32::INFINITY;
-                self.arrive(ctx, stop.depart);
+                self.arrive(ctx, stop.depart, (st.lane, st.s));
                 return Some(st.front);
             }
             self.near_d = d;

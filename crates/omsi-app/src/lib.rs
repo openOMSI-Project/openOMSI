@@ -317,7 +317,7 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
                 log::info!("LAN: the official server is at {url}");
                 args.lan_join = Some(url);
             }
-            Err(e) => log::error!("LAN: {e}"),
+            Err(e) => log::warn!("LAN: {e}"),
         }
     }
     // a duty starts at its trip, as in OMSI (not at the map's entry point); a joining
@@ -447,6 +447,7 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
         started: Instant::now(),
         total_frames: 0,
         mirror_budget: 1.0,
+        mirrors_seen: 2,
         mirror_turn: 0,
         hover_key: None,
         view,
@@ -469,6 +470,7 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
         paused: false,
         game_menu: None,
         menu_top: None,
+        menu_scroll_drag: false,
         menu_more: false,
         plugin_keys: Vec::new(),
         clock_hold: 0.0,

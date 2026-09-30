@@ -628,7 +628,9 @@ impl App {
             match f.role {
                 Role::Throttle => t.throttle = depth(t.throttle_r, f.pos.y),
                 Role::Brake => t.brake = depth(t.brake_r, f.pos.y),
-                Role::Clutch => t.clutch = depth(t.clutch_r, f.pos.y),
+                // (the clutch pushed in most of the way is in: the gearboxes want it at 1
+                // to take a gear, see `pedal_ends`, and a thumb seldom sits at the top edge)
+                Role::Clutch => t.clutch = if depth(t.clutch_r, f.pos.y) >= 0.75 { 1.0 } else { depth(t.clutch_r, f.pos.y) },
                 _ => {}
             }
         }

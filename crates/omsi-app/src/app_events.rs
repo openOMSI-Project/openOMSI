@@ -4,6 +4,7 @@
 const MIRROR_RATE: f32 = 75.0;
 /// The least a mirror is redrawn a second (see the mirrors in `window_event`).
 const MIRROR_MIN_HZ: f32 = 8.0;
+const MIRROR_MAX_HZ: f32 = 30.0;
 
 fn render_scale_step(fps: f32, slow_frame_wait_share: f32) -> f32 {
     // (three levels, far apart, and a wide band between going down and up again: every
@@ -617,7 +618,7 @@ impl ApplicationHandler for App {
                 // switching the camera leaves the mouse steering on; not on foot or flying)
                 let bus_view = matches!(self.view.as_str(), "driver" | "outside" | "pax");
                 if let (true, Some(s)) = (self.mouse_drive && bus_view && !self.mouse_look
-                    && self.game_menu.is_none(), self.surface.as_ref()) {
+                                              && self.game_menu.is_none(), self.surface.as_ref()) {
                     let (w, h) = (s.config.width as f32, s.config.height as f32);
                     // (the speed the divisor takes, smoothed over 0.4 s: the bus's own speed
                     // trembles by fractions of a km/h from frame to frame on its springs and
@@ -697,7 +698,7 @@ impl ApplicationHandler for App {
                             }
                             return false;
                         }
-                        if n.starts_with("view_") {
+                        if crate::input_script::is_game_action(&n) {
                             if *down {
                                 game.push(n);
                             }
@@ -754,7 +755,7 @@ impl ApplicationHandler for App {
                         let vr_on = self.vr.is_some();
                         #[cfg(not(windows))]
                         let vr_on = false;
-                        p.move_head(dt, self.settings.head_movement && !vr_on);
+                        p.move_head(dt, self.settings.head_movement && !vr_on, self.settings.steer_look && !vr_on);
                         if let Some(w) = self.world.as_ref() {
                             crate::rail_drive::frame(p, self.traffic.as_ref().map(|t| &t.net), w, dt);
                         }
@@ -877,7 +878,7 @@ impl ApplicationHandler for App {
                     let key = self.camera.as_ref().map(|c| (self.cursor.0.round() as i32, self.cursor.1.round() as i32, (c.yaw * 4.0).round() as i32, (c.pitch * 4.0).round() as i32));
                     // (the cab sways with the suspension: a view that only turned waits a few frames)
                     let cursor_moved = key.map(|k| (k.0, k.1)) != self.hover_key.map(|k| (k.0, k.1));
-                    if cursor_moved || (key != self.hover_key && self.total_frames % 3 == 0) || self.total_frames % 6 == 0 {
+                    if cursor_moved || (key != self.hover_key && self.total_frames % 6 == 0) || self.total_frames % 12 == 0 {
                         self.hover_key = key;
                         self.update_hover();
                     }
@@ -1664,7 +1665,9 @@ impl ApplicationHandler for App {
                             screen: (s.config.width as f32, s.config.height as f32),
                             dt,
                         };
+                        let __tn = Instant::now();
                         nav.frame(r, scene, &frame);
+                        *self.profile.entry("hud.navigator").or_default() += __tn.elapsed().as_secs_f64();
                         // OMSI 2's dynamic route arrows over the junctions ahead
                         if nav.arrows {
                             if let Some(w) = self.world.as_ref() {
@@ -1757,6 +1760,7 @@ impl ApplicationHandler for App {
                     }),
                 };
                 lighting.detail = self.settings.detail_textures;
+                lighting.glass_wind = self.player.as_ref().map(|p| crate::lights::vehicle_velocity(&p.vehicle)).unwrap_or_default();
                 // an LED panel's dots burn this much above their own colour (16 levels,
                 // see `Settings::led_glow`); the masks keep their mip chain unless the
                 // player asks for the sharper look (`Settings::led_mips`)
@@ -1915,7 +1919,7 @@ impl ApplicationHandler for App {
                                     .filter(|rate| rate.is_finite() && *rate >= 0.0)
                                     .unwrap_or(self.settings.vr_mirror_rate)
                             } else {
-                                MIRROR_RATE.max(mirrors * MIRROR_MIN_HZ)
+                                MIRROR_RATE.max(mirrors * MIRROR_MIN_HZ).min(MIRROR_MAX_HZ * self.mirrors_seen.max(1) as f32)
                             }
                         };
                         self.mirror_budget = (self.mirror_budget + raw_dt.min(0.1) * rate).min(2.5);
@@ -1923,12 +1927,12 @@ impl ApplicationHandler for App {
                         // (in the cab, and from outside too while the bus is near: its
                         // mirrors are seen from the pavement and stood frozen)
                         let near = self.player.as_ref().zip(self.camera.as_ref()).is_some_and(|(p, c)| (p.vehicle.position - c.position).length() < 12.0);
-                        while (self.in_cab || near) && self.mirror_budget >= 1.0 && drawn < 2 {
+                        while (self.in_cab || near) && self.mirror_budget >= 1.0 && drawn < self.mirrors_seen.clamp(1, 2) {
                             let (Some(w), Some(p)) = (self.world.as_ref(), self.player.as_ref()) else { break };
                             self.mirror_budget -= 1.0;
                             drawn += 1;
                             self.mirror_turn = self.mirror_turn.wrapping_add(1);
-                            render_mirrors(
+                            self.mirrors_seen = render_mirrors(
                                 r,
                                 scene,
                                 w,
@@ -2302,18 +2306,58 @@ impl App {
         }
         // the game menu takes the clicks while it is open
         if self.game_menu.is_some() {
+            // Releasing the mouse button finishes scrollbar dragging.
+            if state == ElementState::Released {
+                if self.menu_scroll_drag {
+                    self.menu_scroll_drag = false;
+                    self.menu_top = self.menu_top.map(f32::round);
+                }
+                return;
+            }
+
+            // Pressing the mouse button on the scrollbar thumb starts dragging.
             if state == ElementState::Pressed {
+                if let Some(thumb) = self
+                    .ui
+                    .as_ref()
+                    .and_then(|u| u.menu_scroll_thumb)
+                {
+                    if self.cursor.0 >= thumb[0]
+                        && self.cursor.0 <= thumb[2]
+                        && self.cursor.1 >= thumb[1]
+                        && self.cursor.1 <= thumb[3]
+                    {
+                        self.menu_scroll_drag = true;
+                        return;
+                    }
+                }
+
+                // Otherwise check whether a menu row was clicked.
                 let hit = self.ui.as_ref().and_then(|u| {
-                    u.menu_rects.iter().position(|r| self.cursor.0 >= r[0] && self.cursor.0 <= r[2] && self.cursor.1 >= r[1] && self.cursor.1 <= r[3])
+                    u.menu_rects.iter().position(|r| {
+                        self.cursor.0 >= r[0]
+                            && self.cursor.0 <= r[2]
+                            && self.cursor.1 >= r[1]
+                            && self.cursor.1 <= r[3]
+                    })
                 });
+
                 if let Some(k) = hit {
-                    let k = k + self.ui.as_ref().map(|u| u.menu_start).unwrap_or(0);
+                    let k = k
+                        + self
+                            .ui
+                            .as_ref()
+                            .map(|u| u.menu_start)
+                            .unwrap_or(0);
+
                     if self.chooser.is_none() {
                         self.game_menu = Some(k);
                     }
+
                     self.menu_choose(event_loop, k);
                 }
             }
+
             return;
         }
         self.on_left(state == ElementState::Pressed)

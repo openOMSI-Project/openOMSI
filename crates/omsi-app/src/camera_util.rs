@@ -327,7 +327,7 @@ pub(crate) fn render_mirrors(
     lighting: &omsi_render::Lighting,
     only: Option<usize>,
     view: Option<(Camera, f32)>,
-) {
+) -> usize {
     // (aimed from the eye of the view being drawn, as Omsi.exe aims them - from the
     // driver's without one)
     let eye = view.as_ref().map(|v| v.0.position).unwrap_or_else(|| driver_eye(p));
@@ -341,7 +341,7 @@ pub(crate) fn render_mirrors(
         .map(|(i, c)| mirror_view(&p.vehicle, c, eye, p.mirror_offsets.get(i).copied().unwrap_or([0.0; 2])))
         .collect();
     if cams.is_empty() {
-        return;
+        return 0;
     }
     let textures = world.mirror_textures.lock().clone();
     // small images: skip objects that would be tiny anyway (the original's
@@ -374,7 +374,7 @@ pub(crate) fn render_mirrors(
         .filter(|&i| view.as_ref().map(|v| mirror_in_view(p.vehicle.camera_world_full(&cams[i]).0, cams[i].extra.unwrap_or(0.0).max(MIRROR_MIN_RADIUS), v)).unwrap_or(true))
         .collect();
     if seen.is_empty() {
-        return;
+        return 0;
     }
     let pick = only.map(|k| seen[k % seen.len()]);
     for (i, c) in cams.iter().enumerate() {
@@ -404,4 +404,5 @@ pub(crate) fn render_mirrors(
         };
         renderer.render_to_texture(scene, *tex, &cam, &lighting, MIRROR_ASPECT);
     }
+    seen.len()
 }

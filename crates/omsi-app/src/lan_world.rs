@@ -1182,6 +1182,7 @@ impl LanWorld {
                                 brake: c.brake,
                                 lights: c.lights,
                                 at_station: c.at_station as i32,
+                                priority_warning: false,
                             },
                         )
                     })

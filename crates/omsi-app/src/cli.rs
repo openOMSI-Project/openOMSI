@@ -276,6 +276,7 @@ pub(crate) struct SituationOther {
     /// x,y,heading,z as `--spawn` takes it
     pub spawn: String,
     pub hof: Option<String>,
+    pub paint: Option<String>,
     pub vars: Vec<(String, f32)>,
     pub strvars: Vec<(String, String)>,
 }

@@ -122,9 +122,11 @@
     <div class="grid" id="dl-grid"></div>
     <h2 class="section-title">Installing</h2>
     <ul class="steps">
-      <li><b>Windows:</b> unpack the zip anywhere and run <code>openomsi.exe</code>.</li>
-      <li><b>Linux:</b> unpack and run <code>./openomsi</code> (Vulkan drivers needed).</li>
+      <li><b>Windows:</b> unpack the zip into a folder of your own (not <code>Program Files</code>) and run <code>openomsi.exe</code>. SmartScreen may warn about an unknown app: <i>More info</i> → <i>Run anyway</i>. Not sure which one? Almost every PC is <b>x64</b>; <b>ARM</b> is only for Snapdragon laptops.</li>
+      <li><b>macOS:</b> unpack and open <code>openOMSI.app</code>. The first time macOS may refuse an app from the internet: right-click → <i>Open</i> → <i>Open</i>, or run <code>xattr -dr com.apple.quarantine openOMSI.app</code> once. <b>Apple silicon</b> for M1 and newer, <b>Intel</b> for older Macs.</li>
+      <li><b>Linux:</b> unpack and run <code>./openomsi</code> (<code>chmod +x openomsi</code> if it does not start; Vulkan or OpenGL drivers needed).</li>
       <li><b>Android:</b> install the <code>.apk</code>, allow access to all files, copy the whole OMSI&nbsp;2 folder to <code>openOMSI/OMSI 2</code> on the phone - see <a href="#/docs/ANDROID">Android</a>.</li>
+      <li><b>Dedicated server:</b> only for hosting a multiplayer session without playing on that machine - to play, take the game above. See <a href="#/docs/SERVER">Dedicated server</a>.</li>
       <li>Mods go into the folder next to the game, or through the launcher's <b>Mods</b> page. The original OMSI&nbsp;2 folder is never changed.</li>
     </ul>
     <p>All versions: <a href="#/releases">Releases</a>. Versions are numbered <code>MAJOR.MINOR.COMMIT</code> - see <a href="#/docs/VERSIONING">Versioning</a>.</p>

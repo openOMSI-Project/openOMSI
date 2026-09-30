@@ -2,6 +2,18 @@
 
 use super::*;
 
+
+/// Global actions a controller button should send to the game instead of to the bus script.
+pub(crate) fn is_game_action(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.starts_with("view_")
+        || matches!(
+            name.as_str(),
+            "sim_pause" | "screenshot" | "quicksave" | "toggel_mouse_ctrl" | "toggel_ctrler"
+        )
+}
+
+
 /// How far (m) a click reaches a page (`[htmltexture]`) on a scenery object.
 const HTML_OBJECT_REACH: f32 = 4.0;
 
@@ -830,6 +842,34 @@ impl App {
     fn move_cursor(&mut self, x: f32, y: f32) -> bool {
         let last = self.cursor;
         self.cursor = (x, y);
+        if self.menu_scroll_drag {
+            let Some(ui) = self.ui.as_ref() else {
+                self.menu_scroll_drag = false;
+                return true;
+            };
+
+            if let (Some(track), Some(thumb)) =
+                (ui.menu_scroll_track, ui.menu_scroll_thumb)
+            {
+                let track_h = (track[3] - track[1]).max(1.0);
+                let thumb_h = (thumb[3] - thumb[1]).max(1.0);
+                let travel = (track_h - thumb_h).max(1.0);
+
+                let max_top =
+                    (self.menu_len() as f32 - ui.menu_rows as f32).max(0.0);
+
+                if max_top > 0.0 {
+                    let delta = (y - last.1) / travel * max_top;
+
+                    self.menu_top = Some(
+                        (self.menu_top.unwrap_or(ui.menu_start as f32) + delta)
+                            .clamp(0.0, max_top),
+                    );
+                }
+            }
+
+            return false;
+        }
         // an object dragged in the object editor follows
         if self.editor_drag {
             self.editor_drag_frame();

@@ -4,6 +4,132 @@ Every push to `main` is released as `MAJOR.MINOR.COMMIT` (see
 [docs/VERSIONING.md](docs/VERSIONING.md)); the downloads are on the
 [Releases](https://github.com/turbo-devv/openOMSI/releases) page.
 
+## 0.1.400 - 2026-09-30
+
+### Performance
+- Macs and phones: a fixed render scale keeps to the same pixel budget as the automatic
+  one on high-resolution screens, the navigator draws without multisampling, the picture's
+  depth is not written back where nothing reads it, and two frames are in flight so the
+  graphics chip works while the next frame is prepared (M1 Pro, Thüringer Wald: 20 to 57
+  fps; one frame more of input delay with V-sync) (#385, by hannsadrian).
+- Linux builds link with lld (#384, by no-felix).
+
+## 0.1.394 - 2026-09-30
+
+### Graphics
+- Rain drops on the windows are smaller again (the big ones of 0.1.381 were far too big and
+  lumpy), and a drop running down leaves only a cleared track and a few beads - no more
+  thin tail drawn behind it.
+
+### Driving
+- A clutch pedal pushed to the floor is fully in: a wheel's pedal reads 0.93-0.99 there, and
+  the LiAZ/PAZ gearboxes part the engine from the wheels only above 0.95 and take a gear only
+  at 1 - holding the clutch at a stop still stalled the engine. All pedals' last few per
+  cent count as their ends; the phone's clutch is in from three quarters down.
+
+### Passengers
+- Riders who stood up as the bus pulled in get off at their stop: they lost "this is my
+  stop" as the bus came to a stand and stayed at the door (#336).
+- Riders of timetable buses no longer lose their stop whenever the player's bus stops
+  somewhere (#317); somebody held off the exit by a pole gets off from there.
+
+### Controllers and launcher
+- Controller buttons can pause, take a screenshot, quicksave and switch mouse steering or the
+  controllers (#380, by isaacsa2); DirectInput devices with unusual layouts (button boxes
+  without axes) are taken (#379, by isaacsa2).
+- Text fields in the launcher can be clicked into, selected and overwritten (#373, by XiZyno).
+- The dedicated server starts on machines without a graphics card again (#375, by no-felix;
+  #368).
+- Translations completed and corrected, Traditional Chinese in full (#383, by EFour4).
+
+## 0.1.381 - 2026-09-30
+
+### Graphics
+- Rain on the bus windows looks like real drops, in all three graphics modes (Vanilla had
+  OMSI's sliding texture until now):
+  - every drop is a lens: it shows the street behind the glass through itself, small and
+    upside down, with the sky at its bottom (from the last frame's picture);
+  - drops come in four sizes up to over a centimetre, with uneven rims, the heavy ones
+    drawn out downwards, and clear glass between them;
+  - a runner leaves a thin stream of water in its track;
+  - while the bus drives, the airstream takes the runners up and out across the windscreen
+    and back along the side windows, harder the faster it goes.
+  It costs about half a millisecond at 1080p.
+
+## 0.1.380 - 2026-09-30
+
+### Game menu
+- The pause menu's Options are kept: most switches (collisions, camera collisions, view
+  turning with the steering, force feedback, keyboard brake hold, automatic clutch, head
+  tracking) were written in a form the settings file read as "not set" and came back at
+  their defaults, and LED glow and LED mipmaps were not saved at all.
+- The launcher takes over the settings a game changed instead of writing its older copy back
+  over them when it saved something of its own.
+
+### Passengers
+- Somebody at the front of a queue whom a railing, pole or shelter wall holds off the door
+  boards from where they stand; they stood a metre from the open door until the bus left.
+
+## 0.1.378 - 2026-09-30
+
+### Performance
+- Busy maps run much faster: the frame's render preparation (culling, shadow casters, draw
+  lists, bundle recording) is spread over the render threads instead of one core, mirrors
+  are drawn only when in view and at most 30 times a second, the navigator's map is redrawn
+  at most 30 times a second, and the cab's hover pick tests only the triangles near the
+  cursor. On St-Servan with traffic and passengers: 37 to 60 fps (#369, by ThiBot77).
+
+### Website
+- Download: the "Your system" badge no longer breaks across the card title, and the
+  Download buttons line up.
+
+## 0.1.374 - 2026-09-30
+
+### Graphics
+- Vanilla lights textures through the sRGB curve instead of a plain power of 2.2, so dark
+  colours are no longer crushed (#343, by Sulamufor).
+- Small dashboard indicator lights are drawn again instead of being dropped as too small
+  (#346, by no-felix).
+
+### Driving
+- Turning the wheel can turn the driver's view into the bend, as in OMSI's "look with the
+  steering wheel" (#363, by shloooo).
+- AI emergency vehicles sound their siren when something holds them up (#357, by Sulamufor).
+- System gamepads on Windows can have their buttons bound again (#358, by EpixIXIx).
+
+### Game and launcher
+- The game menu's scrollbar can be dragged (#354, by XiZyno).
+- When the game was closed by the system (out of memory), the launcher says so and points
+  to the settings that help (#355, by no-felix).
+- A saved situation keeps each vehicle's livery; read-only content folders fall back to a
+  writable place (#365, by no-felix).
+
+### Multiplayer
+- LAN protocol 6: a vehicle's state carries up to 63 values, the rear section's sounds and
+  what is seen first come first, and INFO messages are sent at most four times a second
+  (#353, with the updated #338 and #334, by Jaja80330). Players and servers need this
+  version together.
+
+### Displays
+- A character a font lacks is left out, as Omsi.exe does (its glyph lookup gives none),
+  instead of being drawn as the font's first glyph; spaces keep their width. The MAN Lion's
+  City's odometer and trip meter lose the `|` in front of them (#370, by no-felix; #360).
+
+### Website
+- Download: the Windows button downloaded the dedicated server (its zip ends the same way).
+  Every build now has its own button - Windows and Windows on ARM, macOS for Apple silicon
+  and Intel, Linux and Linux on ARM, Android - the one for your system first, and the four
+  dedicated servers apart below. Installing on macOS is explained too.
+
+## 0.1.344 - 2026-09-30
+
+### Driving
+- Braking and pulling away pitch the bus as much as in OMSI (the tyres' forces act about
+  the hubs), and it no longer pitches at a standstill.
+- Turning the wheel no longer kicks the body into a roll: while the tyres hold, the bus
+  leans only by the bend's pull, as Omsi.exe does.
+- A wheel in the air stays where it hangs at rest (`Axle_Suspension`), as in OMSI.
+
 ## 0.1.342 - 2026-09-30
 
 ### Performance

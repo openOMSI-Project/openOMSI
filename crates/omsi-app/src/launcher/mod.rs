@@ -886,6 +886,12 @@ impl Launcher {
             self.page = p;
             self.page_anim = 0.0;
             self.page_scroll = 0.0;
+            self.phone.page = match p {
+                Page::Drive => { self.phone.tab = phone::Tab::Play; None }
+                Page::Multiplayer => { self.phone.tab = phone::Tab::Online; None }
+                Page::Mods => { self.phone.tab = phone::Tab::Mods; None }
+                other => { self.phone.tab = phone::Tab::More; Some(other) }
+            };
             match p {
                 Page::Profile => self.state.load_profile(),
                 Page::Mods => self.state.load_mods(),

@@ -27,6 +27,7 @@ struct Camera {
     inside_c: vec4<f32>,
     flags: vec4<f32>,
     light_view_proj_close: mat4x4<f32>,
+    wind: vec4<f32>,
 };
 
 fn hash2(q: vec2<f32>) -> f32 {

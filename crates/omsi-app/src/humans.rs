@@ -4719,8 +4719,13 @@ impl Humans {
             }
             self.served_stop = at_stop;
             self.served_stop_since = self.time;
+            // (the player's bus's riders only: a timetable bus's riders decide once per
+            // stop of their own bus, and lost it here whenever the player's bus came to a
+            // stop somewhere - they stood at the open door until their bus drove on, #317)
             for i in 0..self.people.len() {
-                self.people[i].leaving_here = false;
+                if self.people[i].state.bus() == Some(BusId::Player) {
+                    self.people[i].leaving_here = false;
+                }
             }
             if let (Some(stop), Some(b)) = (at_stop, bus) {
                 let here = b.host.tt_busstop_index;
@@ -4742,8 +4747,15 @@ impl Humans {
                         } | State::AtExit {
                             bus: BusId::Player,
                             ..
+                        } | State::Aboard {
+                            bus: BusId::Player,
+                            goal: Goal::ExitWait(_) | Goal::Exit(_),
+                            ..
                         }
                     ) {
+                        // (those already on their way to the door are asked too: they stood up
+                        // as the bus pulled in - see `mine_ahead` - and, left out here, came to
+                        // the door as if riding on and never got off, #336)
                         let exit_id = self.people[i].exit_id;
                         let leaves = if stop == ALL_OUT_STOP || self.driver_away || everybody || exit_id == Some(stop) {
                             true
@@ -5832,8 +5844,18 @@ impl Humans {
                     return w;
                 }
                 if d > 0.6 {
-                    self.people[i].why = "";
-                    return w;
+                    // held off the door by something of the map in the way (a railing, a
+                    // pole, a shelter's wall: people are kept out of its collision boxes)
+                    // - as close as they get is close enough. They stood a metre from the
+                    // open door until the bus left without them.
+                    let held = d < 2.0 && self.people[i].stuck > 1.0;
+                    if !held {
+                        self.people[i].why = "";
+                        return w;
+                    }
+                    if debug_pax() {
+                        log::info!("t={:.1} pax {} cannot get closer to entry {entry} than {d:.1} m: boards from there", self.time, self.people[i].label());
+                    }
                 }
                 if self.door_busy.contains_key(&(bus, false, entry)) {
                     self.people[i].why = "the doorway is busy";
@@ -6422,7 +6444,10 @@ impl Humans {
                     );
                     return w;
                 }
-                if (spot - here).length() > EXIT_REACH {
+                // (held off the spot - a pole, a seat back, somebody's bag - as close as they
+                // get is close enough, as for boarding: they waited there for good)
+                let off = (spot - here).length();
+                if off > EXIT_REACH && !(off < 1.5 && self.people[i].stuck > 1.0) {
                     self.people[i].why = "steps up to the exit";
                     return w;
                 }

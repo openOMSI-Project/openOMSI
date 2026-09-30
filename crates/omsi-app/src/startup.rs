@@ -111,7 +111,15 @@ pub(crate) fn content_dir() -> Option<PathBuf> {
     } else {
         dir
     };
-    Some(omsi_cfg::content_folder_of(&dir))
+    let cand = omsi_cfg::content_folder_of(&dir);
+    if (cand.exists() || std::fs::create_dir_all(&cand).is_ok()) && omsi_cfg::is_writable(&cand) {
+        Some(cand)
+    } else {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+        let fallback = PathBuf::from(home).join(".openomsi").join("content");
+        let _ = omsi_cfg::ensure_content_layout(&fallback);
+        Some(fallback)
+    }
 }
 
 /// Where the last working installation was remembered.

@@ -976,6 +976,8 @@ impl RigidBody {
                 standing.iter().map(|&k| if total > 1e-3 { (need * cap(&contacts[k]) / total).clamp(-cap(&contacts[k]), cap(&contacts[k])) } else { 0.0 }).collect()
             };
             let hold_long = hold(body_fwd, self.mass + towed, &|c| c.brake);
+            // (the tyres' pull along the body, for the pitch lever below)
+            let mut long_sum = 0.0f32;
             for (k, c) in contacts.iter().enumerate() {
                 let mut f_long = match standing.iter().position(|&j| j == k) {
                     Some(si) => c.drive + hold_long[si],
@@ -984,11 +986,20 @@ impl RigidBody {
                 let max_f = self.friction * c.grip;
                 f_long = f_long.clamp(-max_f, max_f);
                 let f_world = c.base + c.fwd * f_long;
+                long_sum += f_long * c.fwd.dot(body_fwd);
                 if let Some(i) = c.wheel {
                     self.wheels[i].advance_spin(c, f_long, self.friction, h);
                 }
                 force += f_world;
                 torque += rot.inverse().mul_vec3(c.r).cross(rot.inverse().mul_vec3(f_world));
+            }
+            // Driving and braking pitch the body about a lever longer than the centre of
+            // gravity's height over the road: Omsi.exe takes the tyres' forces at the hubs,
+            // their radius more (0x7e46a5: (drive - brake) x d/2 besides [schwerpunkt] x
+            // the pull), and not while the bus stands with its brakes holding (0x7e4660).
+            if self.velocity.dot(body_fwd).abs() > 0.2 {
+                let r = self.wheels.iter().map(|w| w.radius).sum::<f32>() / self.wheels.len().max(1) as f32;
+                torque.x += long_sum * r;
             }
             // Across the tyre: OMSI has no slip angle. Each axle takes away the sideways
             // speed it has - the bus follows its wheels exactly - with no more force than
@@ -1005,11 +1016,20 @@ impl RigidBody {
                 let mut v = self.velocity + ((force - body_fwd * along) / m + body_fwd * (along / mt)) * h;
                 let mut w = self.omega + (torque - self.omega.cross(self.inertia * self.omega)) / self.inertia * h;
                 let lat: Vec<usize> = (0..contacts.len()).filter(|&k| contacts[k].lateral && contacts[k].grip > 0.0).collect();
+                // (following its wheels: hardly any speed across the body)
+                let gripped = self.velocity.dot(rot.mul_vec3(Vec3::X)).abs() < 0.5 && self.velocity.dot(body_fwd).abs() > 1.0;
                 let arms: Vec<(Vec3, f32)> = lat
                     .iter()
                     .map(|&k| {
                         let c = &contacts[k];
-                        let rn = rot.inverse().mul_vec3(c.r).cross(rot.inverse().mul_vec3(c.right));
+                        let mut rn = rot.inverse().mul_vec3(c.r).cross(rot.inverse().mul_vec3(c.right));
+                        // (holding, no roll from the tyres' hold across: Omsi.exe then sets the
+                        // sideways motion outright and rolls the body by the bend's pull alone,
+                        // below - taken at the ground, every turn of the wheel kicked the body
+                        // over; sliding, the tyres trip it as before)
+                        if self.holding && gripped {
+                            rn.y = 0.0;
+                        }
                         let inv = c.right.dot(lin(c.right)) + (rn / self.inertia).dot(rn);
                         (rn, inv.max(1e-9))
                     })
@@ -1047,6 +1067,11 @@ impl RigidBody {
                 }
                 if !self.holding && !slipping && lat.iter().all(|&k| (v + rot.mul_vec3(w).cross(contacts[k].r)).dot(contacts[k].right).abs() < 0.1) {
                     self.holding = true;
+                }
+                // the bend's pull rolls the body out of it (0x7e4629: [schwerpunkt] x mass x
+                // the centripetal acceleration)
+                if self.holding && gripped && !lat.is_empty() {
+                    torque.y += m * self.cog.z * v_fwd * self.omega.z;
                 }
             }
             // integrate

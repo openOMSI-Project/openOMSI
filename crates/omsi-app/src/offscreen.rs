@@ -2223,6 +2223,12 @@ pub(crate) fn run_offscreen(
             .map(|bb| (p.vehicle.position, p.vehicle.heading, bb))
     });
     lighting.detail = settings.detail_textures;
+    lighting.glass_wind = player_ref.as_ref().or(player.as_ref()).map(|p| crate::lights::vehicle_velocity(&p.vehicle)).unwrap_or_default();
+    // OMSI_GLASS_WIND=<m/s>: the rain on the glass as the bus would meet it at that speed
+    if let (Some(v), Some(p)) = (omsi_cfg::env::var("OMSI_GLASS_WIND").ok().and_then(|v| v.parse::<f32>().ok()), player_ref.as_ref().or(player.as_ref())) {
+        let h = p.vehicle.heading.to_radians();
+        lighting.glass_wind = glam::Vec3::new(h.sin() as f32, h.cos() as f32, 0.0) * v;
+    }
     {
         // scenery scripts: a few frames so animations settle
         let phase = |c: usize, li: usize| {
@@ -2632,6 +2638,11 @@ pub(crate) fn run_offscreen(
         }
     }
     world.finish_texture_upgrades(&renderer, &mut scene);
+    // OMSI_WARM_FRAMES=n: n frames drawn before the picture, for what reads the frame
+    // before it (the rain on the glass looks through the last picture)
+    for _ in 0..omsi_cfg::env::var("OMSI_WARM_FRAMES").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0) {
+        let _ = renderer.render_to_image(&mut scene, w, h, &camera, &lighting)?;
+    }
     let t0 = Instant::now();
     if let Some(p) = player_ref.as_ref() {
         render_mirrors(&mut renderer, &mut scene, &world, p, &lighting, None, None);

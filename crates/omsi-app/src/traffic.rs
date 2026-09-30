@@ -93,6 +93,9 @@ const ROUTE_WAIT_MAX: f32 = 40.0;
 /// A car edging out round something standing keeps to `PULL_OUT_ACCEL` until its front is
 /// this far past the obstacle's rear (m).
 const CREEP_PAST: f32 = 2.0;
+/// How far ahead an emergency vehicle warns what holds it up (`TrafficPriorityWarningNeeded`,
+/// m).
+const PRIORITY_WARN_GAP: f32 = 60.0;
 
 /// Seconds a car at `st` needs to drive `dist` metres out on the other half of the road:
 /// the first `creep` metres edging out, the rest speeding up to `v_cap` (a driver standing
@@ -5647,6 +5650,15 @@ impl Traffic {
                     log::info!("doors t={:.1} car {} {} phase {:?} speed {:.1}: AtStation {st} door {} {} {} {} target {} {} {} halte {} timer {}", self.time, car.id, v.ty.def.type_name, car.bus.as_ref().map(|b| b.phase), car.state.speed, g("door_0"), g("door_1"), g("door_2"), g("door_3"), g("doorTarget_0"), g("doorTarget_1"), g("doorTarget_2"), g("bremse_halte_sw"), g("door_AI_timer"));
                 }
             }
+            // An emergency vehicle (its script sets `TrafficPriority`, the stock ambulance)
+            // is told `TrafficPriorityWarningNeeded` while something holds it up close ahead:
+            // a car or the player's bus it catches up with or has to follow, a red light, a
+            // junction it has to wait at. Its script sounds the siren on it; without the
+            // variable it drove silent all day. (Behind a car at the same speed the siren
+            // flickered on a strict "slower".)
+            let priority_warning = car.vehicle.var("TrafficPriority").is_some_and(|v| v > 0.5)
+                && (lead_now.is_some_and(|l| l.gap < PRIORITY_WARN_GAP && l.speed < car.state.speed + 0.5)
+                    || stop_at.is_some_and(|x| x - car.state.front < PRIORITY_WARN_GAP));
             frames[i] = Some(AiFrame {
                 speed: car.state.speed,
                 odometer: car.state.odometer,
@@ -5655,6 +5667,7 @@ impl Traffic {
                 brake: car.state.braking,
                 lights: self.night,
                 at_station: car.at_station() as i32,
+                priority_warning,
             });
         }
         // Who can be seen: a car out of the view (and farther than the mirrors and the

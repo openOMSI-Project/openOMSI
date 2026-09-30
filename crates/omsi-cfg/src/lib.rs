@@ -934,6 +934,14 @@ pub fn content_folder_of(dir: &Path) -> PathBuf {
     }
 }
 
+/// Check if a directory is writable by attempting to create and remove a probe file.
+pub fn is_writable(dir: &Path) -> bool {
+    let probe = dir.join(".openomsi-write-test");
+    let ok = std::fs::write(&probe, b"x").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    ok
+}
+
 /// Create the content folder layout at `dir` (idempotent).
 pub fn ensure_content_layout(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
@@ -955,6 +963,14 @@ pub fn ensure_content_layout(dir: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writable_check() {
+        let tmp = std::env::temp_dir();
+        assert!(is_writable(&tmp));
+        let nonexistent = tmp.join("nonexistent_subfolder_xyz_123");
+        assert!(!is_writable(&nonexistent));
+    }
 
     #[test]
     fn keywords() {

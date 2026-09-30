@@ -1262,6 +1262,38 @@ mod tests {
     }
 
     #[test]
+    fn cone_filtered_rays_hit_what_the_whole_mesh_does() {
+        let mut seed = 7u32;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed as f32 / u32::MAX as f32) * 2.0 - 1.0
+        };
+        let mut positions = Vec::new();
+        for _ in 0..1500 {
+            positions.push(Vec3::new(rnd() * 2.0, 3.0 + rnd() * 2.0, rnd() * 2.0));
+        }
+        let mesh = MeshData { indices: (0..1500).collect(), positions, ..Default::default() };
+        let xf = Mat4::from_rotation_z(0.3) * Mat4::from_translation(Vec3::new(0.2, 0.0, 0.1));
+        let o = Vec3::new(0.1, -1.0, 0.05);
+        let axis = Vec3::new(0.05, 1.0, 0.02).normalize();
+        let spread = 0.02;
+        let tris = cone_triangles(o, axis, spread * 2.0 + 1e-4, &mesh, &xf);
+        assert!(tris.len() < 500);
+        let right = Vec3::new(-axis.y, axis.x, 0.0).normalize();
+        let up = axis.cross(right).normalize();
+        for ring in 0..=2 {
+            for k in 0..(8 * ring).max(1) {
+                let a = k as f32 / (8 * ring).max(1) as f32 * std::f32::consts::TAU;
+                let r = spread * ring as f32;
+                let d = (axis + right * (a.cos() * r) + up * (a.sin() * r)).normalize();
+                assert_eq!(ray_triangles(o, d, &mesh, &xf, &tris), ray_mesh(o, d, &mesh, &xf));
+            }
+        }
+    }
+
+    #[test]
     fn o3d_front_faces_arrive_clockwise() {
         // A triangle a viewer at the origin looking along +z sees from its front in the
         // file's Direct3D frame (x right, y up, z forward): clockwise there, the normal
@@ -1399,6 +1431,52 @@ pub fn ray_mesh(origin: Vec3, dir: Vec3, mesh: &MeshData, transform: &Mat4) -> O
     let mut best: Option<f32> = None;
     for tri in mesh.indices.chunks_exact(3) {
         let (a, b, c) = (mesh.positions[tri[0] as usize], mesh.positions[tri[1] as usize], mesh.positions[tri[2] as usize]);
+        if let Some(t) = ray_triangle(o, dn, a, b, c) {
+            let t = t / scale;
+            if best.map(|bt| t < bt).unwrap_or(true) {
+                best = Some(t);
+            }
+        }
+    }
+    best
+}
+
+pub fn cone_triangles(origin: Vec3, axis: Vec3, tan_half: f32, mesh: &MeshData, transform: &Mat4) -> Vec<u32> {
+    let inv = transform.inverse();
+    let o = inv.transform_point3(origin);
+    let a = inv.transform_vector3(axis).normalize_or_zero();
+    let mut out = Vec::new();
+    for (k, tri) in mesh.indices.chunks_exact(3).enumerate() {
+        let (p0, p1, p2) = (mesh.positions[tri[0] as usize], mesh.positions[tri[1] as usize], mesh.positions[tri[2] as usize]);
+        let c = (p0 + p1 + p2) / 3.0;
+        let r = (p0 - c).length().max((p1 - c).length()).max((p2 - c).length());
+        let w = c - o;
+        let along = w.dot(a);
+        if along < -r {
+            continue;
+        }
+        let across = (w - a * along).length();
+        if across > (along + r).max(0.0) * tan_half + r + 1e-3 {
+            continue;
+        }
+        out.push((k * 3) as u32);
+    }
+    out
+}
+
+pub fn ray_triangles(origin: Vec3, dir: Vec3, mesh: &MeshData, transform: &Mat4, tris: &[u32]) -> Option<f32> {
+    let inv = transform.inverse();
+    let o = inv.transform_point3(origin);
+    let d = inv.transform_vector3(dir);
+    let scale = d.length();
+    if scale < 1e-9 {
+        return None;
+    }
+    let dn = d / scale;
+    let mut best: Option<f32> = None;
+    for &k in tris {
+        let k = k as usize;
+        let (a, b, c) = (mesh.positions[mesh.indices[k] as usize], mesh.positions[mesh.indices[k + 1] as usize], mesh.positions[mesh.indices[k + 2] as usize]);
         if let Some(t) = ray_triangle(o, dn, a, b, c) {
             let t = t / scale;
             if best.map(|bt| t < bt).unwrap_or(true) {

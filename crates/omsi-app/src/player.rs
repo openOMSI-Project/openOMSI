@@ -59,6 +59,8 @@ pub(crate) struct Player {
     /// Its speed (m/s) and the body's turning rates of the frame before (see `move_head`).
     pub(crate) head_vel: Vec3,
     pub(crate) head_omega: Vec3,
+    /// How far the driver's view is turned into the steering (degrees of yaw; see `move_head`).
+    pub(crate) steer_look: f32,
     /// The driver's seat moved (Settings → seat position; bus frame, m).
     pub(crate) seat: Vec3,
     /// The player's turn of each mirror (yaw, pitch degrees; Ctrl+Alt+arrows in the cab).
@@ -1033,8 +1035,12 @@ impl Player {
     /// never further than 10 cm up or down (0x7e2256). (A lag of our own towards a point a
     /// hundredth of the acceleration off - a third of what the original throws the head -
     /// stood in for it.)
-    pub(crate) fn move_head(&mut self, dt: f32, enabled: bool) {
+    pub(crate) fn move_head(&mut self, dt: f32, enabled: bool, steer_look: bool) {
         let dt = dt.clamp(0.0, 0.1);
+        // (a driver looks into the bend he steers: up to 30 degrees at full lock, eased so
+        // the view does not snap with the wheel)
+        let steer_want = if steer_look { self.vehicle.physics.controls.steering.clamp(-1.0, 1.0) * 30.0 } else { 0.0 };
+        self.steer_look += (steer_want - self.steer_look) * (1.0 - (-4.0 * dt).exp());
         let a = self.vehicle.physics.accel;
         let omega = self.vehicle.rigid.as_ref().map(|rb| rb.omega).unwrap_or(Vec3::ZERO);
         let dw = omega - self.head_omega;
@@ -1661,7 +1667,7 @@ impl Player {
                 // 0x7edfd0, the vehicle's own matrix): it pitches and rolls with the bus, the
                 // look turned in the bus's frame. Kept level, the view stood still while the
                 // cab rocked about it - the "boat" (the body's own motion matches Omsi's).
-                let turned = omsi_vehicle::Camera { yaw: c.yaw + look.0, pitch: (c.pitch + look.1).clamp(-89.0, 89.0), ..c.clone() };
+                let turned = omsi_vehicle::Camera { yaw: c.yaw + look.0 + if view == "driver" { self.steer_look } else { 0.0 }, pitch: (c.pitch + look.1).clamp(-89.0, 89.0), ..c.clone() };
                 let (eye, yaw, pitch, roll) = self.vehicle.camera_world_full(&turned);
                 let eye = if view == "driver" { eye + self.vehicle.body_rotation().transform_vector3(self.head + self.seat).as_dvec3() } else { eye };
                 // near 0.25 rather than 0.1: the depth buffer has to reach 6 km, and the
@@ -1811,19 +1817,24 @@ pub(crate) fn pick_in(vehicle: &omsi_sim::VehicleInstance, origin: DVec3, dir: V
     // The same broad-phase applies to every ring. A large cockpit can contain
     // hundreds of meshes; calculating their posed transforms three times made
     // hovering over its controls needlessly expensive.
-    let candidates: Vec<(usize, glam::Mat4)> = vehicle.ty.meshes.iter().enumerate().filter_map(|(i, vm)| {
+    let candidates: Vec<(usize, glam::Mat4, Vec<u32>)> = vehicle.ty.meshes.iter().enumerate().filter_map(|(i, vm)| {
         if vehicle.ty.model.meshes[vm.def_index].mouse_event.is_none() || !vehicle.mesh_props[i].visible {
             return None;
         }
         let xf = vehicle.mesh_local_transform(i);
-        ray_may_hit(&vehicle.ty, i, &xf, o, dir, spread * 2.2).then_some((i, xf))
+        if !ray_may_hit(&vehicle.ty, i, &xf, o, dir, spread * 2.2) {
+            return None;
+        }
+        let tris = omsi_geometry::cone_triangles(o, dir, spread * 2.0 + 1e-4, &vm.data, &xf);
+        (!tris.is_empty()).then_some((i, xf, tris))
     }).collect();
     for dirs in &rings {
         let mut best: Option<(f32, usize)> = None;
-        for &(i, xf) in &candidates {
+        for (i, xf, tris) in &candidates {
+            let (i, xf) = (*i, *xf);
             let vm = &vehicle.ty.meshes[i];
             for d in dirs {
-                if let Some(t) = omsi_geometry::ray_mesh(o, *d, &vm.data, &xf) {
+                if let Some(t) = omsi_geometry::ray_triangles(o, *d, &vm.data, &xf, tris) {
                     if best.map(|(bt, _)| t < bt).unwrap_or(true) {
                         best = Some((t, i));
                     }
@@ -1902,24 +1913,29 @@ pub(crate) fn pick_trailer_in(vehicle: &omsi_sim::VehicleInstance, origin: DVec3
             );
         }
     }
-    let candidates: Vec<(usize, usize, glam::Mat4)> = vehicle.trailers.iter().enumerate().flat_map(|(ti, trailer)| {
+    let candidates: Vec<(usize, usize, glam::Mat4, Vec<u32>)> = vehicle.trailers.iter().enumerate().flat_map(|(ti, trailer)| {
         let o = (origin - trailer.position).as_vec3();
         trailer.ty.meshes.iter().enumerate().filter_map(move |(i, vm)| {
             if trailer.ty.model.meshes[vm.def_index].mouse_event.is_none() || !trailer.mesh_props[i].visible {
                 return None;
             }
             let xf = trailer.mesh_local_transform(i);
-            ray_may_hit(&trailer.ty, i, &xf, o, dir, spread * 2.2).then_some((ti, i, xf))
+            if !ray_may_hit(&trailer.ty, i, &xf, o, dir, spread * 2.2) {
+                return None;
+            }
+            let tris = omsi_geometry::cone_triangles(o, dir, spread * 2.0 + 1e-4, &vm.data, &xf);
+            (!tris.is_empty()).then_some((ti, i, xf, tris))
         })
     }).collect();
     for dirs in &rings {
         let mut best: Option<(f32, usize, usize)> = None;
-        for &(ti, i, xf) in &candidates {
+        for (ti, i, xf, tris) in &candidates {
+            let (ti, i, xf) = (*ti, *i, *xf);
             let trailer = &vehicle.trailers[ti];
             let o = (origin - trailer.position).as_vec3();
             let vm = &trailer.ty.meshes[i];
             for d in dirs {
-                if let Some(t) = omsi_geometry::ray_mesh(o, *d, &vm.data, &xf) {
+                if let Some(t) = omsi_geometry::ray_triangles(o, *d, &vm.data, &xf, tris) {
                     if best.map(|(bt, _, _)| t < bt).unwrap_or(true) {
                         best = Some((t, ti, i));
                     }

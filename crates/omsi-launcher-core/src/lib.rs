@@ -255,7 +255,13 @@ pub fn content_dir() -> Option<PathBuf> {
             let c = load_config_raw();
             let game = find_game(&c.game)?;
             let dir = game.parent()?.to_path_buf();
-            omsi_cfg::content_folder_of(&if dir.ends_with("Contents/MacOS") { dir.parent()?.parent()?.parent()?.to_path_buf() } else { dir })
+            let beside = if dir.ends_with("Contents/MacOS") { dir.parent()?.parent()?.parent()?.to_path_buf() } else { dir };
+            let cand = omsi_cfg::content_folder_of(&beside);
+            if (cand.exists() || std::fs::create_dir_all(&cand).is_ok()) && omsi_cfg::is_writable(&cand) {
+                cand
+            } else {
+                data_dir().join("content")
+            }
         }
     };
     let _ = omsi_cfg::ensure_content_layout(&dir);
@@ -1436,12 +1442,29 @@ pub fn delete_profile(name: &str) -> Result<()> {
 // game reads that first), else the original installation's, which is never written
 
 fn keyboard_cfg_write_path() -> Result<PathBuf> {
-    Ok(content_dir().unwrap_or(root()?).join("Inputs").join("keyboard.cfg"))
+    let cand = content_dir().unwrap_or(root()?).join("Inputs").join("keyboard.cfg");
+    if let Some(p) = cand.parent() {
+        if (p.exists() || std::fs::create_dir_all(p).is_ok()) && omsi_cfg::is_writable(p) {
+            return Ok(cand);
+        }
+    }
+    let fallback = data_dir().join("Inputs").join("keyboard.cfg");
+    if let Some(p) = fallback.parent() {
+        let _ = std::fs::create_dir_all(p);
+    }
+    Ok(fallback)
 }
 
 fn keyboard_cfg_read_path() -> Result<PathBuf> {
     let own = keyboard_cfg_write_path()?;
-    Ok(if own.exists() { own } else { omsi_cfg::original_keyboard_cfg(&root()?) })
+    if own.exists() {
+        return Ok(own);
+    }
+    let fallback = data_dir().join("Inputs").join("keyboard.cfg");
+    if fallback.exists() {
+        return Ok(fallback);
+    }
+    Ok(omsi_cfg::original_keyboard_cfg(&root()?))
 }
 
 fn binding_to_json(b: &omsi_content::input::KeyBinding) -> Value {
@@ -1582,7 +1605,7 @@ pub fn settings_from_text(text: Option<&str>) -> Value {
         v[k] = d;
     }
     // openOMSI's own: what passengers say, OMSI's route arrows, getting up from the seat
-    for (k, d) in [("pax_voices", json!("all")), ("nav_arrows", json!(false)), ("get_up", json!(false)), ("time_speed", json!("1")), ("machine_translation", json!(false)), ("shadow_casters", json!("all")), ("reflections", json!(true)), ("mouse_sens", json!(1.0)), ("graphics_api", json!("auto")), ("ctrl_off", json!("")), ("steering_linear", json!(false)), ("old_steering", json!(false)), ("ff_invert", json!(false)), ("ff_enabled", json!(true)), ("brake_hold", json!(true)), ("auto_clutch", json!(true)), ("wheel_range", json!(900.0)), ("wheel_lock", json!(0.0)), ("fov", json!(0.0)), ("camera_collision", json!(true)), ("pedal_throttle", json!(1.0)), ("pedal_brake", json!(1.0)), ("seat_x", json!(0.0)), ("seat_y", json!(0.0)), ("seat_z", json!(0.0)), ("head_tracking", json!(false))] {
+    for (k, d) in [("pax_voices", json!("all")), ("nav_arrows", json!(false)), ("get_up", json!(false)), ("time_speed", json!("1")), ("machine_translation", json!(false)), ("shadow_casters", json!("all")), ("reflections", json!(true)), ("mouse_sens", json!(1.0)), ("graphics_api", json!("auto")), ("ctrl_off", json!("")), ("steering_linear", json!(false)), ("old_steering", json!(false)), ("ff_invert", json!(false)), ("ff_enabled", json!(true)), ("brake_hold", json!(true)), ("auto_clutch", json!(true)), ("wheel_range", json!(900.0)), ("wheel_lock", json!(0.0)), ("fov", json!(0.0)), ("camera_collision", json!(true)), ("steer_look", json!(false)), ("pedal_throttle", json!(1.0)), ("pedal_brake", json!(1.0)), ("seat_x", json!(0.0)), ("seat_y", json!(0.0)), ("seat_z", json!(0.0)), ("head_tracking", json!(false)), ("led_glow", json!(6)), ("led_mips", json!(true))] {
         v[k] = d;
     }
     // updates from the GitHub releases: looked for when the launcher starts, installed
@@ -1622,7 +1645,8 @@ pub fn settings_from_text(text: Option<&str>) -> Value {
             "wheel_range" => v[&k] = json!(val.parse::<f64>().unwrap_or(900.0).clamp(90.0, 2880.0)),
             "wheel_lock" => v[&k] = json!(val.parse::<f64>().map(|x| if x < 45.0 { 0.0 } else { x.min(2880.0) }).unwrap_or(0.0)),
             "fov" => v[&k] = json!(val.parse::<f64>().map(|x| if x < 20.0 { 0.0 } else { x.min(120.0) }).unwrap_or(0.0)),
-            "camera_collision" | "head_tracking" => v[&k] = json!(b(val)),
+            "camera_collision" | "steer_look" | "head_tracking" | "led_mips" => v[&k] = json!(b(val)),
+            "led_glow" => v[&k] = json!(val.parse::<i64>().map(|x| x.clamp(0, 15)).unwrap_or(6)),
             "pedal_throttle" | "pedal_brake" => v[&k] = json!(val.parse::<f64>().map(|x| x.clamp(0.25, 4.0)).unwrap_or(1.0)),
             "seat_x" | "seat_y" | "seat_z" => v[&k] = json!(val.parse::<f64>().map(|x| x.clamp(-1.5, 1.5)).unwrap_or(0.0)),
             "nav_arrows" | "get_up" | "machine_translation" | "update_check" | "update_auto" | "reflections" | "steering_linear" | "old_steering" | "ff_invert" | "ff_enabled" | "brake_hold" | "auto_clutch" => v[&k] = json!(b(val)),
@@ -1820,7 +1844,7 @@ pub fn settings_to_text(v: &Value, old: Option<&str>) -> String {
         b("head_movement", true),
     );
     let text = format!(
-        "{text}pax_voices={}\nnav_arrows={}\nget_up={}\ntime_speed={}\nmachine_translation={}\nshadow_casters={}\nctrl_deadzone={}\nupdate_check={}\nupdate_auto={}\nreflections={}\nmouse_sens={}\ngraphics_api={}\nctrl_off={}\nsteering_linear={}\nold_steering={}\nff_invert={}\nwheel_range={}\nwheel_lock={}\nfov={}\ncamera_collision={}\npedal_throttle={}\npedal_brake={}\nseat_x={}\nseat_y={}\nseat_z={}\nhead_tracking={}\nff_enabled={}\nbrake_hold={}\nauto_clutch={}\n",
+        "{text}pax_voices={}\nnav_arrows={}\nget_up={}\ntime_speed={}\nmachine_translation={}\nshadow_casters={}\nctrl_deadzone={}\nupdate_check={}\nupdate_auto={}\nreflections={}\nmouse_sens={}\ngraphics_api={}\nctrl_off={}\nsteering_linear={}\nold_steering={}\nff_invert={}\nwheel_range={}\nwheel_lock={}\nfov={}\ncamera_collision={}\npedal_throttle={}\npedal_brake={}\nseat_x={}\nseat_y={}\nseat_z={}\nsteer_look={}\nhead_tracking={}\nff_enabled={}\nbrake_hold={}\nauto_clutch={}\nled_glow={}\nled_mips={}\n",
         match v.get("pax_voices").and_then(|x| x.as_str()).unwrap_or("all") {
             "tickets" => "tickets",
             "off" => "off",
@@ -1859,10 +1883,13 @@ pub fn settings_to_text(v: &Value, old: Option<&str>) -> String {
         f("seat_x", 0.0).clamp(-1.5, 1.5),
         f("seat_y", 0.0).clamp(-1.5, 1.5),
         f("seat_z", 0.0).clamp(-1.5, 1.5),
+        b("steer_look", false),
         b("head_tracking", false),
         b("ff_enabled", true),
         b("brake_hold", true),
         b("auto_clutch", true),
+        n("led_glow", 6).clamp(0, 15),
+        b("led_mips", true),
     );
     let vr_scale = v.get("vr_scale").and_then(|x| x.as_f64().or_else(|| x.as_str().and_then(|s| s.parse().ok()))).filter(|x| x.is_finite()).unwrap_or(0.65).clamp(0.5, 1.0);
     let vr_head_smoothing_ms = v.get("vr_head_smoothing_ms").and_then(|x| x.as_f64().or_else(|| x.as_str().and_then(|s| s.parse().ok()))).filter(|x| x.is_finite()).unwrap_or(0.0).clamp(0.0, 30.0);
@@ -2286,6 +2313,19 @@ pub fn cli(cmd: &str, arg: &str) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_games_options_survive_a_save() {
+        // what the pause menu's Options change, read back as they were set
+        let mut v = settings_from_text(None);
+        for (k, x) in [("steer_look", json!(true)), ("camera_collision", json!(false)), ("brake_hold", json!(false)), ("auto_clutch", json!(false)), ("ff_enabled", json!(false)), ("head_tracking", json!(true)), ("collision_objects", json!(false)), ("led_mips", json!(false)), ("led_glow", json!(11)), ("pedal_brake", json!(1.5)), ("seat_y", json!(-0.1))] {
+            v[k] = x;
+        }
+        let back = settings_from_text(Some(&settings_to_text(&v, None)));
+        for k in ["steer_look", "camera_collision", "brake_hold", "auto_clutch", "ff_enabled", "head_tracking", "collision_objects", "led_mips", "led_glow", "pedal_brake", "seat_y"] {
+            assert_eq!(back[k], v[k], "{k}");
+        }
+    }
+
     #[test]
     fn dsc_files_give_name_and_description() {
         let d = super::parse_dsc("\r\n[friendlyname]\r\nMAN\r\nNL202 - EN92\r\nBeige\r\n\r\n[description]\r\nAlthough the BVG did not purchase\r\n\r\n-Technical specifications-\r\n[end]\r\n");

@@ -78,6 +78,10 @@ impl ScriptTexture {
         let from_font = mode & 1 != 0;
         let transparent = mode & 3 == 2;
         for ch in text.chars() {
+            if ch.is_whitespace() {
+                cx += atlas.font.space_width() + atlas.font.gap + spacing;
+                continue;
+            }
             let Some(g) = atlas.font.glyph(ch) else {
                 cx += atlas.font.gap.max(1) + spacing;
                 continue;

@@ -638,6 +638,7 @@ fn settings_columns(ui: &mut Ui, s: &mut Value, dirty: &mut f32, body: Rect, upd
         *dirty = 0.3;
     }
     toggle_setting(ui, s, dirty, row(&mut y), "Camera collisions (outside view)", "camera_collision");
+    toggle_setting(ui, s, dirty, row(&mut y), "Driver's view turns with the steering", "steer_look");
     toggle_setting(ui, s, dirty, row(&mut y), "Head tracking (TrackIR and others through opentrack, UDP 4242)", "head_tracking");
     let mut fov = get(s, "fov").as_f64().unwrap_or(0.0) as f32;
     if ui.slider("s-fov", row(&mut y), &mut fov, 0.0, 120.0, 1.0, "Field of view", &|v| if v < 20.0 { "Default".to_string() } else { format!("{v:.0}°") }) {
@@ -720,6 +721,10 @@ fn action_label(a: &str) -> String {
         ("vr_toggle_mode", "VR: Switch VR / desktop"),
         ("exit", "Quit"),
         ("sim_pause", "Pause"),
+        ("screenshot", "Screenshot"),
+        ("quicksave", "Quicksave"),
+        ("toggel_mouse_ctrl", "Toggle mouse steering"),
+        ("toggel_ctrler", "Toggle game controllers"),
     ];
     known.iter().find(|k| k.0 == a).map(|k| k.1.to_string()).unwrap_or_else(|| a.trim_start_matches("kw_").trim_start_matches("cp_").trim_start_matches("bus_").replace('_', " "))
 }
@@ -906,12 +911,12 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
         pv.devices = Some(crate::controllers::read_cfg(&root));
     }
     // what the devices do now (and a button pressed while one is awaited)
-    let mut pressed: Option<(String, usize)> = None;
+    let mut pressed: Vec<(String, usize)> = Vec::new();
     let mut connected: Vec<crate::controllers::Connected> = Vec::new();
     if let Some(io) = pv.io.as_mut() {
         for (name, n, down) in io.poll() {
             if down {
-                pressed = Some((name, n));
+                pressed.push((name, n));
             }
         }
         connected = io.connected();
@@ -1044,7 +1049,7 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
         }
     }
     // the game's own view actions (looking around while held, the cameras, the views)
-    for a in ["gear_up", "gear_down", "view_look_left", "view_look_right", "view_look_up", "view_look_down", "view_reset_direction", "view_interiorcam_plus", "view_interiorcam_minus", "view_toggle_viewpoint", "view_set_driver", "view_set_passenger", "view_set_outside"] {
+    for a in ["gear_up", "gear_down", "view_look_left", "view_look_right", "view_look_up", "view_look_down", "view_reset_direction", "view_interiorcam_plus", "view_interiorcam_minus", "view_toggle_viewpoint", "view_set_driver", "view_set_passenger", "view_set_outside", "sim_pause", "screenshot", "quicksave", "toggel_mouse_ctrl", "toggel_ctrler"] {
         if !actions.iter().any(|x| x == a) {
             actions.insert(1, a.to_string());
         }
@@ -1137,7 +1142,7 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
         pv.dirty = true;
     }
     // a button pressed on the device: its line (added up to it)
-    if let Some((name, n)) = pressed {
+    if let Some((name, n)) = pressed.into_iter().find(|(name, _)| crate::controllers::names_match(&d.name, name)) {
         if crate::controllers::names_match(&d.name, &name) && n < crate::controllers::HAT_BUTTONS + 16 {
             while d.buttons.len() <= n {
                 d.buttons.push((String::new(), "0".into()));
@@ -1298,7 +1303,12 @@ fn moved_most(rest: &[Option<f32>; 8], now: &[Option<f32>; 8], exclude: &[usize]
 /// Write the devices to the content folder's `Inputs/gamectrler.cfg` (OMSI 2's own is only
 /// read; the game takes the content folder's first).
 fn save_gamectrler(devices: &[crate::controllers::DeviceCfg]) -> Result<std::path::PathBuf, String> {
-    let dir = core::content_dir().ok_or("no content folder")?.join("Inputs");
+    let candidate = core::content_dir().unwrap_or_else(core::data_dir).join("Inputs");
+    let dir = if (candidate.exists() || std::fs::create_dir_all(&candidate).is_ok()) && omsi_cfg::is_writable(&candidate) {
+        candidate
+    } else {
+        core::data_dir().join("Inputs")
+    };
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let p = dir.join("gamectrler.cfg");
     std::fs::write(&p, crate::controllers::cfg_text(devices)).map_err(|e| e.to_string())?;

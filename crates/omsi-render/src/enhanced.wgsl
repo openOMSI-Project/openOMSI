@@ -292,7 +292,8 @@ fn shade_enhanced(in: VsOut) -> vec4<f32> {
         let g = rain_glass(in.world, in.uv - in.params.zw, in.normal, in.params.x, camera.post.y, in_cab);
         let through = rain_through(g, vn);
         let valid = dot(through, through) > 1e-4;
-        let seen = select(vec3<f32>(0.0), rain_env_enhanced(normalize(select(g.out, through, valid)), 2.0), valid);
+        // (the picture behind is as the HDR pass drew it: exposed already)
+        let seen = select(vec3<f32>(0.0), rain_behind(in.world, through, rain_env_enhanced(normalize(select(g.out, through, valid)), 2.0), 1.0 / max(enh.exposure.x, 1e-6)), valid);
         let mirrored = rain_env_enhanced(reflect(-vn, g.n), 1.0);
         let d = rain_light(g, vn, through, mirrored, seen, sh_irradiance(g.out) / PI * 0.9, enh.sun.rgb / PI);
         let aer = air(-normalize(v), fog_distance(in.world), camera.cam_pos.z - enh.fog.z, in.world.z - enh.fog.z);

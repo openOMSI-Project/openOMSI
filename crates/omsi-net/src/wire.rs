@@ -29,7 +29,7 @@
 //!   rear sections 2 + 60 each       dx, dy 16 (cm from the front origin), dz 12 (cm), heading 16
 //!   lamps 7 + 2 each                /3 (the vehicle's lamp variables, see the game's sync table)
 //!   switches 5 + 4 each             small integers −8 … 7 (`[visible]` variables)
-//!   values 5 + 16 each              IEEE half floats (sound and moving-part variables)
+//!   values 6 + 16 each              IEEE half floats (sound and moving-part variables)
 //! ```
 
 use crate::{Aboard, PartPose, Pose, Walker};
@@ -62,7 +62,7 @@ pub const MAX_WHEELS: usize = 15;
 pub const MAX_REAR: usize = 3;
 pub const MAX_LAMPS: usize = 127;
 pub const MAX_SWITCHES: usize = 31;
-pub const MAX_VALUES: usize = 31;
+pub const MAX_VALUES: usize = 63;
 /// The longest state a sender may put together (and a receiver accepts).
 pub const MAX_STATE_BYTES: usize = 512;
 
@@ -316,7 +316,7 @@ pub fn encode_state(pose: &Pose, protocol: u8, seq: u16) -> Vec<u8> {
         w.put_fixed(*s as f64, 1.0, 4);
     }
     let values = &pose.values[..pose.values.len().min(MAX_VALUES)];
-    w.put(values.len() as u64, 5);
+    w.put(values.len() as u64, 6);
     for v in values {
         w.put(f16_from(*v) as u64, 16);
     }
@@ -389,7 +389,7 @@ pub fn decode_state(data: &[u8], protocol: u8) -> Option<(u32, u16, Pose)> {
     p.switches = (0..n)
         .map(|_| r.get_signed(4).map(|v| v as f32))
         .collect::<Option<_>>()?;
-    let n = r.get(5)? as usize;
+    let n = r.get(6)? as usize;
     p.values = (0..n)
         .map(|_| r.get(16).map(|v| f16_to(v as u16)))
         .collect::<Option<_>>()?;
@@ -680,6 +680,25 @@ mod tests {
         assert_eq!(q.doors, vec![1.0; MAX_DOORS]);
         assert_eq!(q.lamps.len(), MAX_LAMPS);
         assert_eq!(q.values, vec![0.0, 65504.0]);
+    }
+
+    /// Every list at its longest - 63 values among them - still makes a state a receiver
+    /// takes, and the values come back in order.
+    #[test]
+    fn a_state_with_every_list_full_fits() {
+        let mut p = bus();
+        p.doors = vec![0.5; MAX_DOORS];
+        p.lamps = vec![0.5; MAX_LAMPS];
+        p.switches = vec![3.0; MAX_SWITCHES];
+        p.values = (0..MAX_VALUES).map(|k| k as f32).collect();
+        p.rear = vec![PartPose { x: 1.0, y: -12.0, z: 0.0, heading: 5.0 }; MAX_REAR];
+        p.walker = Some(Walker { x: 1.0, y: 2.0, z: 3.0, heading: 10.0, speed: 1.4, course: 100.0, seated: false, aboard: None });
+        let data = encode_state(&p, 6, 0);
+        assert!(data.len() <= MAX_STATE_BYTES, "{} bytes", data.len());
+        let (_, _, q) = decode_state(&data, 6).unwrap();
+        assert_eq!(q.values, p.values);
+        assert_eq!(q.lamps.len(), MAX_LAMPS);
+        assert!(q.walker.is_some());
     }
 
     #[test]

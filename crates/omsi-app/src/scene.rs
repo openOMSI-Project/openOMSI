@@ -2010,7 +2010,7 @@ pub fn model_lights_owned(
             // either side of the lamp)
             out.push(omsi_render::Corona {
                 position: p,
-                size: (l.size * 0.5).max(0.025),
+                size: (l.size * 0.5).max(0.0),
                 color: [l.color[0] / 255.0, l.color[1] / 255.0, l.color[2] / 255.0],
                 brightness: b,
                 direction: glam::Vec3::ZERO,
@@ -2049,7 +2049,7 @@ pub fn model_lights_owned(
             // with the glow's strength (corona.wgsl, flag bit 8)
             let glow = omsi_render::Corona {
                 position: p,
-                size: (l.size * 0.5).max(0.025),
+                size: (l.size * 0.5).max(0.0),
                 color,
                 brightness: b,
                 direction: dir,
@@ -11152,9 +11152,9 @@ impl World {
                         && !dirt_overlay
                         && !rain_layer;
                     // (while it snows the film is the snow-crystal texture, drawn as it is)
-                    extra.rain_film = rain_layer && !snowing() && omsi_cfg::env::var_os("OMSI_TEXTURE_RAIN").is_none()
-                        // (OMSI 2's own rain runs down the pane as its texture)
-                        && !crate::CLASSIC.load(std::sync::atomic::Ordering::Relaxed);
+                    // (all three graphics: OMSI 2's own rain, its texture sliding down the
+                    // pane, looked like wet paper next to drops that bend the street)
+                    extra.rain_film = rain_layer && !snowing() && omsi_cfg::env::var_os("OMSI_TEXTURE_RAIN").is_none();
                     // Some mod buses put [matl_noZcheck] on the complete body mesh.
                     // That flag is for decals; on a body it disables depth writing and
                     // lets the cabin bleed through the outside shell. Keep it on genuine
@@ -11880,6 +11880,15 @@ mod tests {
             "points down: {:?}",
             coronas[0].direction
         );
+    }
+
+    #[test]
+    fn small_instrument_lights_keep_their_small_size() {
+        let text = "[mesh]\ndash.o3d\n[light_enh]\n0\n0\n0\n255\n0\n0\n0.01\nspeedo_warn\n0\n";
+        let model = Model::parse(&omsi_cfg::CfgFile::from_str("bus.cfg", text));
+        let coronas = model_lights_faded(&model, &|_| Mat4::IDENTITY, DVec3::ZERO, &|_| 1.0, &[]);
+        assert_eq!(coronas.len(), 1);
+        assert!((coronas[0].size - 0.005).abs() < 1e-6);
     }
 
     #[test]

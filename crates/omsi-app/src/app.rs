@@ -64,6 +64,7 @@ pub(crate) struct App {
     pub(crate) total_frames: u32,
     /// Mirror pictures due (see `MIRROR_RATE`), and which mirror is next.
     pub(crate) mirror_budget: f32,
+    pub(crate) mirrors_seen: usize,
     pub(crate) mirror_turn: usize,
     /// Cursor and view the hover was last worked out for (see the redraw).
     pub(crate) hover_key: Option<(i32, i32, i32, i32)>,
@@ -104,6 +105,7 @@ pub(crate) struct App {
     /// The first line of the game menu (or chooser) shown, when a finger has scrolled it
     /// (in lines, fractional while dragged); `None`: the chosen line is kept in view.
     pub(crate) menu_top: Option<f32>,
+    pub(crate) menu_scroll_drag: bool,
     /// The game menu shows all its lines ("More..."), not only the everyday ones.
     pub(crate) menu_more: bool,
     /// Keys pressed (true) and let go since the Lua plugins' last frame.
@@ -520,6 +522,7 @@ impl App {
                         bus: Some(o.bus.clone()),
                         spawn: Some(o.spawn.clone()),
                         hof: o.hof.clone(),
+                        paint: o.paint.clone(),
                         situation_vars: o.vars.clone(),
                         situation_strvars: o.strvars.clone(),
                         situation_others: Vec::new(),

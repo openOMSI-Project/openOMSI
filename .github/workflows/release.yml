@@ -146,15 +146,21 @@ jobs:
         run: |
           for i in 1 2 3; do
             sudo apt-get update && sudo apt-get install -y build-essential pkg-config libasound2-dev \
-              libudev-dev libgtk-3-dev libxkbcommon-dev libwayland-dev libssl-dev zip && break
+              libudev-dev libgtk-3-dev libxkbcommon-dev libwayland-dev libssl-dev zip clang lld && break
             sleep 20
           done
       - name: Build the game
+        env:
+          RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=lld"
         run: scripts/build-linux.sh
       - name: Build the server
+        env:
+          RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=lld"
         run: scripts/build-server.sh
       - name: Validate shaders
         if: matrix.arch == 'x64'
+        env:
+          RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=lld"
         run: cargo test --locked --release -p omsi-render shaders_validate_and_match_the_uniforms
       - name: Package
         run: |

@@ -21,6 +21,7 @@ struct Camera {
     inside_c: vec4<f32>,     // box centre offset xyz, w = 1 when there is a box
     flags: vec4<f32>,        // x detail texturing, y enhanced graphics, z never set (see fs_main's end), w close cascade half range
     light_view_proj_close: mat4x4<f32>,
+    wind: vec4<f32>,         // the player's vehicle's velocity (m/s, world): the airstream on its glass
 };
 
 // 1 when the point lies inside the player's vehicle (its [boundingbox], shrunk a little so
@@ -231,6 +232,17 @@ fn ao_at(frag: vec2<f32>, world: vec3<f32>) -> f32 {
 // they lie: x, y the south-west corner (render-origin relative), z the side, w 1 when set
 @group(0) @binding(18) var t_lmap: texture_2d<f32>;
 @group(0) @binding(19) var<uniform> lmap: vec4<f32>;
+
+// The sRGB curve both ways (the textures are sampled through it, the target writes through
+// it): the classic picture multiplies on the encoded values, as Omsi.exe does.
+fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
+    let x = max(c, vec3<f32>(0.0));
+    return select(1.055 * pow(x, vec3<f32>(1.0 / 2.4)) - 0.055, x * 12.92, x <= vec3<f32>(0.0031308));
+}
+fn srgb_decode(c: vec3<f32>) -> vec3<f32> {
+    let x = max(c, vec3<f32>(0.0));
+    return select(pow((x + 0.055) / 1.055, vec3<f32>(2.4)), x / 12.92, x <= vec3<f32>(0.04045));
+}
 
 // The tile light map's light at a world point (black outside the loaded square).
 fn light_map_at(p: vec3<f32>) -> vec3<f32> {
@@ -1063,32 +1075,52 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, wet: f32, t: f32, o
     var best = 0.0;
     var slope = vec2<f32>(0.0);
 
+    // --- the airstream: the glass moves through the air with the bus, and a drop's drag
+    // grows with the speed squared - at about 40 km/h it matches the drop's weight. Along
+    // the glass the air drives drops back; where it meets the glass head on (the
+    // windscreen) it parts, up and out. The runners go where weight and air take them
+    // together (in sixteenths of a turn, so that they do not shiver with every change of
+    // speed); the drops that sit hold on.
+    var flow = vec2<f32>(0.0, 1.0);
+    var blow = 0.0;
+    if (camera.wind.w > 0.5 && near_player_vehicle(world) > 0.5) {
+        let air = -camera.wind.xyz;
+        var aw = vec2<f32>(dot(air, side_w), dot(air, down_w));
+        aw.y = aw.y - abs(dot(air, out)) * 0.6;
+        let v2 = dot(aw, aw);
+        blow = clamp(v2 / 130.0, 0.0, 3.0);
+        flow = flow + aw / max(sqrt(v2), 1e-4) * blow;
+    }
+    let fa = round(atan2(flow.x, flow.y) / 0.3926991) * 0.3926991;
+    // pane coordinates turned so the runners run down +y
+    let qr = rain_turn(q, fa);
+
     // --- the runners: one lane every 4.5 cm, a few of them with a drop sliding down
     let lane_w = 0.045;
-    let lane = floor(q.x / lane_w);
+    let lane = floor(qr.x / lane_w);
     let lh = rain_hash(vec2<f32>(lane, 7.0));
     let lk = rain_hash(vec2<f32>(lane, 19.0));
     var track = 0.0;
-    if (lh.x < wet * 0.5) {
-        let speed = 0.025 + 0.08 * lh.y;
+    if (lh.x < wet * 0.5 * (1.0 + 0.8 * blow)) {
+        let speed = (0.025 + 0.08 * lh.y) * (1.0 + 2.5 * blow);
         // stick and slip: the drop pauses, then hurries on
         let tt = t * speed + lh.x * 13.0;
         let head_y = (floor(tt) + smoothstep(0.35, 1.0, fract(tt))) * 0.3;
         let span = 1.6;
         // how far above the head (along the glass, upwards), wrapped over the pane
-        var above = fract((head_y - q.y) / span) * span;
+        var above = fract((head_y - qr.y) / span) * span;
         above = select(above, above - span, above > span - 0.03);
         // its path wanders a little across the glass, the same way every time
         let path_x = (lane + 0.5 + (lk.x - 0.5) * 0.5) * lane_w
-            + sin(q.y * 23.0 + lk.y * 6.3) * 0.005 + sin(q.y * 67.0 + lane) * 0.0015;
-        let dx = q.x - path_x;
+            + sin(qr.y * 23.0 + lk.y * 6.3) * 0.005 + sin(qr.y * 67.0 + lane) * 0.0015;
+        let dx = qr.x - path_x;
         // the head: a teardrop 4-8 mm across, drawn out upwards
-        let rh = 0.002 + 0.0018 * lk.y;
-        let dd = vec2<f32>(dx, select(-above, -above / 1.9, above > 0.0));
+        let rh = 0.0011 + 0.0007 * lk.y;
+        let dd = vec2<f32>(dx, -above);
         let head = rain_dome(dd, rh, px);
         if (head.z > best) {
             best = head.z;
-            slope = head.xy;
+            slope = rain_turn(head.xy, -fa);
         }
         // the track above it: the mist and the sitting drops wiped away...
         let trail_len = 0.08 + 0.3 * lh.y;
@@ -1102,7 +1134,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, wet: f32, t: f32, o
             let bead = rain_dome(vec2<f32>(dx, -above) - bcen, 0.0005 + 0.0008 * bh.y, px);
             if (bead.z > best) {
                 best = bead.z;
-                slope = bead.xy;
+                slope = rain_turn(bead.xy, -fa);
             }
         }
     }
@@ -1110,10 +1142,11 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, wet: f32, t: f32, o
     // where the glass is wetter and where drier, in patches a hand across
     let wetter = 0.45 + 1.1 * rain_patches(q * 9.0 + 3.1);
 
-    // --- the drops that sit: three sizes, one drop a cell at most, anywhere in it
-    for (var layer = 0; layer < 3; layer = layer + 1) {
+    // --- the drops that sit: four sizes, one drop a cell at most, anywhere in it (the
+    // fourth the few big ones, a centimetre and more, grown from drops that ran together)
+    for (var layer = 0; layer < 4; layer = layer + 1) {
         let fl = f32(layer);
-        let cellsz = select(select(0.0045, 0.0075, layer == 1), 0.012, layer == 0);
+        let cellsz = select(select(select(0.0045, 0.0075, layer == 1), 0.012, layer == 0), 0.015, layer == 3);
         let turn = 0.61 + fl * 1.37;
         let g2 = rain_turn(q, turn) / cellsz + vec2<f32>(fl * 17.3, fl * 5.1);
         let c = floor(g2);
@@ -1123,12 +1156,12 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, wet: f32, t: f32, o
         let ph = fract(t / life + h2.x);
         // landed, grown, drying: a drop comes and goes; more of them the wetter the pane,
         // and the big ones only on a wet pane
-        let dens = wet * wetter * select(0.45, 0.42 * smoothstep(0.15, 0.6, wet), layer == 0);
+        let dens = wet * wetter * select(select(select(0.45, 0.36, layer == 2), 0.42 * smoothstep(0.15, 0.6, wet), layer == 0), 0.1 * smoothstep(0.3, 0.8, wet), layer == 3);
         let present = step(h.x, dens) * smoothstep(0.0, 0.04, ph) * (1.0 - smoothstep(0.85, 1.0, ph)) * (1.0 - track);
         if (present <= 0.0) {
             continue;
         }
-        let r = (0.12 + 0.24 * h.y * h.y) * mix(0.75, 1.0, smoothstep(0.0, 0.5, ph)) * mix(0.8, 1.1, wet);
+        let r = select(0.1 + 0.2 * h.y * h.y, 0.14 + 0.16 * h.y, layer == 3) * mix(0.75, 1.0, smoothstep(0.0, 0.5, ph)) * mix(0.8, 1.1, wet);
         // (anywhere in the cell it still fits in)
         let room = min(r * 1.12, 0.48);
         let centre = c + vec2<f32>(room) + rain_hash(c + 9.1) * (1.0 - 2.0 * room);
@@ -1136,6 +1169,29 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, wet: f32, t: f32, o
         // fuller below than above
         var d = rain_turn((g2 - centre) * cellsz, -turn);
         d.y = d.y * select(1.12, 0.9, d.y > 0.0);
+        // no drop is a circle: its rim wanders where the glass held it as it spread, the
+        // big ones most, and a heavy one hangs drawn out downwards
+        // (a pixel beyond any rim it could have: nothing more to work out)
+        let dl = length(d);
+        if (dl > r * cellsz * 1.5) {
+            continue;
+        }
+        let h3 = rain_hash(c + 23.9);
+        // the rim's wander as waves of 2, 3 and 4 round the drop, each turned its own way
+        // (sin(k a + phase) from the direction's cosine and sine, without an atan2)
+        let u = d / max(dl, 1e-6);
+        let c2 = u.x * u.x - u.y * u.y;
+        let s2 = 2.0 * u.x * u.y;
+        let c3 = u.x * (4.0 * u.x * u.x - 3.0);
+        let s3 = u.y * (3.0 - 4.0 * u.y * u.y);
+        let c4 = c2 * c2 - s2 * s2;
+        let s4 = 2.0 * s2 * c2;
+        let p2 = h3 * 2.0 - 1.0;
+        let p3 = h2.yx * 2.0 - 1.0;
+        let wave = (s2 * p2.x + c2 * p2.y) * h3.y + 0.55 * (s3 * p3.x + c3 * p3.y) + 0.3 * (s4 * p2.y - c4 * p3.x);
+        let wob = 1.0 + (0.03 + 0.06 * h.y) * wave;
+        d = d / max(wob, 0.4);
+        d.y = d.y * mix(1.0, 0.88, h.y * h.y * h3.x);
         let drop = rain_dome(d, r * cellsz, px);
         let cover = drop.z * present;
         if (cover > best) {
@@ -1184,6 +1240,28 @@ fn rain_through(g: RainGlass, v: vec3<f32>) -> vec3<f32> {
     return refract(normalize(t1), -g.n, 1.333);
 }
 
+// What the eye sees along `through` (the way out of a drop, `rain_through`) from the drop
+// at `world`: the street behind the glass as the last frame drew it, looked up where that
+// way meets it a few metres on - through a drop's rim the way bends far round, so the
+// drop holds the whole street small and upside down, the sky at its bottom, as a real
+// one does. The rain film's reflection slot holds that picture (see `Renderer::glass_slot`);
+// without it (a mirror's view, the first frame of the rain) or off the picture's edge,
+// `fallback` (the sky's colours). `scale` takes the picture into the caller's units.
+fn rain_behind(world: vec3<f32>, through: vec3<f32>, fallback: vec3<f32>, scale: f32) -> vec3<f32> {
+    if (camera.flags.z > -0.5 || dot(through, through) < 1e-4) {
+        return fallback;
+    }
+    let c = camera.view_proj * vec4<f32>(world + normalize(through) * 6.0, 1.0);
+    if (c.w <= 0.05) {
+        return fallback;
+    }
+    let ndc = c.xy / c.w;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    let inside = smoothstep(0.0, 0.06, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
+    let seen = finite_or(textureSampleLevel(t_env, s_diffuse, clamp(uv, vec2<f32>(0.001), vec2<f32>(0.999)), 0.0).rgb * scale, fallback);
+    return mix(fallback, seen, inside);
+}
+
 // A drop lit: `refl` what the dome mirrors, `thru` what is seen through it (both
 // radiance), `mist_col` the light the mist scatters, `sun` the sun's strength for the
 // sparkles, `d_thru` the way through (from `rain_through`). Colour and cover.
@@ -1230,7 +1308,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let in_cab = inside_vehicle(camera.cam_pos.xyz) * near_player_vehicle(in.world) > 0.5;
         let g = rain_glass(in.world, in.uv - in.params.zw, in.normal, in.params.x, camera.post.y, in_cab);
         let through = rain_through(g, v);
-        let seen = select(rain_env_vanilla(normalize(through)), vec3<f32>(0.0), dot(through, through) < 1e-4);
+        let seen = select(rain_behind(in.world, through, rain_env_vanilla(normalize(through)), 1.0), vec3<f32>(0.0), dot(through, through) < 1e-4);
         let d = rain_light(g, v, through, rain_env_vanilla(reflect(-v, g.n)), seen, rain_env_vanilla(vec3<f32>(0.0, 0.0, 0.5)) * 0.9, camera.sun_color.rgb * camera.sun_dir.w);
         // (fading out with the distance: see enhanced.wgsl)
         let near = 1.0 - smoothstep(5.0, 15.0, distance(in.world, camera.cam_pos.xyz));
@@ -1324,16 +1402,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // The vanilla picture: Omsi.exe's texture stages multiply the gamma-encoded texture by
     // the vertex light (clamped at 1); here the texture is sampled linear and the target
     // encodes again, so multiplied here a light L showed as L^(1/2.2) - a night at 0.06
-    // looked like 0.28, a late dusk (#300). The same product in gamma: (t^(1/2.2) v)^2.2
-    // = t v^2.2 - with the light map laid on in gamma as well.
+    // looked like 0.28, a late dusk (#300). So the product is made on the encoded texture
+    // and decoded again, with the light map laid on encoded as well. (Through the sRGB curve
+    // itself: taken as a power of 2.2, t v^2.2, the curve's linear foot below 0.0031 put a
+    // night wall at a quarter of OMSI 2's - a texture of 0.66 under a light of 0.05 came out
+    // at 2 of 255 instead of 8.)
     let classic = camera.sky_color.w > 0.5;
     if (classic && material.params.y < 0.5) {
         var v = clamp(material.emissive.rgb + material.color.rgb * (light + interior_lamps(in.world, n, in.params2.z)), vec3<f32>(0.0), vec3<f32>(1.0));
         if (light_mapped) {
-            let lm = pow(textureSample(t_light, s_diffuse, buv).rgb, vec3<f32>(1.0 / 2.2)) * clamp(in.params2.x, 0.0, 1.0);
+            let lm = srgb_encode(textureSample(t_light, s_diffuse, buv).rgb) * clamp(in.params2.x, 0.0, 1.0);
             v = v + lm * (vec3<f32>(1.0) - v);
         }
-        lit = albedo * pow(v, vec3<f32>(2.2));
+        lit = srgb_decode(srgb_encode(albedo) * v);
     } else if (light_mapped) {
         // [matl_lightmap], as Omsi.exe's texture stages have it (0x7fe4d3..0x7fe604): the
         // light map is laid onto the vertex light with D3DTOP_ADDSMOOTH (light + map x (1 -

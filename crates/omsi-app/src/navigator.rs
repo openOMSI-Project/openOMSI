@@ -35,6 +35,7 @@ use crate::traffic::Traffic;
 // --- colours (sRGB) -------------------------------------------------------------------
 
 // neutral dark, half transparent, calm
+const NAV_REDRAW_S: f32 = 1.0 / 30.0;
 const PANEL: Color = Color::rgba(10, 10, 10, 0.70);
 const BAR: Color = Color::rgba(0, 0, 0, 0.35);
 const ROAD_CASING: Color = Color::rgba(30, 30, 30, 0.9);
@@ -183,6 +184,7 @@ struct Roads {
 }
 
 pub struct Navigator {
+    drawn_at: f32,
     pub enabled: bool,
     /// The next stops with their times under the map (Shift+N cycles map, map and
     /// schedule, off).
@@ -294,6 +296,7 @@ fn ease(dt: f32, tau: f32) -> f64 {
 impl Navigator {
     pub fn new(enabled: bool, opacity: f32, corner: &str) -> Navigator {
         Navigator {
+            drawn_at: f32::MIN,
             enabled,
             schedule: false,
             speed_avg: 8.0,
@@ -823,9 +826,10 @@ impl Navigator {
         let y0 = if top { margin } else { sh - margin - ph };
 
         if self.gpu.is_none() {
-            self.gpu = Some(Gpu::new(&renderer.device, renderer.format(), 4, self.atlas.size));
+            self.gpu = Some(Gpu::new(&renderer.device, renderer.format(), 1, self.atlas.size));
         }
-        if self.target.map(|t| (t.1, t.2) != (w, h)).unwrap_or(true) {
+        let resized = self.target.map(|t| (t.1, t.2) != (w, h)).unwrap_or(true);
+        if resized {
             if let Some((t, _, _)) = self.target.take() {
                 renderer.free_texture(scene, t);
                 scene.premultiplied.remove(&t);
@@ -836,7 +840,10 @@ impl Navigator {
         }
         let (tex, _, _) = self.target.unwrap();
         let Some(view) = renderer.texture_view(scene, tex) else { return };
-        self.draw(renderer, &view, (w, h), map_h, f);
+        if resized || self.city.open || self.time - self.drawn_at >= NAV_REDRAW_S {
+            self.drawn_at = self.time;
+            self.draw(renderer, &view, (w, h), map_h, f);
+        }
         // (the small navigator steps aside while the city map is open)
         if !self.city.open {
             scene.overlays.push((tex, [x0, y0, x0 + pw, y0 + ph]));
@@ -1896,7 +1903,7 @@ impl Navigator {
         self.city.rect = [x0, y0, x0 + w, y0 + h];
         let (tw, th) = (w as u32, h as u32);
         if self.gpu.is_none() {
-            self.gpu = Some(Gpu::new(&renderer.device, renderer.format(), 4, self.atlas.size));
+            self.gpu = Some(Gpu::new(&renderer.device, renderer.format(), 1, self.atlas.size));
         }
         if self.city.target.map(|t| (t.1, t.2) != (tw, th)).unwrap_or(true) {
             if let Some((t, _, _)) = self.city.target.take() {

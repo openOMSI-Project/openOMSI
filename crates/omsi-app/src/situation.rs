@@ -70,6 +70,11 @@ pub(crate) fn apply_situation(args: &mut Args) -> Result<()> {
         sit.time,
         sit.vehicles.len()
     );
+    apply_situation_parsed(&sit, args);
+    Ok(())
+}
+
+pub(crate) fn apply_situation_parsed(sit: &omsi_content::situation::Situation, args: &mut Args) {
     args.map = sit.map.replace('\\', "/");
     // A map from an archive was saved as its whole path (`\Users\…\Archives\x.zip\Maps\
     // Novi Sad\global.cfg`), which then went after the root and the game closed at once:
@@ -150,10 +155,17 @@ pub(crate) fn apply_situation(args: &mut Args) -> Result<()> {
         .filter(|(i, v)| Some(*i) != mine && v.coupled_with.is_none())
         .map(|(_, v)| {
             let (x, y) = omsi_map::tile_local_to_world(v.tile.0, v.tile.1, v.pos[0], v.pos[2]);
+            let paint = v
+                .vars
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case("Colorscheme"))
+                .filter(|(_, c)| *c >= 0.0)
+                .map(|(_, c)| format!("{}", *c as i64));
             crate::cli::SituationOther {
                 bus: content_relative(&v.file.replace('\\', "/"), "vehicles"),
                 spawn: format!("{x},{y},{},{}", situation_heading(&v.orientation), v.pos[1]),
                 hof: Some(v.paint.clone()).filter(|p| !p.trim().is_empty()),
+                paint,
                 vars: v.vars.iter().map(|(n, x)| (n.clone(), *x as f32)).collect(),
                 strvars: v.string_vars.clone(),
             }
@@ -162,7 +174,6 @@ pub(crate) fn apply_situation(args: &mut Args) -> Result<()> {
     if !args.situation_others.is_empty() {
         log::info!("situation: {} more vehicle(s) placed", args.situation_others.len());
     }
-    Ok(())
 }
 
 /// Build a `.osn` situation from the running world: map, clock, weather and every vehicle
@@ -338,5 +349,38 @@ fn content_relative(path: &str, folder: &str) -> String {
     match p.to_ascii_lowercase().rfind(&format!("/{folder}/")) {
         Some(i) => p[i + 1..].to_string(),
         None => p,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn situation_others_preserve_their_colorscheme() {
+        let sit = omsi_content::situation::Situation {
+            map: "maps/Berlin/global.cfg".into(),
+            vehicles: vec![
+                omsi_content::situation::SituationVehicle {
+                    file: "Vehicles/MAN_SD200/MAN_SD77.bus".into(),
+                    is_my_vehicle: true,
+                    vars: vec![("Colorscheme".into(), 1.0)],
+                    ..Default::default()
+                },
+                omsi_content::situation::SituationVehicle {
+                    file: "Vehicles/MAN_NL_NG/MAN_EN92.bus".into(),
+                    is_my_vehicle: false,
+                    vars: vec![("Colorscheme".into(), 4.0)],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let mut args = crate::cli::Args::parse_from(["openomsi"]);
+        apply_situation_parsed(&sit, &mut args);
+        assert_eq!(args.paint.as_deref(), Some("1"));
+        assert_eq!(args.situation_others.len(), 1);
+        assert_eq!(args.situation_others[0].paint.as_deref(), Some("4"));
     }
 }

@@ -266,6 +266,8 @@ pub struct Ui {
     pub chat: ChatWidget,
     /// Where the game menu's lines were drawn this frame (physical pixels), for the mouse.
     pub menu_rects: Vec<[f32; 4]>,
+    pub menu_scroll_thumb: Option<[f32; 4]>,
+    pub menu_scroll_track: Option<[f32; 4]>,
     /// Overlay entries belonging to the game menu.
     pub menu_overlay_range: std::ops::Range<usize>,
     /// The pointer texture, positioned separately for each headset eye.
@@ -284,7 +286,7 @@ pub struct Ui {
 
 impl Ui {
     pub fn new() -> Option<Ui> {
-        Some(Ui { text: TextCache::new()?, chat: ChatWidget::default(), menu_rects: Vec::new(), menu_overlay_range: 0..0, vr_cursor_overlay: None, vr_tooltip_overlay: None, menu_start: 0, menu_rows: 0, menu_row_h: 1.0, images: Default::default() })
+        Some(Ui { text: TextCache::new()?, chat: ChatWidget::default(), menu_rects: Vec::new(), menu_scroll_thumb: None, menu_scroll_track: None, menu_overlay_range: 0..0, vr_cursor_overlay: None, vr_tooltip_overlay: None, menu_start: 0, menu_rows: 0, menu_row_h: 1.0, images: Default::default() })
     }
 
     /// Draw the frame's interface: its overlays go after the HUD's in `scene.overlays`.
@@ -492,6 +494,8 @@ impl Ui {
         }
         // --- the game menu, in the middle over a dimmed picture
         self.menu_rects.clear();
+        self.menu_scroll_thumb = None;
+        self.menu_scroll_track = None;
         let menu_overlay_start = scene.overlays.len();
         if let Some((sel, items)) = f.menu {
             let dim = self.text.plate(r, scene, 6);
@@ -525,13 +529,16 @@ impl Ui {
             // the scroll bar: where the lines shown lie in the whole menu
             if items.len() > rows {
                 let track = [x + w - 7.0 * s, y + title_h, x + w - 3.0 * s, y + title_h + row_h * rows as f32 - 6.0 * s];
+                self.menu_scroll_track = Some(track);
                 let tp = self.text.plate(r, scene, 5);
                 scene.overlays.push((tp, track));
                 let th = track[3] - track[1];
                 let t0 = track[1] + th * start as f32 / items.len() as f32;
                 let t1 = track[1] + th * (start + rows) as f32 / items.len() as f32;
                 let thumb = self.text.plate(r, scene, 4);
-                scene.overlays.push((thumb, [track[0], t0, track[2], t1]));
+                let thumb_rect = [track[0], t0, track[2], t1];
+                scene.overlays.push((thumb, thumb_rect));
+                self.menu_scroll_thumb = Some(thumb_rect);
                 let more = format!("{} of {}", sel + 1, items.len());
                 let l = self.text.label(r, scene, &more, (12.0 * s) as u32, [150, 150, 150, 0]);
                 scene.overlays.push((l.tex, [x + w - 16.0 * s - l.w as f32, y + 22.0 * s, x + w - 16.0 * s, y + 22.0 * s + l.h as f32]));

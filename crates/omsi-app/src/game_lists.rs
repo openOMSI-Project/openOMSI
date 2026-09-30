@@ -124,6 +124,7 @@ pub(crate) fn items(app: &App, kind: &ListKind) -> Vec<(String, String)> {
             out.push((format!("{}: {}", tr("Steering with the mouse"), tr(on_off(app.mouse_drive))), "mouse".into()));
             out.push((format!("{}: {}", tr("Frame rate"), tr(on_off(s.show_fps))), "fps".into()));
             out.push((format!("{}: {}", tr("Camera collisions"), tr(on_off(s.camera_collision))), "camcoll".into()));
+            out.push((format!("{}: {}", tr("View turns with steering"), tr(on_off(s.steer_look))), "steer_look".into()));
             out.push((format!("{}: {}", tr("Force feedback and vibration"), tr(on_off(s.ff_enabled))), "ff".into()));
             out.push((format!("{}: {}", tr("Keyboard brake stays on until the throttle"), tr(on_off(s.brake_hold))), "brake_hold".into()));
             out.push((format!("{}: {}", tr("Automatic clutch"), tr(on_off(s.auto_clutch))), "auto_clutch".into()));
@@ -340,6 +341,10 @@ pub(crate) fn run(app: &mut App, kind: &ListKind, action: &str) -> Option<ListKi
                     s.camera_collision = !s.camera_collision;
                     Some(("camera_collision", (s.camera_collision as u8).to_string()))
                 }
+                "steer_look" => {
+                    s.steer_look = !s.steer_look;
+                    Some(("steer_look", (s.steer_look as u8).to_string()))
+                }
                 "pedal_t" => {
                     s.pedal_throttle = next_step(&PEDAL, s.pedal_throttle);
                     Some(("pedal_throttle", s.pedal_throttle.to_string()))
@@ -506,9 +511,12 @@ fn natural(a: &str, b: &str) -> std::cmp::Ordering {
 fn remember_setting(key: &str, value: &str) {
     let Ok(mut v) = omsi_launcher_lib::get_settings() else { return };
     let parsed: serde_json::Value = value.parse::<f64>().map(serde_json::Value::from).unwrap_or_else(|_| serde_json::Value::from(value));
-    let parsed = match (key, &parsed) {
-        ("navigator" | "shadows" | "head_movement" | "show_fps", serde_json::Value::Number(n)) => serde_json::Value::Bool(n.as_f64().unwrap_or(0.0) > 0.5),
-        ("time_speed", _) => serde_json::Value::from(value),
+    // a switch goes in as true/false, as the launcher's own values are: written as 1 it
+    // was read as not set and saved back as its default (the pause menu's options were
+    // lost with the next game)
+    let parsed = match (&v[key], &parsed) {
+        (serde_json::Value::Bool(_), serde_json::Value::Number(n)) => serde_json::Value::Bool(n.as_f64().unwrap_or(0.0) > 0.5),
+        _ if key == "time_speed" => serde_json::Value::from(value),
         _ => parsed,
     };
     v[key] = parsed;

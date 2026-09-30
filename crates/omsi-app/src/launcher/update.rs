@@ -171,12 +171,18 @@ impl Launcher {
         self.ui.p().rect(full, omsi_ui::Color::rgba(0, 0, 0, 0.62));
         let w = (size.x - 48.0).min(640.0);
         let lost = what.contains("graphics device was lost");
+        let silent = what.contains("closed without a word");
+        let compiling = silent && (tail.contains("renderer: compiling") || tail.contains("cloud noise made") || tail.contains("opening graphics device") || tail.contains("compiling renderer pipelines"));
         let hint = if lost {
             if cfg!(windows) {
                 "The graphics driver stopped the game. Updating the graphics driver usually helps; you can also let the game draw with DirectX 12 instead of Vulkan (the button below, or Settings → Graphics API)."
             } else {
                 "The graphics driver stopped the game. Updating the graphics driver usually helps; Settings → Graphics API can switch to OpenGL."
             }
+        } else if compiling {
+            "The Vulkan graphics driver stopped while compiling shaders. Starting the game again will switch to OpenGL (or change it in Settings → Graphics API)."
+        } else if silent {
+            "The system closed the game while it was running, typically because the device ran out of memory (RAM). Lowering texture resolution or reducing AI traffic in Settings helps prevent memory exhaustion."
         } else {
             "Copy the report (the end of the game's log), or open a GitHub issue with it: it tells what went wrong on this computer."
         };
@@ -186,8 +192,9 @@ impl Launcher {
         let r = Rect::new((size.x - w) * 0.5, (size.y - h) * 0.5, w, h);
         self.ui.panel(r);
         let inner = Rect::new(r.x + 24.0, r.y + 20.0, r.w - 48.0, r.h - 40.0);
-        self.ui.icon("error", Vec2::new(inner.x + 14.0, inner.y + 14.0), 26.0, DANGER);
-        self.ui.text_in("The game closed on an error", Rect::new(inner.x + 38.0, inner.y, inner.w - 38.0, 28.0), 18.0, Weight::Bold, TEXT, Align::Left);
+        self.ui.icon(if silent { "info" } else { "error" }, Vec2::new(inner.x + 14.0, inner.y + 14.0), 26.0, if silent { WARN } else { DANGER });
+        let title_text = if silent { "The game was closed by the system" } else { "The game closed on an error" };
+        self.ui.text_in(title_text, Rect::new(inner.x + 38.0, inner.y, inner.w - 38.0, 28.0), 18.0, Weight::Bold, TEXT, Align::Left);
         self.ui.push_clip(Rect::new(inner.x, inner.y + 40.0, inner.w, th + 4.0), 0.0);
         self.ui.paragraph(&text, Vec2::new(inner.x, inner.y + 40.0), inner.w, 13.0, Weight::Regular, TEXT_DIM);
         self.ui.pop_clip();
@@ -206,7 +213,12 @@ impl Launcher {
             self.state.crash = None;
             self.state.set_status("The game draws with DirectX 12 from the next start (Settings → Graphics API to change it back).", false);
         }
-        if self.ui.button("crash-issue", Rect::new(inner.x, by, 190.0, 38.0), "Report on GitHub", Some("open_in_new"), ButtonKind::Ghost) {
+        if silent {
+            if self.ui.button("crash-settings", Rect::new(inner.x, by, 150.0, 38.0), "Settings", Some("tune"), ButtonKind::Ghost) {
+                self.state.crash = None;
+                self.go(super::Page::Settings);
+            }
+        } else if self.ui.button("crash-issue", Rect::new(inner.x, by, 190.0, 38.0), "Report on GitHub", Some("open_in_new"), ButtonKind::Ghost) {
             let title = format!("Crash: {}", what.chars().take(80).collect::<String>());
             let enc = |t: &str| t.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect::<String>();
             // the end of the log goes with it, as much as a link holds (a report of the

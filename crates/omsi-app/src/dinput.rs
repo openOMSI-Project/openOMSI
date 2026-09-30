@@ -158,20 +158,85 @@ fn notification_window() -> Option<HWND> {
     }
 }
 
-/// The data format: `RawState`, every object optional (as the SDK's c_dfDIJoystick2 has it
-/// for the parts used here).
-fn data_format() -> (Vec<DIOBJECTDATAFORMAT>, DIDATAFORMAT) {
-    static AXES: [GUID; 8] = [GUID_XAxis, GUID_YAxis, GUID_ZAxis, GUID_RxAxis, GUID_RyAxis, GUID_RzAxis, GUID_Slider, GUID_Slider];
+#[derive(Clone, Copy)]
+struct InputObject {
+    guid: GUID,
+    ty: u32,
+    flags: u32,
+}
+
+unsafe extern "system" fn collect_object(inst: *mut DIDEVICEOBJECTINSTANCEW, out: *mut core::ffi::c_void) -> windows::core::BOOL {
+    let objects = &mut *(out as *mut Vec<InputObject>);
+    let inst = &*inst;
+    objects.push(InputObject { guid: inst.guidType, ty: inst.dwType, flags: inst.dwFlags });
+    windows::core::BOOL(DIENUM_CONTINUE as i32)
+}
+
+fn axis_slot(guid: GUID, has_axis: &[bool; 8]) -> Option<usize> {
+    if guid == GUID_XAxis {
+        Some(0)
+    } else if guid == GUID_YAxis {
+        Some(1)
+    } else if guid == GUID_ZAxis {
+        Some(2)
+    } else if guid == GUID_RxAxis {
+        Some(3)
+    } else if guid == GUID_RyAxis {
+        Some(4)
+    } else if guid == GUID_RzAxis {
+        Some(5)
+    } else if guid == GUID_Slider {
+        (6..8).find(|k| !has_axis[*k])
+    } else {
+        None
+    }
+}
+
+/// Build the DirectInput data format from the controls the device actually exposes.
+/// Some button boxes have no axes or POVs and reject a generic joystick format even when
+/// its missing entries are marked optional.
+fn format_objects(objects: &[InputObject]) -> (Vec<DIOBJECTDATAFORMAT>, [bool; 8], Option<u32>) {
     let mut objs = Vec::new();
-    for (k, g) in AXES.iter().enumerate() {
-        objs.push(DIOBJECTDATAFORMAT { pguid: g, dwOfs: (k * 4) as u32, dwType: DIDFT_AXIS | DIDFT_OPTIONAL | DIDFT_ANYINSTANCE, dwFlags: DIDOI_ASPECTPOSITION });
+    let mut has_axis = [false; 8];
+    let mut ff_axis = None;
+    let mut pov = 0;
+    let mut button = 0;
+    for object in objects {
+        let (offset, flags) = if object.ty & DIDFT_AXIS != 0 {
+            let Some(slot) = axis_slot(object.guid, &has_axis) else { continue };
+            if has_axis[slot] {
+                continue;
+            }
+            has_axis[slot] = true;
+            let offset = (slot * 4) as u32;
+            if object.flags & DIDOI_FFACTUATOR != 0 {
+                ff_axis.get_or_insert(offset);
+            }
+            (offset, DIDOI_ASPECTPOSITION)
+        } else if object.ty & DIDFT_POV != 0 && pov < 4 {
+            let offset = (32 + pov * 4) as u32;
+            pov += 1;
+            (offset, 0)
+        } else if object.ty & DIDFT_BUTTON != 0 && button < 128 {
+            let offset = (48 + button) as u32;
+            button += 1;
+            (offset, 0)
+        } else {
+            continue;
+        };
+        // The exact instance number is already part of dwType, so the GUID is unnecessary
+        // here and we do not keep pointers into the temporary enumeration buffer.
+        objs.push(DIOBJECTDATAFORMAT { pguid: std::ptr::null(), dwOfs: offset, dwType: object.ty, dwFlags: flags });
     }
-    for k in 0..4 {
-        objs.push(DIOBJECTDATAFORMAT { pguid: &GUID_POV, dwOfs: (32 + k * 4) as u32, dwType: DIDFT_POV | DIDFT_OPTIONAL | DIDFT_ANYINSTANCE, dwFlags: 0 });
+    (objs, has_axis, ff_axis)
+}
+
+fn data_format(dev: &IDirectInputDevice8W) -> Option<(Vec<DIOBJECTDATAFORMAT>, DIDATAFORMAT, [bool; 8], Option<u32>)> {
+    let mut objects = Vec::new();
+    unsafe {
+        dev.EnumObjects(Some(collect_object), &mut objects as *mut _ as *mut core::ffi::c_void, DIDFT_ALL).ok()?;
     }
-    for k in 0..128 {
-        objs.push(DIOBJECTDATAFORMAT { pguid: std::ptr::null(), dwOfs: (48 + k) as u32, dwType: DIDFT_BUTTON | DIDFT_OPTIONAL | DIDFT_ANYINSTANCE, dwFlags: 0 });
-    }
+    let (objs, has_axis, ff_axis) = format_objects(&objects);
     let f = DIDATAFORMAT {
         dwSize: std::mem::size_of::<DIDATAFORMAT>() as u32,
         dwObjSize: std::mem::size_of::<DIOBJECTDATAFORMAT>() as u32,
@@ -180,11 +245,8 @@ fn data_format() -> (Vec<DIOBJECTDATAFORMAT>, DIDATAFORMAT) {
         dwNumObjs: objs.len() as u32,
         rgodf: std::ptr::null_mut(),
     };
-    (objs, f)
+    Some((objs, f, has_axis, ff_axis))
 }
-
-/// (dinput.h's DIDFT_OPTIONAL: a device without the object is still taken)
-const DIDFT_OPTIONAL: u32 = 0x8000_0000;
 
 /// `MAKEDIPROP(n)`: DirectInput's own properties are numbers passed where a GUID's address
 /// goes.
@@ -297,9 +359,15 @@ impl DirectInput {
             let mut dev: Option<IDirectInputDevice8W> = None;
             self.di.CreateDevice(guid, &mut dev, None).ok()?;
             let dev = dev?;
-            let (mut objs, mut fmt) = data_format();
+            let Some((mut objs, mut fmt, has_axis, ff_axis)) = data_format(&dev) else {
+                log::warn!("{name}: DirectInput could not list the device's controls");
+                return None;
+            };
             fmt.rgodf = objs.as_mut_ptr();
-            dev.SetDataFormat(&mut fmt).ok()?;
+            if let Err(e) = dev.SetDataFormat(&mut fmt) {
+                log::warn!("{name}: DirectInput rejected the device's data format ({e})");
+                return None;
+            }
             let mut caps = DIDEVCAPS { dwSize: std::mem::size_of::<DIDEVCAPS>() as u32, ..Default::default() };
             let _ = dev.GetCapabilities(&mut caps);
             let ff_capable = caps.dwFlags & DIDC_FORCEFEEDBACK != 0;
@@ -324,16 +392,6 @@ impl DirectInput {
             for (p_id, v) in [(5usize, 0u32), (6, 10_000)] {
                 let mut d = DIPROPDWORD { diph: DIPROPHEADER { dwSize: std::mem::size_of::<DIPROPDWORD>() as u32, dwHeaderSize: std::mem::size_of::<DIPROPHEADER>() as u32, dwObj: 0, dwHow: DIPH_DEVICE }, dwData: v };
                 let _ = dev.SetProperty(prop(p_id), &mut d.diph);
-            }
-            // which slots the device has (the data of an absent one reads as the middle)
-            let mut has_axis = [false; 8];
-            let mut ff_axis = None;
-            for (k, h) in has_axis.iter_mut().enumerate() {
-                let mut info = DIDEVICEOBJECTINSTANCEW { dwSize: std::mem::size_of::<DIDEVICEOBJECTINSTANCEW>() as u32, ..Default::default() };
-                *h = dev.GetObjectInfo(&mut info, (k * 4) as u32, DIPH_BYOFFSET).is_ok();
-                if *h && info.dwFlags & DIDOI_FFACTUATOR != 0 {
-                    ff_axis.get_or_insert((k * 4) as u32);
-                }
             }
             let ff_axis = ff_axis.unwrap_or(0);
             let mut ff = None;

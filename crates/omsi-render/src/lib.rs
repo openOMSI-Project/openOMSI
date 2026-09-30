@@ -49,6 +49,9 @@ struct CameraUniform {
     flags: [f32; 4],
     /// The close shadow cascade (right half of the near map).
     light_view_proj_close: [[f32; 4]; 4],
+    /// The player's vehicle's velocity (m/s, world) and 1: the airstream the rain on its
+    /// glass meets (see `Lighting::glass_wind`).
+    wind: [f32; 4],
 }
 
 /// The period the sky's cloud patterns repeat with (m): 5 x the cloud field (14 km), 8 x
@@ -521,6 +524,9 @@ pub struct Lighting {
     /// sampled at full resolution: the dots stay visible when the panel is small on the
     /// screen, at the cost of the shimmer the mip chain exists to prevent.
     pub led_mips: bool,
+    /// The player's vehicle's velocity (m/s, world): at speed the airstream drives the drops
+    /// on its glass up the windscreen and back along the side windows.
+    pub glass_wind: Vec3,
 }
 
 impl Lighting {
@@ -565,6 +571,7 @@ impl Default for Lighting {
             envir_tint: [Vec3::ONE; 3],
             led_glow: 1.5,
             led_mips: true,
+            glass_wind: Vec3::ZERO,
         }
     }
 }
@@ -604,6 +611,10 @@ pub struct GpuTexture {
     gen: u64,
 }
 
+/// Which picture is behind the glass: the Enhanced path's glow level (true) or the plain
+/// graphics' copy (false), for a window picture of this size.
+type GlassKey = (bool, u32, u32);
+
 static TEXTURE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 fn next_gen() -> u64 {
@@ -611,6 +622,12 @@ fn next_gen() -> u64 {
 }
 
 impl GpuTexture {
+    /// A slot showing `view` (a picture the renderer draws: the one behind the rain on the
+    /// glass), with `texture` a small stand-in the slot's bookkeeping asks about.
+    fn showing(texture: wgpu::Texture, view: wgpu::TextureView, size: (u32, u32)) -> GpuTexture {
+        GpuTexture { texture, view, size, bytes: 0, gen: next_gen() }
+    }
+
     fn new(texture: wgpu::Texture, size: (u32, u32), bytes: u64) -> GpuTexture {
         let view = texture.create_view(&Default::default());
         GpuTexture {
@@ -918,6 +935,10 @@ pub struct Instance {
 pub struct Scene {
     pub meshes: Vec<GpuMesh>,
     pub textures: Vec<GpuTexture>,
+    /// The texture slot the rain films read the picture behind the glass from (last
+    /// frame's, see `Renderer::glass_behind`), and which picture it shows now.
+    glass_slot: Option<TextureId>,
+    glass_key: Option<GlassKey>,
     pub materials: Vec<Material>,
     pub instances: Vec<Instance>,
     /// World position everything is expressed relative to on the GPU (updated per frame).
@@ -1217,6 +1238,11 @@ pub struct Renderer {
     upscale_layout: wgpu::BindGroupLayout,
     upscale_buf: wgpu::Buffer,
     scale_targets: HashMap<(u32, u32), (wgpu::TextureView, wgpu::BindGroup)>,
+    /// The plain graphics' copy of the last picture at half its size, for the rain on the
+    /// glass (the Enhanced path has its glow's first level for that).
+    glass_prev: Option<(wgpu::TextureView, (u32, u32))>,
+    /// The picture behind the glass drawn by the last window frame, for the next one.
+    glass_live: Option<GlassKey>,
     /// When each size of the size-keyed targets (scale, MSAA, HDR) was last asked for.
     target_use: HashMap<(u32, u32), std::time::Instant>,
     /// The game's frame-rate governor on top of the render scale (1 = none; see
@@ -1592,7 +1618,7 @@ impl Renderer {
                 wanted,
             )
         });
-        let mut required_features = if adapter_table_needed {
+        let mut required_features = if adapter_table_needed && info.backend != wgpu::Backend::Noop {
             adapter.features() & wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
         } else {
             wgpu::Features::empty()
@@ -3657,6 +3683,8 @@ impl Renderer {
             upscale_layout,
             upscale_buf,
             scale_targets: HashMap::new(),
+            glass_prev: None,
+            glass_live: None,
             target_use: HashMap::new(),
             dynamic_scale: std::cell::Cell::new(1.0),
             flicker: std::cell::RefCell::new(HashMap::new()),
@@ -3756,8 +3784,7 @@ impl Renderer {
             encoding_pool: if omsi_cfg::env::var_os("OMSI_NO_RENDER_POOL").is_some() {
                 None
             } else {
-                let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2)
-                    .saturating_sub(1).clamp(1, 3);
+                let workers = std::thread::available_parallelism().map(|n| n.get() / 2).unwrap_or(2).clamp(2, 8);
                 rayon::ThreadPoolBuilder::new().num_threads(workers)
                     .thread_name(|i| format!("omsi-render-{i}"))
                     .build().ok()
@@ -3859,6 +3886,8 @@ impl Renderer {
         Scene {
             meshes: Vec::new(),
             textures: Vec::new(),
+            glass_slot: None,
+            glass_key: None,
             materials: Vec::new(),
             instances: Vec::new(),
             render_origin: DVec3::ZERO,
@@ -4770,6 +4799,9 @@ impl Renderer {
         // the mask and the bump map only ever change the reflection
         let env_mask = extra.env_mask.filter(|_| envmap.is_some());
         let bump = extra.bump.filter(|_| envmap.is_some());
+        // a rain film's reflection slot holds the picture behind the glass: its drops show
+        // the street through themselves, bent and upside down, as real drops do
+        let envmap = if extra.rain_film { Some((self.glass_slot(scene), 0.0)) } else { envmap };
         let clamp = self.clamp_next.replace(false);
         let lm_mapped = self.light_map_next.replace(false);
         let mode = match alpha {
@@ -4898,6 +4930,35 @@ impl Renderer {
             bind_group,
         });
         scene.materials.len() - 1
+    }
+
+    /// The scene's slot for the picture behind the glass (black until a frame is drawn).
+    fn glass_slot(&self, scene: &mut Scene) -> TextureId {
+        if let Some(id) = scene.glass_slot {
+            return id;
+        }
+        scene.textures.push(GpuTexture::showing(self.black_texture.texture.clone(), self.black_texture.view.clone(), (1, 1)));
+        let id = scene.textures.len() - 1;
+        scene.glass_slot = Some(id);
+        id
+    }
+
+    /// Point the scene's rain films at picture `key` (after a window frame: its bundles
+    /// are recorded, the next frame's read the new bind groups).
+    fn show_glass_behind(&self, scene: &mut Scene, key: GlassKey) {
+        let Some(id) = scene.glass_slot else { return };
+        if scene.glass_key == Some(key) {
+            return;
+        }
+        let view = if key.0 {
+            self.hdr_targets.get(&(key.1, key.2)).and_then(|h| h.down.first()).cloned()
+        } else {
+            self.glass_prev.as_ref().filter(|g| g.1 == (key.1, key.2)).map(|g| g.0.clone())
+        };
+        let Some(view) = view else { return };
+        scene.textures[id] = GpuTexture::showing(self.black_texture.texture.clone(), view, (key.1, key.2));
+        self.rebind_textures(scene, &[id]);
+        scene.glass_key = Some(key);
     }
 
     /// The bind group of a material: its textures (or the plain white/black ones), its
@@ -7067,7 +7128,18 @@ impl Renderer {
             && self.options.msaa <= 1
             && !(lighting.enhanced && omsi_cfg::env::var_os("OMSI_NO_ENHANCED").is_none())
             && omsi_cfg::env::var_os("OMSI_NO_FXAA").is_none();
-        let scaled = (width, height) != (full_w, full_h) || vanilla_fxaa;
+        // The rain on the glass shows last frame's picture through its drops: the Enhanced
+        // path keeps it anyway (its glow's first level), the plain graphics draw into a
+        // texture while it rains and keep a copy at half the size (see `glass_prev`).
+        let enhanced_view = lighting.enhanced && omsi_cfg::env::var_os("OMSI_NO_ENHANCED").is_none();
+        let glass_on = with_overlays
+            && scene.glass_slot.is_some()
+            && (lighting.rain > 0.001 || lighting.wetness > 0.02)
+            && omsi_cfg::env::var_os("OMSI_NO_GLASS_PICTURE").is_none();
+        let glass_key: Option<GlassKey> = glass_on.then_some((enhanced_view, width, height));
+        // (what the films may read this frame: the picture the last window frame left)
+        let glass_ok = with_overlays && self.glass_live.take().is_some_and(|k| Some(k) == scene.glass_key && Some(k) == glass_key);
+        let scaled = (width, height) != (full_w, full_h) || vanilla_fxaa || (glass_on && !enhanced_view);
         let scene_target: Option<(wgpu::TextureView, wgpu::BindGroup)> = if scaled {
             Some(self.scale_target(width, height))
         } else {
@@ -7375,10 +7447,13 @@ impl Renderer {
             flags: [
                 if lighting.detail { 1.0 } else { 0.0 },
                 if enhanced { 1.0 } else { 0.0 },
-                0.0,
+                // (below zero: the rain films have last frame's picture to look through,
+                // see `rain_behind`; above zero is an old branch never taken)
+                if glass_ok { -1.0 } else { 0.0 },
                 if shadows { SHADOW_RANGE_CLOSE } else { 0.0 },
             ],
             light_view_proj_close: light_view_proj_close.to_cols_array_2d(),
+            wind: [lighting.glass_wind.x, lighting.glass_wind.y, lighting.glass_wind.z, 1.0],
         };
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&cu));
@@ -7412,64 +7487,25 @@ impl Renderer {
             let d = ((inst.origin - scene.render_origin).as_vec3() - cam_rel).length();
             if d <= radius { f32::MAX } else { 2.0 * radius / (d.max(0.01) * lod_fov) }
         };
-        for cascade in 0..3usize {
-            if !draw_shadows || (cascade == 1 && !redraw_far) || (cascade == 0 && !redraw_near) {
-                continue;
-            }
-            // casters within the light box (no road surfaces, no blended glass, nothing
-            // tiny); the far cascade skips small meshes
-            let (range, lvp) = match cascade {
-                0 => (SHADOW_RANGE, light_view_proj),
-                1 => (SHADOW_RANGE_FAR, light_view_proj_far),
-                _ => (SHADOW_RANGE_CLOSE, light_view_proj_close),
-            };
-            let min_radius = match cascade {
-                0 => 0.4,
-                1 => 6.0,
-                _ => 0.1,
-            };
-            let dbg_shadow = omsi_cfg::env::var_os("OMSI_DEBUG_SHADOW").is_some() && cascade == 0;
-            // OMSI_DEBUG_SHADOW=<radius>: log casters from that bounding radius up (3 m by
-            // default; a car is about 2.4)
-            let dbg_r: f32 = omsi_cfg::env::var("OMSI_DEBUG_SHADOW")
-                .ok()
-                .and_then(|v| v.trim().parse().ok())
-                .unwrap_or(3.0);
-            items.clear();
-            for inst in scene.instances.iter() {
+        let active = [draw_shadows && redraw_near, draw_shadows && redraw_far, draw_shadows];
+        let boxes = [(SHADOW_RANGE, light_view_proj, 0.4f32), (SHADOW_RANGE_FAR, light_view_proj_far, 6.0), (SHADOW_RANGE_CLOSE, light_view_proj_close, 0.1)];
+        let dbg_shadow = omsi_cfg::env::var_os("OMSI_DEBUG_SHADOW").is_some();
+        let dbg_r: f32 = omsi_cfg::env::var("OMSI_DEBUG_SHADOW")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(3.0);
+        let casters = |span: std::ops::Range<usize>| -> [Vec<DrawItem>; 3] {
+            let mut out: [Vec<DrawItem>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+            let mut ranges: Vec<(u8, u32, u32, usize)> = Vec::new();
+            for inst in &scene.instances[span] {
                 if !inst.visible || !inst.casts_shadow || (self.options.omsi_shadow_casters && !inst.omsi_caster) {
                     continue;
                 }
                 let m = &scene.meshes[inst.mesh];
-                if m.ranges.is_empty() || (m.bounds_radius > 0.0 && m.bounds_radius < min_radius) {
-                    if dbg_shadow && m.bounds_radius >= dbg_r {
-                        log::info!(
-                            "shadow: mesh r={:.1} skipped (ranges {})",
-                            m.bounds_radius,
-                            m.ranges.len()
-                        );
-                    }
+                if m.ranges.is_empty() {
                     continue;
                 }
                 let (c, r) = Self::bounding_sphere(scene, inst);
-                let lc = lvp.project_point3(c);
-                let rr = r / range;
-                if lc.x.abs() > 1.0 + rr || lc.y.abs() > 1.0 + rr {
-                    if dbg_shadow && r >= dbg_r {
-                        log::info!(
-                            "shadow: mesh r={r:.1} outside the light box at ({:.2}, {:.2})",
-                            lc.x,
-                            lc.y
-                        );
-                    }
-                    continue;
-                }
-                // The level of detail the camera shows: chosen by the object's size seen
-                // from the camera's distance (not the direction it looks in, see the camera
-                // pass), so the shadow switches together with the object itself and never
-                // on its own when the view turns. Every caster at full detail (the trees'
-                // alpha foliage 140 m out, the houses 700 m out) had doubled the shadow
-                // passes.
                 if inst.lod.0 > 0.0 || inst.lod.1 < f32::MAX {
                     let size = lod_size(inst);
                     if size < inst.lod.0 || (inst.lod.1 < f32::MAX && size >= inst.lod.1) {
@@ -7479,38 +7515,11 @@ impl Renderer {
                         continue;
                     }
                 }
-                if dbg_shadow && r >= dbg_r {
-                    let modes: Vec<&str> = m
-                        .ranges
-                        .iter()
-                        .map(|(_, _, slot)| {
-                            match scene.materials
-                                [inst.materials.get(*slot as usize).copied().unwrap_or(0)]
-                            .alpha
-                            {
-                                AlphaMode::Opaque => "opaque",
-                                AlphaMode::Test => "test",
-                                AlphaMode::Blend => "blend",
-                            }
-                        })
-                        .collect();
-                    log::info!(
-                        "shadow: caster r={r:.1} at {:?} slots {:?}",
-                        inst.origin,
-                        modes
-                    );
-                }
+                ranges.clear();
                 for (ri, (_, _, slot)) in m.ranges.iter().enumerate() {
                     let mat_id = inst.materials.get(*slot as usize).copied().unwrap_or(0);
                     let mat = &scene.materials[mat_id];
                     let mut kind = kind_of(mat.alpha);
-                    // A blended material that writes depth and carries a transparency map
-                    // is a solid body with its windows cut out of the map: every stock
-                    // traffic car (the W123, the Golf, the T3 …) is one `[matl_alpha] 2`
-                    // material of that kind, so the whole car was left out of the shadow
-                    // map. It casts through the alpha test of its map (`fs_shadow_test`):
-                    // the body shades the road, the windows let the sun through. Glass,
-                    // rain and dirt films (no depth write, no map) stay out.
                     let cut_body = kind == PIPE_BLEND && mat.transmap.is_some() && !mat.no_z_write;
                     if (kind == PIPE_BLEND && !cut_body) || mat.no_z_check {
                         if dbg_shadow && r >= dbg_r {
@@ -7521,25 +7530,62 @@ impl Renderer {
                     if cut_body {
                         kind = PIPE_ALPHA_TEST;
                     }
-                    items.push(DrawItem {
-                        pipe: kind,
-                        mesh: inst.mesh as u32,
-                        range: ri as u32,
-                        material: depth_only_material(kind, mat_id),
-                        entry: inst.base + *slot,
-                    });
+                    ranges.push((kind, ri as u32, *slot, mat_id));
+                }
+                for (cascade, &(range, lvp, min_radius)) in boxes.iter().enumerate() {
+                    if !active[cascade] {
+                        continue;
+                    }
+                    let dbg = dbg_shadow && cascade == 0 && r >= dbg_r;
+                    if m.bounds_radius > 0.0 && m.bounds_radius < min_radius {
+                        if dbg_shadow && cascade == 0 && m.bounds_radius >= dbg_r {
+                            log::info!("shadow: mesh r={:.1} skipped (ranges {})", m.bounds_radius, m.ranges.len());
+                        }
+                        continue;
+                    }
+                    let lc = lvp.project_point3(c);
+                    let rr = r / range;
+                    if lc.x.abs() > 1.0 + rr || lc.y.abs() > 1.0 + rr {
+                        if dbg {
+                            log::info!("shadow: mesh r={r:.1} outside the light box at ({:.2}, {:.2})", lc.x, lc.y);
+                        }
+                        continue;
+                    }
+                    if dbg {
+                        log::info!("shadow: caster r={r:.1} at {:?} slots {:?}", inst.origin, ranges.iter().map(|x| x.0).collect::<Vec<_>>());
+                    }
+                    for &(kind, ri, slot, mat_id) in &ranges {
+                        out[cascade].push(DrawItem {
+                            pipe: kind,
+                            mesh: inst.mesh as u32,
+                            range: ri,
+                            material: depth_only_material(kind, mat_id),
+                            entry: inst.base + slot,
+                        });
+                    }
                 }
             }
-            if debug_draws {
-                log::info!("shadow cascade {cascade}: {} draws", items.len());
+            out
+        };
+        if active.iter().any(|a| *a) {
+            let n = scene.instances.len();
+            let parts = (n / 8192).clamp(1, self.encoding_pool.as_ref().map_or(3, |p| p.current_num_threads()) + 1);
+            let chunk = n.div_ceil(parts);
+            let mut found: [Vec<DrawItem>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+            for part in run_parts(self.encoding_pool.as_ref(), parts, |p| casters(p * chunk..((p + 1) * chunk).min(n))) {
+                for (a, b) in found.iter_mut().zip(part) {
+                    a.extend(b);
+                }
             }
-            batch_items(
-                scene,
-                &mut items,
-                true,
-                &mut list,
-                &mut shadow_batches[cascade],
-            );
+            for cascade in 0..3 {
+                if !active[cascade] {
+                    continue;
+                }
+                if debug_draws {
+                    log::info!("shadow cascade {cascade}: {} draws", found[cascade].len());
+                }
+                batch_items(scene, &mut found[cascade], true, &mut list, &mut shadow_batches[cascade]);
+            }
         }
         if shadows && debug_draws {
             log::info!(
@@ -7635,105 +7681,114 @@ impl Renderer {
         } else {
             (HashMap::new(), HashMap::new())
         };
-        let visible: Vec<(usize, f32, bool)> = {
-            (0..scene.instances.len())
-                .filter_map(|i| {
-                    let inst = &scene.instances[i];
-                    let m = &scene.meshes[inst.mesh];
-                    if m.ranges.is_empty() || !inst.visible || (inst.mirror_only && main_view) {
-                        return None;
-                    }
-                    let (c, r) = Self::bounding_sphere(scene, inst);
-                    let v = view.transform_point3(c);
-                    let z = -v.z; // distance along the view direction
-                    // camera inside the sphere: drawn whatever the frustum says, but the
-                    // object's LOD still chooses (all levels of a building stood in at once)
-                    let inside = v.length() <= r;
-                    if !inside && z + r < camera.near {
-                        return None;
-                    }
-                    // (the enhanced sky is not the fog's colour below the horizon: ground
-                    // left out for the fog let it show through, road-shaped holes in the
-                    // terrain seen from above, so the ground is always drawn there)
-                    if !inside && z - r > fog_far && !(enhanced_frame && (inst.surface || r > 100.0)) {
-                        return None;
-                    }
-                    if !inside && (v.x.abs() > z * tan_x + r / cos_x || v.y.abs() > z * tan_y + r / cos_y) {
-                        return None;
-                    }
-                    // The screen size: the diameter over the distance to the camera (not the
-                    // depth along the view: that is largest in the middle of the picture, so
-                    // a pole looked at straight on shrank below the limit and vanished while
-                    // it stayed at the edge), as a share of the vertical field of view -
-                    // of the whole object when the mesh belongs to one (see
-                    // `set_object_culling`), else of the mesh alone. Surfaces and terrain
-                    // are never dropped for it.
-                    let size = if inst.object_radius > 0.0 {
-                        let scale = Self::instance_scale(scene, inst);
-                        let radius = inst.object_radius * scale;
-                        let ov = view.transform_point3((inst.origin - scene.render_origin).as_vec3());
-                        let (od, oz) = (ov.length(), -ov.z);
-                        if od <= radius {
-                            f32::MAX
-                        } else {
-                            // performance_maxObjDist, by the distance and by the depth
-                            let reach = if was_drawn(i) { max_obj_dist * 1.05 } else { max_obj_dist };
-                            if !inst.any_distance
-                                && max_obj_dist > 0.0
-                                && (od > radius + reach || oz - radius > reach)
-                            {
-                                return None;
-                            }
-                            // one size for the whole object, held while it moves less than
-                            // 6 % (the view's jitter); every mesh and level of it computes
-                            // the same key and the same size, so they decide alike
-                            let key = [
-                                inst.origin.x.to_bits(),
-                                inst.origin.y.to_bits(),
-                                inst.origin.z.to_bits(),
-                                radius.to_bits() as u64,
-                            ];
-                            let fresh = 2.0 * radius / (od.max(0.01) * fov_y);
-                            let size = match sizes_before.get(&key) {
-                                Some(&last) if fresh > last * 0.94 && fresh < last * 1.06 => last,
-                                _ => fresh,
-                            };
-                            if main_view {
-                                sizes_now.insert(key, size);
-                            }
-                            size
-                        }
-                    } else if m.bounds_radius > 0.0 {
-                        2.0 * r / (v.length().max(0.01) * fov_y)
-                    } else {
-                        f32::MAX
-                    };
-                    // `OMSI_DEBUG_CULL`: what near and in the picture is left out, and why
-                    let near_dbg = debug_cull && with_overlays && (inst.origin - camera.position).length() < 150.0;
-                    // (an object's size is held already; a lone mesh's is not)
-                    let keep = if was_drawn(i) && inst.object_radius <= 0.0 { 0.85 } else { 1.0 };
-                    if !inst.surface && size < min_obj_size * inst.detail * keep {
-                        if near_dbg {
-                            log::info!("cull: instance {i} mesh {} at {:.0} m: size {size:.4} < {:.4} (radius {:.1}, detail {})", inst.mesh, (inst.origin - camera.position).length(), min_obj_size * inst.detail, inst.object_radius, inst.detail);
-                        }
-                        return None;
-                    }
-                    // (the top level runs to f32::MAX, and a camera inside the object's sphere
-                    // measures it as f32::MAX: `>=` left out both levels of every object one
-                    // stood next to - the parked cars, lamps and houses that vanished close by)
-                    if (inst.lod.0 > 0.0 || inst.lod.1 < f32::MAX)
-                        && (size < inst.lod.0 || (inst.lod.1 < f32::MAX && size >= inst.lod.1))
+        let cull_one = |i: usize, sizes: &mut Vec<([u64; 4], f32)>| -> Option<(usize, f32, bool)> {
+            let inst = &scene.instances[i];
+            let m = &scene.meshes[inst.mesh];
+            if m.ranges.is_empty() || !inst.visible || (inst.mirror_only && main_view) {
+                return None;
+            }
+            let (c, r) = Self::bounding_sphere(scene, inst);
+            let v = view.transform_point3(c);
+            let z = -v.z; // distance along the view direction
+            // camera inside the sphere: drawn whatever the frustum says, but the
+            // object's LOD still chooses (all levels of a building stood in at once)
+            let inside = v.length() <= r;
+            if !inside && z + r < camera.near {
+                return None;
+            }
+            // (the enhanced sky is not the fog's colour below the horizon: ground
+            // left out for the fog let it show through, road-shaped holes in the
+            // terrain seen from above, so the ground is always drawn there)
+            if !inside && z - r > fog_far && !(enhanced_frame && (inst.surface || r > 100.0)) {
+                return None;
+            }
+            if !inside && (v.x.abs() > z * tan_x + r / cos_x || v.y.abs() > z * tan_y + r / cos_y) {
+                return None;
+            }
+            // The screen size: the diameter over the distance to the camera (not the
+            // depth along the view: that is largest in the middle of the picture, so
+            // a pole looked at straight on shrank below the limit and vanished while
+            // it stayed at the edge), as a share of the vertical field of view -
+            // of the whole object when the mesh belongs to one (see
+            // `set_object_culling`), else of the mesh alone. Surfaces and terrain
+            // are never dropped for it.
+            let size = if inst.object_radius > 0.0 {
+                let scale = Self::instance_scale(scene, inst);
+                let radius = inst.object_radius * scale;
+                let ov = view.transform_point3((inst.origin - scene.render_origin).as_vec3());
+                let (od, oz) = (ov.length(), -ov.z);
+                if od <= radius {
+                    f32::MAX
+                } else {
+                    // performance_maxObjDist, by the distance and by the depth
+                    let reach = if was_drawn(i) { max_obj_dist * 1.05 } else { max_obj_dist };
+                    if !inst.any_distance
+                        && max_obj_dist > 0.0
+                        && (od > radius + reach || oz - radius > reach)
                     {
-                        if near_dbg && size < inst.lod.0 {
-                            log::info!("cull: instance {i} mesh {} at {:.0} m: lod {:.4}..{:.4}, size {size:.4}", inst.mesh, (inst.origin - camera.position).length(), inst.lod.0, inst.lod.1);
-                        }
                         return None;
                     }
-                    Some((i, z, inside))
-                })
-                .collect()
+                    // one size for the whole object, held while it moves less than
+                    // 6 % (the view's jitter); every mesh and level of it computes
+                    // the same key and the same size, so they decide alike
+                    let key = [
+                        inst.origin.x.to_bits(),
+                        inst.origin.y.to_bits(),
+                        inst.origin.z.to_bits(),
+                        radius.to_bits() as u64,
+                    ];
+                    let fresh = 2.0 * radius / (od.max(0.01) * fov_y);
+                    let size = match sizes_before.get(&key) {
+                        Some(&last) if fresh > last * 0.94 && fresh < last * 1.06 => last,
+                        _ => fresh,
+                    };
+                    if main_view {
+                        sizes.push((key, size));
+                    }
+                    size
+                }
+            } else if m.bounds_radius > 0.0 {
+                2.0 * r / (v.length().max(0.01) * fov_y)
+            } else {
+                f32::MAX
+            };
+            // `OMSI_DEBUG_CULL`: what near and in the picture is left out, and why
+            let near_dbg = debug_cull && with_overlays && (inst.origin - camera.position).length() < 150.0;
+            // (an object's size is held already; a lone mesh's is not)
+            let keep = if was_drawn(i) && inst.object_radius <= 0.0 { 0.85 } else { 1.0 };
+            if !inst.surface && size < min_obj_size * inst.detail * keep {
+                if near_dbg {
+                    log::info!("cull: instance {i} mesh {} at {:.0} m: size {size:.4} < {:.4} (radius {:.1}, detail {})", inst.mesh, (inst.origin - camera.position).length(), min_obj_size * inst.detail, inst.object_radius, inst.detail);
+                }
+                return None;
+            }
+            // (the top level runs to f32::MAX, and a camera inside the object's sphere
+            // measures it as f32::MAX: `>=` left out both levels of every object one
+            // stood next to - the parked cars, lamps and houses that vanished close by)
+            if (inst.lod.0 > 0.0 || inst.lod.1 < f32::MAX)
+                && (size < inst.lod.0 || (inst.lod.1 < f32::MAX && size >= inst.lod.1))
+            {
+                if near_dbg && size < inst.lod.0 {
+                    log::info!("cull: instance {i} mesh {} at {:.0} m: lod {:.4}..{:.4}, size {size:.4}", inst.mesh, (inst.origin - camera.position).length(), inst.lod.0, inst.lod.1);
+                }
+                return None;
+            }
+            Some((i, z, inside))
         };
+        let n = scene.instances.len();
+        let parts = (n / 8192).clamp(1, self.encoding_pool.as_ref().map_or(3, |p| p.current_num_threads()) + 1);
+        let chunk = n.div_ceil(parts);
+        let (mut visible, mut found): (Vec<(usize, f32, bool)>, Vec<([u64; 4], f32)>) = (Vec::new(), Vec::new());
+        for (v, sizes) in run_parts(self.encoding_pool.as_ref(), parts, |p| {
+            let mut sizes = Vec::new();
+            let v: Vec<_> = (p * chunk..((p + 1) * chunk).min(n)).filter_map(|i| cull_one(i, &mut sizes)).collect();
+            (v, sizes)
+        }) {
+            visible.extend(v);
+            found.extend(sizes);
+        }
         if main_view {
+            sizes_now.extend(found);
             *self.object_sizes.borrow_mut() = sizes_now;
             sizes_before.clear();
             *self.object_sizes_scratch.borrow_mut() = sizes_before;
@@ -7800,8 +7855,10 @@ impl Renderer {
         }
         // the depth prepass: opaque and alpha-tested, single-sampled
         let mut prepass_batches: Vec<Batch> = Vec::new();
-        if prepass_on {
-            items.clear();
+        let prepass_job = || -> (Vec<u32>, Vec<Batch>) {
+            let mut items: Vec<DrawItem> = Vec::new();
+            let mut list: Vec<u32> = Vec::new();
+            let mut batches: Vec<Batch> = Vec::new();
             for &(i, _, _) in &visible {
                 let inst = &scene.instances[i];
                 let cull = culls_back_faces(scene, inst);
@@ -7828,8 +7885,9 @@ impl Renderer {
                     }
                 }
             }
-            batch_items(scene, &mut items, true, &mut list, &mut prepass_batches);
-        }
+            batch_items(scene, &mut items, true, &mut list, &mut batches);
+            (list, batches)
+        };
         // The main pass follows the authored world phases. Each phase keeps its
         // opaque/cutout draws followed by its blended draws, far to near. Transparent
         // ground layers never write depth while composing: an alpha-zero junction
@@ -7841,7 +7899,14 @@ impl Renderer {
         // invisible cover writes depth. Sorting its blended cover after the terrain
         // leaves the terrain's colour in place even though the cover writes depth.
         let has_presurface = visible.iter().any(|&(i, _, _)| scene.instances[i].presurface);
-        {
+        let mut prepass_found: Option<(Vec<u32>, Vec<Batch>)> = None;
+        let pool = self.encoding_pool.as_ref();
+        in_scope(pool, |scope| {
+            if prepass_on {
+                let job = &prepass_job;
+                let slot = &mut prepass_found;
+                scope.spawn(move |_| *slot = Some(job()));
+            }
             let mut by_phase: [Vec<(usize, f32, bool)>; RenderPhase::COUNT] =
                 std::array::from_fn(|_| Vec::new());
             for &entry in &visible {
@@ -8081,12 +8146,26 @@ impl Renderer {
                 main_draws[1] += items.len();
                 batch_items(scene, &mut items, false, &mut list, &mut main_batches);
             }
+        });
+        if let Some((pre_list, mut pre_batches)) = prepass_found {
+            let offset = list.len() as u32;
+            for b in &mut pre_batches {
+                b.instances = b.instances.start + offset..b.instances.end + offset;
+            }
+            list.extend(pre_list);
+            prepass_batches = pre_batches;
         }
         if debug_draws {
             log::info!("  main pass: {} opaque/alpha-tested and {} blended draws in {} batches; prepass {} batches; draw list {} entries", main_draws[0], main_draws[1], main_batches.len(), prepass_batches.len(), list.len());
         }
+        if self.profiling && !with_overlays {
+            let mut c = self.counts.borrow_mut();
+            *c.entry("mirror pictures").or_default() += 1.0;
+            *c.entry("mirror visible instances").or_default() += visible.len() as f64;
+        }
         if self.profiling && with_overlays {
             let mut c = self.counts.borrow_mut();
+            *c.entry("scene instances").or_default() += scene.instances.len() as f64;
             *c.entry("visible instances").or_default() += visible.len() as f64;
             *c.entry("main draws").or_default() += (main_draws[0] + main_draws[1]) as f64;
             *c.entry("opaque draws").or_default() += main_draws[0] as f64;
@@ -8449,6 +8528,7 @@ impl Renderer {
             }
         }
         let msaa_prepass = msaa_prepass && self.prepass_msaa_pipelines.is_some() && targets.is_some();
+        let mut main_parts: Vec<wgpu::CommandEncoder> = Vec::new();
         {
             // The enhanced sky dome was meant to cover everything, so this used to clear to
             // black on that assumption - but the dome is a hemisphere, not a full sphere, and
@@ -8495,17 +8575,56 @@ impl Renderer {
                     store: if h.mask_msaa.is_some() { wgpu::StoreOp::Discard } else { wgpu::StoreOp::Store },
                 },
             });
+            let parts = if hdr.is_none() && !msaa_prepass && !cfg!(any(target_os = "macos", target_os = "ios")) && main_bundles.len() >= 2 && omsi_cfg::env::var_os("OMSI_NO_MAIN_SPLIT").is_none() {
+                main_bundles.len().min(2)
+            } else {
+                1
+            };
+            let per_part = main_bundles.len().div_ceil(parts.max(1));
+            let sky_clear = wgpu::LoadOp::Clear(wgpu::Color { r: sky.x as f64, g: sky.y as f64, b: sky.z as f64, a: 1.0 });
+            let depth_first = if share_depth || msaa_prepass { wgpu::LoadOp::Load } else { wgpu::LoadOp::Clear(0.0) };
+            for g in 0..parts.saturating_sub(1) {
+                let first = g == 0;
+                let mut part = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("main part") });
+                {
+                    let mut pass = part.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("main part"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: draw_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load: if first { sky_clear } else { wgpu::LoadOp::Load }, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: depth_view,
+                            depth_ops: Some(wgpu::Operations { load: if first { depth_first } else { wgpu::LoadOp::Load }, store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_bind_group(0, scene.camera_bind_group.as_ref().unwrap(), &[]);
+                    if first {
+                        if let Some(sky) = &scene.sky_bind_group {
+                            pass.set_pipeline(&pp.sky_pipeline);
+                            pass.set_bind_group(1, sky, &[]);
+                            pass.set_vertex_buffer(0, self.sky_mesh.0.slice(..));
+                            pass.set_index_buffer(self.sky_mesh.1.slice(..), wgpu::IndexFormat::Uint32);
+                            pass.draw_indexed(0..self.sky_mesh.2, 0, 0..1);
+                        }
+                    }
+                    pass.execute_bundles(main_bundles[g * per_part..((g + 1) * per_part).min(main_bundles.len())].iter());
+                }
+                main_parts.push(part);
+            }
+            let tail = (parts - 1) * per_part;
             let main_attachment = Some(wgpu::RenderPassColorAttachment {
                     view: draw_view,
                     depth_slice: None,
                     resolve_target: resolve_view,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: sky.x as f64,
-                            g: sky.y as f64,
-                            b: sky.z as f64,
-                            a: 1.0,
-                        }),
+                        load: if parts > 1 { wgpu::LoadOp::Load } else { sky_clear },
                         store: if resolve_view.is_none() {
                             wgpu::StoreOp::Store
                         } else {
@@ -8523,12 +8642,16 @@ impl Renderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: if share_depth || msaa_prepass {
-                            wgpu::LoadOp::Load
+                        load: if parts > 1 { wgpu::LoadOp::Load } else { depth_first },
+                        // (nothing reads the picture's depth after the pass - the ambient
+                        // occlusion reads the prepass's own texture - so where the depth is
+                        // not carried over, a tile-based GPU need not flush a full-size
+                        // depth buffer back)
+                        store: if share_depth || msaa_prepass || ao_on {
+                            wgpu::StoreOp::Store
                         } else {
-                            wgpu::LoadOp::Clear(0.0)
+                            wgpu::StoreOp::Discard
                         },
-                        store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
                 }),
@@ -8541,7 +8664,7 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, scene.camera_bind_group.as_ref().unwrap(), &[]);
-            if let Some(sky) = &scene.sky_bind_group {
+            if let Some(sky) = scene.sky_bind_group.as_ref().filter(|_| parts == 1) {
                 pass.set_pipeline(&pp.sky_pipeline);
                 pass.set_bind_group(1, sky, &[]);
                 pass.set_vertex_buffer(0, self.sky_mesh.0.slice(..));
@@ -8555,7 +8678,7 @@ impl Renderer {
                 });
             } else {
                 // the batches, recorded as bundles on several threads (see `record_bundles`)
-                pass.execute_bundles(main_bundles.iter());
+                pass.execute_bundles(main_bundles[tail..].iter());
                 // a bundle leaves the pass without bind groups
                 pass.set_bind_group(0, scene.camera_bind_group.as_ref().unwrap(), &[]);
             }
@@ -8747,6 +8870,39 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&[width as f32, height as f32, sharpen.clamp(0.0, 0.8), if vanilla_fxaa { 1.0 } else { 0.0 }]),
             );
+            // the picture at half its size for the rain on the glass next frame
+            if glass_key.is_some_and(|k| !k.0) {
+                if self.glass_prev.as_ref().map(|g| g.1) != Some((width, height)) {
+                    let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("picture behind the glass"),
+                        size: wgpu::Extent3d { width: (width / 2).max(1), height: (height / 2).max(1), depth_or_array_layers: 1 },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: self.format,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                    });
+                    self.glass_prev = Some((tex.create_view(&Default::default()), (width, height)));
+                }
+                let view = &self.glass_prev.as_ref().unwrap().0;
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("picture behind the glass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.upscale_pipeline);
+                pass.set_bind_group(0, bg, &[]);
+                pass.draw(0..3, 0..1);
+            }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("upscale"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -8776,39 +8932,60 @@ impl Renderer {
                 }
             }
         }
+        if let Some(k) = glass_key {
+            self.glass_live = Some(k);
+            self.show_glass_behind(scene, k);
+        }
         stage(self, "encode", "mirror.encode");
         // Turning the recorded passes into Metal commands is the costliest CPU step of a
         // frame (wgpu checks every draw): the shadow maps and the prepass are finished on
         // helper threads while this one finishes the picture.
         let big =
-            shadow_batches.iter().map(|b| b.len()).sum::<usize>() + prepass_batches.len() > 64;
+            shadow_batches.iter().map(|b| b.len()).sum::<usize>() + prepass_batches.len() > 64 || !main_parts.is_empty();
         let profiling = self.profiling;
         let finish = |encoder: wgpu::CommandEncoder| {
             let start = profiling.then(std::time::Instant::now);
             let commands = encoder.finish();
             (commands, start.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0))
         };
-        let (shadow_commands, prepass_commands, commands, finish_times) = if big && self.encoding_pool.is_some() {
+        let (shadow_commands, prepass_commands, part_commands, commands, finish_times) = if big && self.encoding_pool.is_some() {
             self.encoding_pool.as_ref().unwrap().in_place_scope_fifo(|scope| {
                 let (shadow_tx, shadow_rx) = std::sync::mpsc::sync_channel(1);
                 let (prepass_tx, prepass_rx) = std::sync::mpsc::sync_channel(1);
+                let parts = main_parts.len();
+                let (part_tx, part_rx) = std::sync::mpsc::sync_channel(parts.max(1));
                 let finish = &finish;
                 scope.spawn_fifo(move |_| { let _ = shadow_tx.send(finish(shadow_encoder)); });
                 scope.spawn_fifo(move |_| { let _ = prepass_tx.send(finish(prepass_encoder)); });
+                for (k, e) in main_parts.into_iter().enumerate() {
+                    let tx = part_tx.clone();
+                    scope.spawn_fifo(move |_| { let _ = tx.send((k, finish(e).0)); });
+                }
                 let (commands, main_secs) = finish(encoder);
                 let wait = std::time::Instant::now();
                 let (shadow_commands, shadow_secs) = shadow_rx.recv().expect("command encoding worker");
                 let shadow_wait = wait.elapsed().as_secs_f64();
                 let wait = std::time::Instant::now();
                 let (prepass_commands, prepass_secs) = prepass_rx.recv().expect("command encoding worker");
-                (shadow_commands, prepass_commands, commands,
-                    [shadow_secs, prepass_secs, main_secs, shadow_wait, wait.elapsed().as_secs_f64()])
+                let mut part_commands: Vec<Option<wgpu::CommandBuffer>> = (0..parts).map(|_| None).collect();
+                for _ in 0..parts {
+                    let (k, c) = part_rx.recv().expect("command encoding worker");
+                    part_commands[k] = Some(c);
+                }
+                (
+                    shadow_commands,
+                    prepass_commands,
+                    part_commands.into_iter().map(|c| c.expect("main pass part")).collect::<Vec<_>>(),
+                    commands,
+                    [shadow_secs, prepass_secs, main_secs, shadow_wait, wait.elapsed().as_secs_f64()],
+                )
             })
         } else if big {
             std::thread::scope(|scope| {
                 let finish = &finish;
                 let shadow = scope.spawn(move || finish(shadow_encoder));
                 let prepass = scope.spawn(move || finish(prepass_encoder));
+                let parts: Vec<_> = main_parts.into_iter().map(|e| scope.spawn(move || finish(e).0)).collect();
                 let (commands, main_secs) = finish(encoder);
                 let wait = std::time::Instant::now();
                 let (shadow_commands, shadow_secs) = shadow.join().expect("command encoding thread");
@@ -8818,6 +8995,7 @@ impl Renderer {
                 (
                     shadow_commands,
                     prepass_commands,
+                    parts.into_iter().map(|h| h.join().expect("command encoding thread")).collect::<Vec<_>>(),
                     commands,
                     [shadow_secs, prepass_secs, main_secs, shadow_wait, wait.elapsed().as_secs_f64()],
                 )
@@ -8825,13 +9003,9 @@ impl Renderer {
         } else {
             let (shadow, shadow_secs) = finish(shadow_encoder);
             let (prepass, prepass_secs) = finish(prepass_encoder);
+            let parts: Vec<_> = main_parts.into_iter().map(|e| finish(e).0).collect();
             let (main, main_secs) = finish(encoder);
-            (
-                shadow,
-                prepass,
-                main,
-                [shadow_secs, prepass_secs, main_secs, 0.0, 0.0],
-            )
+            (shadow, prepass, parts, main, [shadow_secs, prepass_secs, main_secs, 0.0, 0.0])
         };
         if self.profiling {
             // These overlap across helper threads; do not add them to the stage totals.
@@ -8846,7 +9020,7 @@ impl Renderer {
         }
         stage(self, "finish", "mirror.finish");
         self.queue
-            .submit([shadow_commands, prepass_commands, commands]);
+            .submit([shadow_commands, prepass_commands].into_iter().chain(part_commands).chain([commands]));
         stage(self, "submit", "mirror.submit");
         if let (Some(t), false) = (
             self.gpu_timers[with_overlays as usize].as_mut(),
@@ -9867,6 +10041,35 @@ fn culls_back_faces(scene: &Scene, inst: &Instance) -> bool {
         && glam::Mat3::from_mat4(inst.transform).determinant() > 0.0
 }
 
+fn in_scope<'s, R>(pool: Option<&rayon::ThreadPool>, op: impl FnOnce(&rayon::Scope<'s>) -> R) -> R {
+    match pool {
+        Some(p) => p.in_place_scope(op),
+        None => rayon::in_place_scope(op),
+    }
+}
+
+fn run_parts<T: Send>(pool: Option<&rayon::ThreadPool>, parts: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
+    let Some(pool) = pool else {
+        return std::thread::scope(|s| {
+            let f = &f;
+            let helpers: Vec<_> = (1..parts.max(1)).map(|k| s.spawn(move || f(k))).collect();
+            let mut out = vec![f(0)];
+            out.extend(helpers.into_iter().map(|h| h.join().expect("render part")));
+            out
+        });
+    };
+    let mut out: Vec<Option<T>> = (0..parts.max(1)).map(|_| None).collect();
+    pool.in_place_scope(|s| {
+        let f = &f;
+        let (first, rest) = out.split_first_mut().expect("one part at least");
+        for (k, slot) in rest.iter_mut().enumerate() {
+            s.spawn(move |_| *slot = Some(f(k + 1)));
+        }
+        *first = Some(f(0));
+    });
+    out.into_iter().map(|o| o.expect("render part")).collect()
+}
+
 /// The main pass's batches as render bundles, recorded on up to four threads. Checking
 /// every draw is the costliest CPU step of a frame; a bundle is checked when it is made,
 /// and the pass that runs it only replays it. The bundles keep the batches' order (the
@@ -9919,48 +10122,29 @@ fn record_bundles(
             }
         }
     };
-    let max_parts = pool.map(|p| p.current_num_threads() + 1).unwrap_or(4);
+    let max_parts = pool.map(|p| (p.current_num_threads() + 1).clamp(4, 8)).unwrap_or(4);
     let parts = (batches.len() / 250).clamp(1, max_parts);
     if parts == 1 {
         return record(batches).into_iter().collect();
     }
     let chunks: Vec<&[Batch]> = batches.chunks(batches.len().div_ceil(parts)).collect();
-    let record = &record;
-    if let Some(pool) = pool {
-        return pool.in_place_scope_fifo(|scope| {
-            let (tx, rx) = std::sync::mpsc::sync_channel(chunks.len() - 1);
-            for (i, chunk) in chunks[1..].iter().enumerate() {
-                let tx = tx.clone();
-                scope.spawn_fifo(move |_| { let _ = tx.send((i + 1, record(chunk))); });
-            }
-            let mut bundles = vec![None; chunks.len()];
-            bundles[0] = record(chunks[0]);
-            // Preserve draw order even if a later worker finishes first.
-            for _ in 1..chunks.len() {
-                let (i, bundle) = rx.recv().expect("bundle encoding worker");
-                bundles[i] = bundle;
-            }
-            bundles.into_iter().flatten().collect()
-        });
-    }
-    std::thread::scope(|scope| {
-        let helpers: Vec<_> = chunks[1..]
-            .iter()
-            .map(|c| scope.spawn(move || record(c)))
-            .collect();
-        let mut bundles: Vec<wgpu::RenderBundle> = record(chunks[0]).into_iter().collect();
-        bundles.extend(helpers.into_iter().filter_map(|h| h.join().ok().flatten()));
-        bundles
-    })
+    run_parts(pool, chunks.len(), |k| record(chunks[k])).into_iter().flatten().collect()
 }
 
 /// The render scale for a picture of this size: the requested one (0.5..1), or with 0
 /// (automatic) full size up to `AUTO_SCALE_PIXELS` and that many pixels above it.
+/// A requested one keeps to the same budget on a Mac or a phone: the Low preset's fixed
+/// 0.75 of a Retina window drew more pixels than the budget allows (3.24 of 2.8 million
+/// on a 3200x1800 window), and the automatic scale would never have drawn that many.
 fn scene_scale_for(requested: f32, width: u32, height: u32) -> f32 {
-    if requested > 0.0 {
-        return requested.clamp(0.5, 1.0);
-    }
     let pixels = width as f32 * height as f32;
+    if requested > 0.0 {
+        let requested = requested.clamp(0.5, 1.0);
+        if (cfg!(target_os = "macos") || cfg!(target_os = "android")) && pixels > AUTO_SCALE_PIXELS {
+            return requested.min((AUTO_SCALE_PIXELS / pixels).sqrt().clamp(0.5, 1.0));
+        }
+        return requested;
+    }
     if pixels <= AUTO_SCALE_PIXELS {
         1.0
     } else {
@@ -10066,11 +10250,12 @@ impl<'w> SurfaceState<'w> {
             } else {
                 wgpu::PresentMode::AutoNoVsync
             },
-            // (with V-sync two frames waiting for the screen put every steering movement and
-            // key two frames - 33 ms at 60 Hz, more on a laptop's graphics chip that is behind
-            // anyway - on the screen late: the "input delay" players felt. One is enough to
-            // keep the chip busy there.)
-            desired_maximum_frame_latency: if vsync { 1 } else { 2 },
+            // (two frames in flight keep the graphics chip busy while the next frame is
+            // recorded: with one, the whole loop serialized behind the vsync'd drawable -
+            // on Apple silicon a frame cost GPU + CPU instead of the larger of the two,
+            // 50 ms where 24 of them were GPU. The price is one more frame of input
+            // delay, 33 ms at 60 Hz.)
+            desired_maximum_frame_latency: 2,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
         };
@@ -10096,7 +10281,8 @@ impl<'w> SurfaceState<'w> {
             return;
         }
         self.config.present_mode = mode;
-        self.config.desired_maximum_frame_latency = if enabled { 1 } else { 2 };
+        // (two frames in flight: see `new_with`)
+        self.config.desired_maximum_frame_latency = 2;
         self.surface.configure(&renderer.device, &self.config);
     }
 }
@@ -10580,6 +10766,25 @@ mod tests {
     }
 
     #[test]
+    fn noop_backend_initializes_renderer() {
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = wgpu::Backends::NOOP;
+        descriptor.backend_options.noop = wgpu::NoopBackendOptions { enable: true };
+        let instance = wgpu::Instance::new(descriptor);
+        let res = pollster::block_on(Renderer::new_with(
+            &instance,
+            None,
+            Some(wgpu::TextureFormat::Rgba8UnormSrgb),
+            RenderOptions {
+                msaa: 2,
+                shadow_size: 1024,
+                ..Default::default()
+            },
+        ));
+        assert!(res.is_ok(), "renderer should initialize on noop backend: {:?}", res.err());
+    }
+
+    #[test]
     fn omsi_render_phases_are_monotonic_and_complete() {
         assert_eq!(
             RenderPhase::DRAW_ORDER.map(|phase| phase as usize),
@@ -10623,8 +10828,16 @@ mod tests {
         }
         // never below half size
         assert_eq!(scene_scale_for(0.0, 16384, 16384), 0.5);
-        // what is asked for, within 0.5..1
-        assert_eq!(scene_scale_for(0.75, 3200, 1800), 0.75);
+        // what is asked for, within 0.5..1 - on a Mac or a phone a scale over the pixel
+        // budget is capped like the automatic one
+        let s = scene_scale_for(0.75, 3200, 1800);
+        if cfg!(target_os = "macos") || cfg!(target_os = "android") {
+            assert!((s - 0.697).abs() < 0.01, "{s}");
+            assert!((3200.0 * s * 1800.0 * s - AUTO_SCALE_PIXELS).abs() < 1.0);
+        } else {
+            assert_eq!(s, 0.75);
+        }
+        // a small window under the budget keeps what it asked for
         assert_eq!(scene_scale_for(0.3, 1600, 900), 0.5);
         assert_eq!(scene_scale_for(1.4, 1600, 900), 1.0);
     }
