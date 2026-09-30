@@ -1,5 +1,6 @@
 use super::upscaler::DlssQuality;
 
+#[derive(Debug, Clone, Copy)]
 pub struct DlssSettings {
     pub enabled: bool,
     pub quality: DlssQuality,
@@ -13,6 +14,41 @@ impl Default for DlssSettings {
             quality: DlssQuality::Quality,
             sharpness: 0.0,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DlssInput {
+    pub width: u32,
+    pub height: u32,
+    pub render_scale: f32,
+    pub near_plane: f32,
+    pub far_plane: f32,
+}
+
+impl DlssInput {
+    pub fn new(
+        width: u32,
+        height: u32,
+        render_scale: f32,
+        near_plane: f32,
+        far_plane: f32,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            render_scale,
+            near_plane,
+            far_plane,
+        }
+    }
+
+    pub fn render_width(&self) -> u32 {
+        ((self.width as f32) * self.render_scale).round() as u32
+    }
+
+    pub fn render_height(&self) -> u32 {
+        ((self.height as f32) * self.render_scale).round() as u32
     }
 }
 
@@ -35,5 +71,29 @@ impl DlssRenderer {
 
     pub fn render_scale(&self) -> f32 {
         self.settings.quality.render_scale()
+    }
+
+    pub fn settings(&self) -> DlssSettings {
+        self.settings
+    }
+
+    pub fn set_settings(&mut self, settings: DlssSettings) {
+        self.settings = settings;
+    }
+
+    pub fn input(
+        &self,
+        width: u32,
+        height: u32,
+        near_plane: f32,
+        far_plane: f32,
+    ) -> DlssInput {
+        DlssInput::new(
+            width,
+            height,
+            self.render_scale(),
+            near_plane,
+            far_plane,
+        )
     }
 }
