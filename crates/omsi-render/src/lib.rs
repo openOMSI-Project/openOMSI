@@ -1328,6 +1328,8 @@ pub struct RenderOptions {
     /// The materials' reflection maps (`[matl_envmap]`: the shine of paint, chrome and
     /// glass). Off, nothing mirrors the sky photo - some players find it too strong.
     pub reflections: bool,
+    pub upscaler: Upscaler,
+    pub dlss_quality: DlssQuality,
 }
 
 impl Default for RenderOptions {
