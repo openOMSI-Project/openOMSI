@@ -889,12 +889,12 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
         pv.devices = Some(crate::controllers::parse_cfg(&text));
     }
     // what the devices do now (and a button pressed while one is awaited)
-    let mut pressed: Option<(String, usize)> = None;
+    let mut pressed: Vec<(String, usize)> = Vec::new();
     let mut connected: Vec<crate::controllers::Connected> = Vec::new();
     if let Some(io) = pv.io.as_mut() {
         for (name, n, down) in io.poll() {
             if down {
-                pressed = Some((name, n));
+                pressed.push((name, n));
             }
         }
         connected = io.connected();
@@ -1111,7 +1111,7 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
         pv.dirty = true;
     }
     // a button pressed on the device: its line (added up to it)
-    if let Some((name, n)) = pressed {
+    if let Some((name, n)) = pressed.into_iter().find(|(name, _)| crate::controllers::names_match(&d.name, name)) {
         if crate::controllers::names_match(&d.name, &name) && n < crate::controllers::HAT_BUTTONS + 16 {
             while d.buttons.len() <= n {
                 d.buttons.push((String::new(), "0".into()));

@@ -251,8 +251,10 @@ impl Devices {
                 let pad = g.gamepad(ev.id);
                 match ev.event {
                     EventType::Connected => log::info!("game controller connected: {}", pad.name()),
-                    // (on Windows DirectInput tells the buttons of every device)
-                    EventType::ButtonPressed(_, code) | EventType::ButtonReleased(_, code) if !di => {
+                    // DirectInput handles wheels on Windows; system-mapped gamepads
+                    // such as Xbox controllers are listed through gilrs.
+                    EventType::ButtonPressed(_, code) | EventType::ButtonReleased(_, code)
+                        if use_gilrs_buttons(di, pad.mapping_source() == gilrs::MappingSource::Driver) => {
                         out.push((pad.name().to_string(), button_number(&pad, code), matches!(ev.event, EventType::ButtonPressed(..))));
                     }
                     _ => {}
@@ -328,6 +330,10 @@ impl Devices {
         }
         v
     }
+}
+
+fn use_gilrs_buttons(direct_input: bool, system_gamepad: bool) -> bool {
+    !direct_input || system_gamepad
 }
 
 /// A DirectInput name of an Xbox-type pad (which gilrs lists with the system's layout).
@@ -845,6 +851,13 @@ mod tests {
         assert!(!super::names_match("", "x"));
         assert!(super::names_match("Кнопочная панель", "кнопочная  панель"));
         assert!(!super::names_match("Кнопочная панель", "Руль"));
+    }
+
+    #[test]
+    fn system_gamepad_buttons_work_alongside_direct_input_wheels() {
+        assert!(super::use_gilrs_buttons(true, true));
+        assert!(!super::use_gilrs_buttons(true, false));
+        assert!(super::use_gilrs_buttons(false, false));
     }
 }
 
