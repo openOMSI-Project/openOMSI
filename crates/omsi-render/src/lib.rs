@@ -1328,7 +1328,6 @@ pub struct RenderOptions {
     /// The materials' reflection maps (`[matl_envmap]`: the shine of paint, chrome and
     /// glass). Off, nothing mirrors the sky photo - some players find it too strong.
     pub reflections: bool,
-    
     pub upscaler: Upscaler,
     pub dlss_quality: DlssQuality,
 
@@ -1337,7 +1336,7 @@ pub struct RenderOptions {
 impl Default for RenderOptions {
     fn default() -> Self {
         Self {
-            msaa: MSAA,
+             msaa: MSAA,
             anisotropy: 8,
             shadow_size: SHADOW_SIZE,
             ssao: true,

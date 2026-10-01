@@ -97,3 +97,22 @@ impl DlssRenderer {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dlss_input_calculates_render_resolution() {
+        let input = DlssInput::new(
+            1920,
+            1080,
+            0.67,
+            0.1,
+            1000.0,
+        );
+
+        assert_eq!(input.render_width(), 1286);
+        assert_eq!(input.render_height(), 724);
+    }
+}

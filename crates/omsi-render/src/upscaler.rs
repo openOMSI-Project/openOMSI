@@ -24,3 +24,17 @@ impl DlssQuality {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dlss_quality_render_scales() {
+        assert_eq!(DlssQuality::UltraPerformance.render_scale(), 0.33);
+        assert_eq!(DlssQuality::Performance.render_scale(), 0.50);
+        assert_eq!(DlssQuality::Balanced.render_scale(), 0.58);
+        assert_eq!(DlssQuality::Quality.render_scale(), 0.67);
+        assert_eq!(DlssQuality::UltraQuality.render_scale(), 0.77);
+    }
+}
