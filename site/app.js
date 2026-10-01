@@ -1,6 +1,6 @@
 // openOMSI website: a small hash router that shows the overview, the download page and the
 // Markdown files of docs/ (copied next to this page by .github/workflows/pages.yml).
-const REPO = "turbo-devv/openOMSI";
+const REPO = "openOMSI-Project/openOMSI";
 const DOCS = [
   { file: "USER_GUIDE", title: "User guide", icon: "sports_esports" },
   { file: "ANDROID", title: "Android & mobile", icon: "smartphone" },

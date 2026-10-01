@@ -31,9 +31,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// The project on GitHub.
-pub const REPO: &str = "turbo-devv/openOMSI";
+pub const REPO: &str = "openOMSI-Project/openOMSI";
 pub const REPO_URL: &str = "https://github.com/openOMSI-Project/openOMSI";
-const LATEST_API: &str = "https://api.github.com/repos/turbo-devv/openOMSI/releases/latest";
+const LATEST_API: &str = "https://api.github.com/repos/openOMSI-Project/openOMSI/releases/latest";
 
 /// A release newer than this build, with the file for this platform.
 #[derive(Clone, Debug, PartialEq)]

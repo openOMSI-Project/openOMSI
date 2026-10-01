@@ -45,5 +45,5 @@ The version badge at the top of the README always shows the newest release.
 
 [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) publishes `site/` together with
 the Markdown files of `docs/` to GitHub Pages
-(https://turbo-devv.github.io/openOMSI/) whenever they change on `main`. The site renders
+(https://openOMSI-Project.github.io/openOMSI/) whenever they change on `main`. The site renders
 the Markdown in the browser, so a documentation change is one edit in `docs/`.

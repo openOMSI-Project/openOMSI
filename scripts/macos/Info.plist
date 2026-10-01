@@ -6,7 +6,7 @@
 	<key>CFBundleName</key><string>openOMSI</string>
 	<key>CFBundleExecutable</key><string>openomsi</string>
 	<key>CFBundleIconFile</key><string>openomsi</string>
-	<key>CFBundleIdentifier</key><string>io.github.turbo-devv.openomsi</string>
+	<key>CFBundleIdentifier</key><string>io.github.openOMSI-Project.openomsi</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>@VERSION@</string>
 	<key>CFBundleVersion</key><string>@VERSION@</string>
