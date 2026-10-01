@@ -750,6 +750,10 @@ pub struct MaterialExtra {
     /// `[nomaplighting]`: the map's lamps (`[maplight]`) do not light it - a street lamp
     /// is not lit by its own light.
     pub no_map_lights: bool,
+    /// A `[tree]`'s leaf cards: the vanilla picture leaves the map's lamps off them, as
+    /// OMSI 2 shows a tree standing right under a street lamp dark; Vanilla+ and Enhanced
+    /// still light them.
+    pub tree: bool,
     /// 1 when the texture's `.cfg` sidecar carries `[moisture]`/`[puddles]`: the road of a
     /// junction or crossing object gets wet and collects puddles like a spline's.
     pub moisture: f32,
@@ -1085,6 +1089,9 @@ struct PassPipelines {
 /// `Renderer::new`.
 pub static ADAPTER_TEXTURE_MB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// The device runs on OpenGL (set in `Renderer::new`).
+static GL_BACKEND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// The card's own memory in MB where the system tells it: Windows, through DXGI, for
 /// whichever backend draws (wgpu does not say).
 fn dedicated_vram_mb(info: &wgpu::AdapterInfo) -> Option<u64> {
@@ -1116,7 +1123,7 @@ pub struct Renderer {
     camera_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
     pass: PassPipelines,
-    hdr_pass: PassPipelines,
+    hdr_pass: Option<PassPipelines>,
     corona_bind_group: wgpu::BindGroup,
     /// The smoke texture (`Texture/rauch.tga`, see [`Renderer::set_smoke_texture`]).
     smoke_bind_group: wgpu::BindGroup,
@@ -1530,6 +1537,7 @@ impl Renderer {
         // 4 GB no SSAO and at most 2x. (The settings' "High" on such a machine ran out of
         // memory or at a dozen frames a second.) OMSI_FULL_GPU=1 asks for the settings as
         // they are.
+        GL_BACKEND.store(info.backend == wgpu::Backend::Gl, std::sync::atomic::Ordering::Relaxed);
         let full = omsi_cfg::env::var_os("OMSI_FULL_GPU").is_some();
         let weak = !full
             && (info.backend == wgpu::Backend::Gl
@@ -2714,12 +2722,13 @@ impl Renderer {
             sky_pipeline: sky_pipeline_for(format, "fs_main"),
         };
         // the enhanced path: its own lighting in all three
-        let hdr_pass = PassPipelines {
+        let leave_out_enhanced = options.no_enhanced && (cfg!(target_os = "android") || adapter_name.to_ascii_lowercase().contains("opengl") || GL_BACKEND.load(std::sync::atomic::Ordering::Relaxed));
+        let hdr_pass = (!leave_out_enhanced).then(|| PassPipelines {
             pipelines: scene_pipelines(hdr_format, "fs_enhanced"),
             corona_pipeline: corona_pipeline_for(hdr_format, "fs_enhanced", additive),
             smoke_pipeline: corona_pipeline_for(hdr_format, "fs_smoke_enhanced", alpha_blend),
             sky_pipeline: sky_pipeline_for(hdr_format, "fs_enhanced"),
-        };
+        });
         let sky_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
@@ -4819,8 +4828,9 @@ impl Renderer {
             color,
             params: [
                 mode,
-                // 1 unlit (0.9 a mirror's own picture); 0.25 lit by everything but the map's lamps
-                if mirror { 0.9 } else if unlit { 1.0 } else if lm_mapped { 0.35 } else if extra.no_map_lights { 0.25 } else { 0.0 },
+                // 1 unlit (0.9 a mirror's own picture); 0.25 lit by everything but the map's
+                // lamps; 0.15 a tree, not lit by the map's lamps in the vanilla picture
+                if mirror { 0.9 } else if unlit { 1.0 } else if lm_mapped { 0.35 } else if extra.no_map_lights { 0.25 } else if extra.tree { 0.15 } else { 0.0 },
                 if transmap.is_some() { 1.0 } else { 0.0 },
                 if transmap.map(|t| t.1).unwrap_or(false) {
                     1.0
@@ -7126,12 +7136,12 @@ impl Renderer {
             && (width, height) == (full_w, full_h)
             && self.options.fxaa
             && self.options.msaa <= 1
-            && !(lighting.enhanced && omsi_cfg::env::var_os("OMSI_NO_ENHANCED").is_none())
+            && !(lighting.enhanced && self.hdr_pass.is_some() && omsi_cfg::env::var_os("OMSI_NO_ENHANCED").is_none())
             && omsi_cfg::env::var_os("OMSI_NO_FXAA").is_none();
         // The rain on the glass shows last frame's picture through its drops: the Enhanced
         // path keeps it anyway (its glow's first level), the plain graphics draw into a
         // texture while it rains and keep a copy at half the size (see `glass_prev`).
-        let enhanced_view = lighting.enhanced && omsi_cfg::env::var_os("OMSI_NO_ENHANCED").is_none();
+        let enhanced_view = lighting.enhanced && self.hdr_pass.is_some() && omsi_cfg::env::var_os("OMSI_NO_ENHANCED").is_none();
         let glass_on = with_overlays
             && scene.glass_slot.is_some()
             && (lighting.rain > 0.001 || lighting.wetness > 0.02)
@@ -7153,7 +7163,7 @@ impl Renderer {
         // shader, 12.7 ms of GPU time for one 256-pixel mirror against 5.8 ms for the whole
         // window; plainly shaded it is 0.6 ms, and a mirror's small picture shows no
         // difference worth that. `OMSI_MIRROR_ENHANCED=1` draws them enhanced again.
-        let enhanced_frame = lighting.enhanced && omsi_cfg::env::var_os("OMSI_NO_ENHANCED").is_none() && (with_overlays || omsi_cfg::env::var_os("OMSI_MIRROR_ENHANCED").is_some());
+        let enhanced_frame = lighting.enhanced && self.hdr_pass.is_some() && omsi_cfg::env::var_os("OMSI_NO_ENHANCED").is_none() && (with_overlays || omsi_cfg::env::var_os("OMSI_MIRROR_ENHANCED").is_some());
         // the mirrors are drawn by the same path as the window (their picture graded with
         // the window's exposure, see the post passes)
         let enhanced = enhanced_frame;
@@ -8206,7 +8216,7 @@ impl Renderer {
         // more GPU time than it saved on the CPU.)
         let main_bundles = if omsi_cfg::env::var_os("OMSI_NO_BUNDLES").is_none() {
             let (pp, format) = if enhanced {
-                (&self.hdr_pass, wgpu::TextureFormat::Rgba16Float)
+                (self.hdr_pass.as_ref().expect("enhanced pipelines"), wgpu::TextureFormat::Rgba16Float)
             } else {
                 (&self.pass, self.format)
             };
@@ -8564,7 +8574,7 @@ impl Renderer {
                         }
                     }
                 };
-            let pp = if enhanced { &self.hdr_pass } else { &self.pass };
+            let pp = if enhanced { self.hdr_pass.as_ref().expect("enhanced pipelines") } else { &self.pass };
             // the enhanced pass's screen mask beside the picture (see `MASK_FORMAT`)
             let mask_attachment = hdr.map(|h| wgpu::RenderPassColorAttachment {
                 view: h.mask_msaa.as_ref().unwrap_or(&h.mask),

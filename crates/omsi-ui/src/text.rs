@@ -363,6 +363,15 @@ mod fallback_tests {
 mod glyph_tests {
     use super::*;
     #[test]
+    fn portuguese_letters_are_present_in_roboto() {
+        let f = ab_glyph::FontRef::try_from_slice(ROBOTO).unwrap();
+        // PT-BR + PT-PT: acute, grave, circumflex, tilde and cedilla, both cases.
+        for c in "áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ".chars() {
+            assert_ne!(f.glyph_id(c).0, 0, "missing Portuguese glyph {c}");
+        }
+    }
+
+    #[test]
     fn missing_symbols_are_substituted() {
         let f = ab_glyph::FontRef::try_from_slice(ROBOTO).unwrap();
         for c in "→★⚠✓▸ Bauernhof · 12 °C - ДёЖ".chars() {

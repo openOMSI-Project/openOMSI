@@ -117,7 +117,11 @@ impl MeshAnimator {
 /// it (the NL202's changer, ticket printer and IBIS keys ride on the cash desk, which
 /// swings with the driver's door). Sets the parent of every mesh, `defs` being the
 /// meshes in the order the animators have them. A name nobody carries leaves the mesh
-/// on its own, like the original.
+/// on its own, like the original. The parent is looked for among the meshes before this
+/// one, the last of them that carries the name (Omsi.exe resolves `[animparent]` as it
+/// reads the file, 0x5f1b3x: door variants that reuse their arms' names hung the later
+/// variant's leaves on the first variant's arm, #348); one listed only after it is taken
+/// as a last resort.
 pub fn link_parents(animators: &mut [MeshAnimator], defs: &[&MeshDef]) {
     // `OMSI_NO_ANIMPARENT=1`: every mesh on its own, for an A/B
     if omsi_cfg::env::var_os("OMSI_NO_ANIMPARENT").is_some() {
@@ -125,7 +129,9 @@ pub fn link_parents(animators: &mut [MeshAnimator], defs: &[&MeshDef]) {
     }
     for (i, a) in animators.iter_mut().enumerate() {
         a.parent = defs.get(i).and_then(|d| d.anim_parent.as_deref()).map(str::trim).filter(|n| !n.is_empty()).and_then(|name| {
-            defs.iter().position(|d| d.mesh_ident.as_deref().map(|m| m.trim().eq_ignore_ascii_case(name)).unwrap_or(false))
+            let named = |d: &&&MeshDef| d.mesh_ident.as_deref().map(|m| m.trim().eq_ignore_ascii_case(name)).unwrap_or(false);
+            // (one only listed after it: taken all the same, as before)
+            defs[..i.min(defs.len())].iter().rposition(|d| named(&d)).or_else(|| defs.iter().position(|d| named(&d)))
         }).filter(|p| *p != i);
     }
 }
@@ -205,5 +211,13 @@ mod tests {
         let mut a = vec![animator(None), animator(None), animator(None)];
         link_parents(&mut a, &[&key, &desk, &lost]);
         assert_eq!(a.iter().map(|a| a.parent).collect::<Vec<_>>(), vec![Some(1), None, None]);
+        // two door variants with the same arm names: each leaf hangs on the arm before it
+        let arm_a = MeshDef { mesh_ident: Some("arm".into()), ..Default::default() };
+        let leaf_a = MeshDef { anim_parent: Some("arm".into()), ..Default::default() };
+        let arm_b = MeshDef { mesh_ident: Some("arm".into()), ..Default::default() };
+        let leaf_b = MeshDef { anim_parent: Some("arm".into()), ..Default::default() };
+        let mut a = vec![animator(None), animator(None), animator(None), animator(None)];
+        link_parents(&mut a, &[&arm_a, &leaf_a, &arm_b, &leaf_b]);
+        assert_eq!(a.iter().map(|a| a.parent).collect::<Vec<_>>(), vec![None, Some(0), None, Some(2)]);
     }
 }

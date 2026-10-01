@@ -58,6 +58,13 @@ pub(crate) struct OnFoot {
     /// The camera as it eases towards where it belongs.
     pub eye: Option<DVec3>,
     pub eye_yaw: f32,
+    /// How far the eyes' glide out of the cab's camera was behind the walker's head when it
+    /// ended: let go of over a third of a second, so that the camera does not jump the
+    /// last bit onto the head (the bus's own placement of the eyes takes over there).
+    pub lag: DVec3,
+    /// Just got up from the driver's seat: seconds (1 → 0) the eyes take to leave the cab's
+    /// camera, slowly at first, instead of jumping to where the walker's head is.
+    pub settle: f32,
     /// The view the player had in the bus (back to it at the wheel).
     pub view_before: String,
     /// The figure (a human type index, taken modulo their number).
@@ -306,6 +313,9 @@ impl App {
             pitch: -8.0,
             eye: self.camera.as_ref().map(|c| c.position),
             eye_yaw: self.camera.as_ref().map(|c| c.yaw).unwrap_or(face as f32),
+            lag: DVec3::ZERO,
+            // (only with the bus standing: at speed the eyes have to stay with it)
+            settle: if self.player.as_ref().is_some_and(|p| p.vehicle.physics.velocity_kmh().abs() < 3.0) { 1.0 } else { 0.0 },
             view_before: if self.view == "foot" { "driver".into() } else { self.view.clone() },
             kind,
             face_seat: false,
@@ -431,6 +441,8 @@ impl App {
             pitch: -5.0,
             eye: None,
             eye_yaw: heading as f32,
+            lag: DVec3::ZERO,
+            settle: 0.0,
             view_before: "driver".into(),
             kind: self.args.root.to_string_lossy().len() as u64 * 7 + 3,
             face_seat: false,
@@ -535,6 +547,10 @@ impl App {
             h.avatar_remove(AVATAR_KEY);
         }
         self.view = if f.view_before == "outside" || f.view_before == "driver" { f.view_before } else { "driver".into() };
+        // (the eyes glide from where the walker's were into the cab camera)
+        if self.view == "driver" {
+            self.cam_blend.entering = true;
+        }
         self.sync_view_look();
         self.look = (0.0, 0.0);
         // (the walking keys' help goes with the walking: it stood over the cab view)
@@ -869,21 +885,21 @@ impl App {
                 let moving = f.vel.length() > 0.3;
                 if moving {
                     'buses: for bus in h.bus_ids_near(f.pos, 25.0) {
-                    for (inside, outside, _, open) in h.cabin_doors(bus) {
-                        // (only through a door that is open, whoever's bus it is)
-                        if !open || (outside.truncate() - f.pos.truncate()).length() > 0.9 {
-                            continue;
+                        for (inside, outside, _, open) in h.cabin_doors(bus) {
+                            // (only through a door that is open, whoever's bus it is)
+                            if !open || (outside.truncate() - f.pos.truncate()).length() > 0.9 {
+                                continue;
+                            }
+                            let Some((wi, _)) = h.cabin_world(bus, inside) else { continue };
+                            if (wi.truncate() - outside.truncate()).dot(f.vel) > 0.0 {
+                                // up the step into the bus, walked
+                                f.transit = Some(Transit::walk(f.pos, wi, Some((bus, inside))));
+                                f.lift = 0.0;
+                                f.vz = 0.0;
+                                stepped_in = true;
+                                break 'buses;
+                            }
                         }
-                        let Some((wi, _)) = h.cabin_world(bus, inside) else { continue };
-                        if (wi.truncate() - outside.truncate()).dot(f.vel) > 0.0 {
-                            // up the step into the bus, walked
-                            f.transit = Some(Transit::walk(f.pos, wi, Some((bus, inside))));
-                            f.lift = 0.0;
-                            f.vz = 0.0;
-                            stepped_in = true;
-                            break 'buses;
-                        }
-                    }
                     }
                 }
             }
@@ -971,17 +987,37 @@ impl App {
             let eye = body.map(|b| b.2).unwrap_or(f.pos + DVec3::new(0.0, 0.0, 1.62 + f.lift));
             let y = (f.yaw as f64).to_radians();
             let (want, want_yaw, want_pitch) = (eye + DVec3::new(y.sin(), y.cos(), 0.0) * 0.08, f.yaw, f.pitch);
-            let k = 1.0 - (-dt64 * 18.0).exp();
+            // just got up: 4 per second at first (a glide out of the cab's camera), then up to
+            // the walk's 18 over the second
+            let settling = f.settle > 0.0;
+            f.settle = (f.settle - dt).max(0.0);
+            let u = (1.0 - f.settle as f64).clamp(0.0, 1.0);
+            let rate = 4.0 + 14.0 * u * u * (3.0 - 2.0 * u);
+            let k = 1.0 - (-dt64 * rate).exp();
             let at = match f.eye {
                 Some(e) if (e - want).length() < 60.0 => e + (want - e) * k,
                 _ => want,
             };
             f.eye = Some(at);
+            // (what the glide is still behind by is kept while it lasts and let go of after:
+            // `foot_after_humans` puts the eyes on the head from then on, and without this
+            // the last bit of the way was one jump)
+            if settling {
+                f.lag = at - want;
+            } else {
+                f.lag *= (-dt64 * 9.0).exp();
+                if f.lag.length() < 0.001 {
+                    f.lag = DVec3::ZERO;
+                }
+            }
             let dy = ((want_yaw - f.eye_yaw + 540.0).rem_euclid(360.0)) - 180.0;
             f.eye_yaw = (f.eye_yaw + dy * k as f32).rem_euclid(360.0);
             cam.position = at;
             cam.yaw = f.eye_yaw;
             cam.pitch += (want_pitch - cam.pitch) * k as f32;
+            // (the cab's camera leans with the bus: the lean goes out of the picture with the
+            // rest of the glide)
+            cam.roll += (0.0 - cam.roll) * k as f32;
         }
         if omsi_cfg::env::var_os("OMSI_DEBUG_FOOT").is_some() && (self.total_frames % 30 == 0) {
             let body = self.humans.as_ref().and_then(|h| h.avatar_body(AVATAR_KEY));
@@ -996,7 +1032,7 @@ impl App {
     /// eyes and every stop jerked them forwards.
     pub(crate) fn foot_after_humans(&mut self) {
         let Some(f) = self.on_foot.as_mut() else { return };
-        if f.cam != FootCam::First || (f.seat.is_none() && f.inside.is_none()) {
+        if f.settle > 0.0 || f.cam != FootCam::First || (f.seat.is_none() && f.inside.is_none()) {
             return;
         }
         let Some(h) = self.humans.as_ref() else { return };
@@ -1007,7 +1043,7 @@ impl App {
         }
         let eye = h.avatar_body(AVATAR_KEY).map(|b| b.2).unwrap_or(f.pos + DVec3::new(0.0, 0.0, 1.62));
         let y = (f.eye_yaw as f64).to_radians();
-        let at = eye + DVec3::new(y.sin(), y.cos(), 0.0) * 0.08;
+        let at = eye + DVec3::new(y.sin(), y.cos(), 0.0) * 0.08 + f.lag;
         f.eye = Some(at);
         if let Some(cam) = self.camera.as_mut() {
             cam.position = at;

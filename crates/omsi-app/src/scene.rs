@@ -6284,7 +6284,7 @@ impl World {
                         if !gpu.trees.contains_key(&tkey) {
                             let dirs = texture_dirs(&self.root, &ot.model_dir);
                             let found = gpu.texture(renderer, scene, texture, &dirs, images);
-                            let m = renderer.add_material_night(
+                            let m = renderer.add_material_extra(
                                 scene,
                                 found.as_ref().map(|f| f.0),
                                 AlphaMode::Test,
@@ -6292,6 +6292,13 @@ impl World {
                                 false,
                                 None,
                                 None,
+                                None,
+                                None,
+                                [0.0; 3],
+                                omsi_render::MaterialExtra {
+                                    tree: true,
+                                    ..Default::default()
+                                },
                             );
                             let m = gpu.material(renderer, scene, m);
                             gpu.trees.insert(
@@ -8587,13 +8594,12 @@ impl World {
                 continue;
             }
             let dist = (o.pos - center).length();
-            // text textures from the script's strings, when it asks for them (and once at first)
+            // text textures from the script's strings whenever they change (`update` leaves
+            // an unchanged one alone): read only on `Refresh_Strings`, a board whose string
+            // was still empty at its first frame stayed blank for good (#367)
             if !o.texts.is_empty() {
-                let refresh = o.inst.take_refresh_strings();
+                let _ = o.inst.take_refresh_strings();
                 for (tex, st) in o.texts.iter_mut() {
-                    if !refresh && st.last_text.is_some() {
-                        continue;
-                    }
                     let text = o.inst.str_var(st.def.variable.trim()).to_string();
                     if st.update(&text) {
                         let (w, h) = (st.def.width.max(1) as u32, st.def.height.max(1) as u32);
@@ -9176,12 +9182,13 @@ pub fn sync_vehicle_textures(
     let mut rebound = Vec::new();
     for (i, st) in vehicle.host.script_textures.iter_mut().enumerate() {
         // (far away what the scripts redraw goes up every half second: `displays_far`)
-        if st.dirty && !st.locked && !render.displays_far {
+        if !render.displays_far {
             if let Some(Some(tex)) = render.script_textures.get(i) {
+                let Some(rgba) = st.take_upload() else { continue };
                 let img = Image {
                     width: st.width,
                     height: st.height,
-                    rgba: st.rgba.clone(),
+                    rgba,
                     has_alpha: true,
                 };
                 if st.mipmaps {
@@ -9192,7 +9199,6 @@ pub fn sync_vehicle_textures(
                     renderer.update_texture(scene, *tex, &img);
                 }
             }
-            st.dirty = false;
         }
     }
     renderer.rebind_textures(scene, &rebound);
@@ -9318,6 +9324,7 @@ fn material_extra(
         screen: false,
         led: false,
         no_map_lights: false,
+        tree: false,
         moisture: 0.0,
         transmap_declared: ov.iter().any(|o| o.transmap.is_some()),
         // (the last addressing command of the slot decides; the colour is given in bytes)
@@ -9589,6 +9596,8 @@ pub struct VariantSlot {
     pub slot: usize,
     pub base: MaterialId,
     pub item: MaterialId,
+    /// Items 2, 3, ... of the first `[matl_change]`.
+    pub more: Vec<MaterialId>,
     /// `[matl_change]` variable: at 1 (rounded) the item variant shows.
     pub var: String,
     /// The variables of the slot's further `[matl_change]`s: the item shows while any of
@@ -9717,6 +9726,12 @@ impl VariantSlot {
             self.entries[i.clamp(0, self.entries.len() as i64 - 1) as usize]
         };
         let x = self.var.trim().parse().ok().or_else(|| var(&self.var)).unwrap_or(0.0);
+        if self.entries.is_empty() && x.is_finite() {
+            let n = x.round_ties_even();
+            if n >= 2.0 && ((n - 2.0) as usize) < self.more.len() {
+                return self.more[(n - 2.0) as usize];
+            }
+        }
         if change_picks_item(x) || self.more_vars.iter().any(|v| var(v).is_some_and(change_picks_item)) {
             item
         } else {
@@ -9732,6 +9747,8 @@ pub struct SlotSpec {
     base: Look,
     /// The `[matl_item]` half.
     item: Option<Look>,
+    /// The first `[matl_change]`'s items after its first (shown at 2, 3, ...).
+    more: Vec<Look>,
 }
 
 /// How one half of a material slot (the plain material or its `[matl_item]`) is drawn.
@@ -9855,10 +9872,30 @@ impl SlotSpec {
         if let Some(it) = &mut self.item {
             it.lightmap = tex;
         }
+        for it in &mut self.more {
+            it.lightmap = tex;
+        }
+    }
+
+    /// The further items' materials (each made last, so that `recycle` can move it).
+    pub fn build_more(
+        &self,
+        renderer: &Renderer,
+        scene: &mut Scene,
+        tex: Option<TextureId>,
+        mut recycle: impl FnMut(&mut Scene, MaterialId) -> MaterialId,
+    ) -> Vec<MaterialId> {
+        self.more
+            .iter()
+            .map(|l| {
+                let m = l.add(renderer, scene, tex);
+                recycle(scene, m)
+            })
+            .collect()
     }
 
     pub fn per_vehicle(&self) -> bool {
-        self.base.dyn_tex.any() || self.item.as_ref().is_some_and(|i| i.dyn_tex.any())
+        self.base.dyn_tex.any() || self.item.as_ref().is_some_and(|i| i.dyn_tex.any()) || self.more.iter().any(|i| i.dyn_tex.any())
     }
 
     pub fn for_vehicle(
@@ -9869,6 +9906,7 @@ impl SlotSpec {
         SlotSpec {
             base: self.base.for_vehicle(text, script),
             item: self.item.as_ref().map(|i| i.for_vehicle(text, script)),
+            more: self.more.iter().map(|i| i.for_vehicle(text, script)).collect(),
         }
     }
 }
@@ -10700,7 +10738,9 @@ impl World {
                     .collect();
                 own_materials.extend([base, item]);
                 own_materials.extend(entries.iter().flat_map(|e| [e.0, e.1]));
-                (v.base, v.item, v.entries, v.spec) = (base, item, entries, spec);
+                let more = spec.build_more(renderer, scene, v.base_tex, |scene, m| gpu.material(renderer, scene, m));
+                own_materials.extend(more.iter().copied());
+                (v.base, v.item, v.more, v.entries, v.spec) = (base, item, more, entries, spec);
                 if let Some(l) = &mut v.lights {
                     l.plain = (base, item);
                 }
@@ -11173,7 +11213,24 @@ impl World {
                     // faces backwards, away from the sun) is what made mirrors look black
                     let unlit = mirror_index(&tex_name).is_some();
                     // [matl_item] variant: same slot with the item's own maps / colours
-                    let item_spec = if change_var.is_some() && !ov_item.is_empty() {
+                    // (Omsi.exe keeps every [matl_item] of a [matl_change] as a material of its
+                    // own and shows item round(x): a door button at 2 - lit while its door is
+                    // open - showed the plain dark material, and item 2's maps leaked into item
+                    // 1, #352. The first item is still made of all the items' properties, as
+                    // before; the others each of their own.)
+                    let later_items: Vec<&MaterialDef> = {
+                        let mut changes = 0;
+                        let mut first = Vec::new();
+                        for o in &ov_all {
+                            if !o.item && o.change.is_some() {
+                                changes += 1;
+                            } else if o.item && changes == 1 {
+                                first.push(*o);
+                            }
+                        }
+                        first.into_iter().skip(1).collect()
+                    };
+                    let mut item_look = |ov_item: &Vec<&MaterialDef>| -> Look {
                         let mut find_tex = |t: &str| -> Option<TextureId> { tex!(t, &dirs_ref) };
                         let it_night = ov_item.iter().find_map(|o| o.nightmap.clone()).and_then(|t| find_tex(&t)).or(night);
                         let it_light = ov_item.iter().find_map(|o| o.lightmap.clone()).and_then(|(t, _)| find_tex(&t)).or(lightmap);
@@ -11209,10 +11266,10 @@ impl World {
                             it_extra.no_z_check = false;
                         }
                         let it_dyn = DynTex { text: text_item, script: script_item, script_trans: it_script_trans, clamp };
-                        Some(Look { alpha: it_alpha, color: it_color, emissive: it_emissive, unlit: false, diffuse: None, transmap: it_trans, night: it_night, lightmap: it_light, envmap, extra: it_extra, dyn_tex: it_dyn })
-                    } else {
-                        None
+                        Look { alpha: it_alpha, color: it_color, emissive: it_emissive, unlit: false, diffuse: None, transmap: it_trans, night: it_night, lightmap: it_light, envmap, extra: it_extra, dyn_tex: it_dyn }
                     };
+                    let item_spec = (change_var.is_some() && !ov_item.is_empty()).then(|| item_look(&ov_item));
+                    let more_items: Vec<Look> = if item_spec.is_some() { later_items.iter().map(|o| item_look(&vec![*o])).collect() } else { Vec::new() };
                     if only.is_some() {
                         if let Some(it) = &item_spec {
                             log::info!("  {} slot {slot} item (switched by {:?}): alpha={:?} night={:?} light={:?} switched={}", def.file, change_var, it.alpha, it.night, it.lightmap, it.extra.night_switched);
@@ -11221,7 +11278,7 @@ impl World {
                     // [matl_noZwrite]: glass, the rain film and the dirt layer are blended
                     // and must not write depth, or everything blended behind them is thrown
                     // away and the window turns into a pale hole in the world
-                    let spec = SlotSpec { base: Look { alpha, color, emissive, unlit, diffuse: None, transmap, night, lightmap, envmap, extra, dyn_tex: base_dyn }, item: item_spec };
+                    let spec = SlotSpec { base: Look { alpha, color, emissive, unlit, diffuse: None, transmap, night, lightmap, envmap, extra, dyn_tex: base_dyn }, item: item_spec, more: more_items };
                     // [texchanges]: the texture named in the mesh is only a key - the master
                     // of that name holds the textures a script variable switches between
                     // (the SD200's roller blinds, the seat covers of the AI interior).
@@ -11250,6 +11307,8 @@ impl World {
                         })
                         .collect();
                     materials.extend(entries.iter().flat_map(|e| [e.0, e.1]));
+                    let more = spec.build_more(renderer, scene, base_tex, |scene, m| self.gpu.lock().material(renderer, scene, m));
+                    materials.extend(more.iter().copied());
                     // [matl_freetex]: the file is only known at run time (the destination
                     // roller builds its path from the map's depot and terminus strings)
                     let free = ov.iter().find_map(|o| o.freetex.clone()).map(|(_, var)| FreeTex {
@@ -11279,9 +11338,9 @@ impl World {
                     };
                     if spec.item.is_some() || !entries.is_empty() || free.is_some() {
                         let tex_var = master.map(|m| m.variable.clone()).unwrap_or_default();
-                        variants.push(VariantSlot { mesh: instances.len(), slot, base, item, var: change_var.unwrap_or_default(), more_vars: change_vars.iter().skip(1).cloned().collect(), entries, tex_var, free, spec, base_tex, entry_tex, lights: multi_light(base, item) });
+                        variants.push(VariantSlot { mesh: instances.len(), slot, base, item, more, var: change_var.unwrap_or_default(), more_vars: change_vars.iter().skip(1).cloned().collect(), entries, tex_var, free, spec, base_tex, entry_tex, lights: multi_light(base, item) });
                     } else if let Some(lights) = multi_light(base, item) {
-                        variants.push(VariantSlot { mesh: instances.len(), slot, base, item, var: String::new(), more_vars: Vec::new(), entries, tex_var: String::new(), free: None, spec, base_tex, entry_tex, lights: Some(lights) });
+                        variants.push(VariantSlot { mesh: instances.len(), slot, base, item, more: Vec::new(), var: String::new(), more_vars: Vec::new(), entries, tex_var: String::new(), free: None, spec, base_tex, entry_tex, lights: Some(lights) });
                     } else if base_dyn.any() {
                         dyn_slots.push(DynSlot { mesh: instances.len(), slot, text: text_slot, script: script_slot, script_trans, tex, alpha, transmap, night, lightmap, envmap, clamp, extra, color, emissive });
                     }

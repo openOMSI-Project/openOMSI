@@ -815,7 +815,7 @@ impl ApplicationHandler for App {
                     // from the driver's seat the figure stays in the mirrors
                     // (from the driver's seat only the mirrors show him)
                     // (out of the seat: nobody at the wheel)
-                    p.sync_driver(r, scene, dt, self.settings.driver && self.on_foot.is_none(), self.view == "driver");
+                    p.sync_driver_hands(r, scene, dt, self.settings.driver && self.on_foot.is_none(), self.view == "driver", self.settings.hands_in_cab);
                     if self.view != "free" && self.view != "foot" {
                         let key = crate::input_script::look_key_of(&self.view, Some(p.cam_choice));
                         crate::input_script::swap_view_look(&mut self.look, &mut self.view_looks, &mut self.look_view, &key);
@@ -837,24 +837,115 @@ impl ApplicationHandler for App {
                             // degrees every frame: taken from the last frame's camera, the
                             // zoom was applied on top of itself and ran off to its narrowest
                             // or widest at once)
+                            let prev_cam = *cam;
                             let base = omsi_render::Camera { fov_deg: 60.0, ..*cam };
-                            let mut cam = p.camera_look(&self.view, &base, self.look, self.orbit);
-                            if let Some(mut t) = tracked {
+                            // what turns the bus's own camera into the picture: the head's turn,
+                            // the field of view setting and the zoom (for the camera left in a
+                            // switch as well as for the one taken)
+                            let tracked_rot = tracked.map(|mut t| {
                                 for (k, axis) in ["yaw", "pitch", "roll"].iter().enumerate() {
                                     if self.settings.head_tracking_invert.contains(axis) {
                                         t.rot[k] = -t.rot[k];
                                     }
                                 }
-                                cam.yaw += t.rot[0].clamp(-170.0, 170.0);
-                                cam.pitch = (cam.pitch + t.rot[1].clamp(-80.0, 80.0)).clamp(-89.0, 89.0);
-                                cam.roll += t.rot[2].clamp(-60.0, 60.0);
-                            }
-                            // Settings → Field of view (0: the bus's own cameras)
-                            if self.settings.fov >= 20.0 {
-                                cam.fov_deg = self.settings.fov.min(120.0);
-                            }
-                            if let Some(z) = self.view_zoom.get(&self.view) {
-                                cam.fov_deg = (cam.fov_deg * z).clamp(8.0, 120.0);
+                                t.rot
+                            });
+                            let fov_setting = self.settings.fov;
+                            let zoom = self.view_zoom.get(&self.view).copied();
+                            let finish = move |c: &mut omsi_render::Camera| {
+                                if let Some(r) = tracked_rot {
+                                    c.yaw += r[0].clamp(-170.0, 170.0);
+                                    c.pitch = (c.pitch + r[1].clamp(-80.0, 80.0)).clamp(-89.0, 89.0);
+                                    c.roll += r[2].clamp(-60.0, 60.0);
+                                }
+                                // Settings → Field of view (0: the bus's own cameras)
+                                if fov_setting >= 20.0 {
+                                    c.fov_deg = fov_setting.min(120.0);
+                                }
+                                if let Some(z) = zoom {
+                                    c.fov_deg = (c.fov_deg * z).clamp(8.0, 120.0);
+                                }
+                            };
+                            let mut cam = p.camera_look(&self.view, &base, self.look, self.orbit);
+                            finish(&mut cam);
+                            // Smooth cockpit camera switch (arrow keys): the glide mixes the camera left and the one
+                            // taken in the bus's own frame (smootherstep over CAM_BLEND_SECS); the bus's motion and
+                            // the head go on top afterwards, so nothing of the last frame's picture is needed.
+                            {
+                                let inside_view = self.view == "driver";
+                                let entering = std::mem::take(&mut self.cam_blend.entering);
+                                let left = self
+                                    .cam_blend
+                                    .key
+                                    .as_ref()
+                                    .is_some_and(|k| k.0 == self.view && k.1 .0 != p.cam_choice.0);
+                                let target = if inside_view { p.driver_local(self.look) } else { None };
+                                let mut started = false;
+                                if let Some(to) = target.as_ref() {
+                                    if (entering || left) && crate::app::CAM_BLEND_SECS > 0.0 && self.settings.driverview_smooth {
+                                        let from = if entering {
+                                            // (what `driver_world` adds to every frame - the head and the seat - is
+                                            // taken off the walker's eyes, and the zoom `finish` applies again off
+                                            // its field of view: the first frame then is the walker's picture)
+                                            let mut f = p.local_of_world(&prev_cam);
+                                            f.pos[0] -= p.head.x + p.seat.x;
+                                            f.pos[1] -= p.head.y + p.seat.y;
+                                            f.pos[2] -= p.head.z + p.seat.z;
+                                            if let Some(z) = zoom.filter(|z| *z > 0.0) {
+                                                f.fov /= z;
+                                            }
+                                            Some(f)
+                                        } else {
+                                            self.cam_blend.shown.clone()
+                                        };
+                                        if let Some(from) = from {
+                                            let d = glam::Vec3::from_array(from.pos) - glam::Vec3::from_array(to.pos);
+                                            // (a far jump is another bus, not another camera of this one)
+                                            if d.length() < 25.0 {
+                                                self.cam_blend.from = Some(from);
+                                                self.cam_blend.t = 0.0;
+                                                started = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                self.cam_blend.key = Some((self.view.clone(), p.cam_choice));
+                                let mut shown = target.clone();
+                                let from_now = self.cam_blend.from.clone();
+                                match (target.as_ref(), from_now.as_ref()) {
+                                    (Some(to), Some(from)) => {
+                                        // (the frame that starts the glide does not count, and a long frame
+                                        // adds no more than a 30th of a second)
+                                        if !started {
+                                            self.cam_blend.t += dt.min(crate::app::CAM_BLEND_MAX_DT) / crate::app::CAM_BLEND_SECS;
+                                        }
+                                        if self.cam_blend.t >= 1.0 {
+                                            // (the hand-over to the plain camera: the glide ends exactly on it (k = 1),
+                                            // so the curve's tail is not left over to twitch; only what the two ways
+                                            // of making the camera might still differ in is eased out)
+                                            let mut last = p.driver_world(&crate::app::blend_local(from, to, 1.0));
+                                            finish(&mut last);
+                                            self.cam_blend.carry = Some(crate::app::CamCarry::between(&last, &cam));
+                                            self.cam_blend.from = None;
+                                        } else {
+                                            let mixed = crate::app::blend_local(from, to, self.cam_blend.progress());
+                                            cam = p.driver_world(&mixed);
+                                            finish(&mut cam);
+                                            shown = Some(mixed);
+                                        }
+                                    }
+                                    _ => self.cam_blend.from = None,
+                                }
+                                self.cam_blend.shown = shown;
+                                if started || !inside_view {
+                                    self.cam_blend.carry = None;
+                                }
+                                if let Some(c) = self.cam_blend.carry.as_mut() {
+                                    c.apply(&mut cam);
+                                    if !c.decay(dt) {
+                                        self.cam_blend.carry = None;
+                                    }
+                                }
                             }
                             if self.view == "outside" && self.settings.camera_collision {
                                 if let Some(w) = self.world.as_ref() {
@@ -1219,7 +1310,9 @@ impl ApplicationHandler for App {
                             self.arrow_glance = true;
                         } else if self.arrow_glance {
                             self.look.0 *= (-6.0 * dt).exp();
-                            if self.look.0.abs() < 0.5 {
+                            // (down to a hundredth of a degree before it is set to 0: at half a
+                            // degree the last step was a visible snap of several pixels)
+                            if self.look.0.abs() < 0.02 {
                                 self.look.0 = 0.0;
                                 self.arrow_glance = false;
                             }
@@ -1798,12 +1891,12 @@ impl ApplicationHandler for App {
                                     crate::touch::composite(&mut px, &over);
                                 }
                                 image::save_buffer(
-                                &path,
-                                &px,
-                                s.config.width,
-                                s.config.height,
-                                image::ColorType::Rgba8,
-                            ) } {
+                                    &path,
+                                    &px,
+                                    s.config.width,
+                                    s.config.height,
+                                    image::ColorType::Rgba8,
+                                ) } {
                                 Ok(()) => log::info!(
                                     "input script: window picture written to {}",
                                     path.display()
@@ -1836,48 +1929,48 @@ impl ApplicationHandler for App {
                     let acquired = match s.surface.get_current_texture() {
                         wgpu::CurrentSurfaceTexture::Success(_)
                         | wgpu::CurrentSurfaceTexture::Suboptimal(_)
-                            if hidden_now =>
-                        {
-                            wgpu::CurrentSurfaceTexture::Occluded
-                        }
+                        if hidden_now =>
+                            {
+                                wgpu::CurrentSurfaceTexture::Occluded
+                            }
                         other => other,
                     };
                     let (frame, stand_in) = match acquired {
                         wgpu::CurrentSurfaceTexture::Success(frame)
                         | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (Some(frame), None),
                         wgpu::CurrentSurfaceTexture::Occluded
-                            if omsi_cfg::env::var_os("OMSI_RENDER_OCCLUDED").is_some() =>
-                        {
-                            let (w, h) = (s.config.width, s.config.height);
-                            if self
-                                .stand_in
-                                .as_ref()
-                                .map(|t| (t.width(), t.height()) != (w, h))
-                                .unwrap_or(true)
+                        if omsi_cfg::env::var_os("OMSI_RENDER_OCCLUDED").is_some() =>
                             {
-                                self.stand_in =
-                                    Some(r.device.create_texture(&wgpu::TextureDescriptor {
-                                        label: Some("hidden window"),
-                                        size: wgpu::Extent3d {
-                                            width: w,
-                                            height: h,
-                                            depth_or_array_layers: 1,
-                                        },
-                                        mip_level_count: 1,
-                                        sample_count: 1,
-                                        dimension: wgpu::TextureDimension::D2,
-                                        format: r.format(),
-                                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                                        view_formats: &[],
-                                    }));
-                            }
-                            (
-                                None,
-                                self.stand_in
+                                let (w, h) = (s.config.width, s.config.height);
+                                if self
+                                    .stand_in
                                     .as_ref()
-                                    .map(|t| t.create_view(&Default::default())),
-                            )
-                        }
+                                    .map(|t| (t.width(), t.height()) != (w, h))
+                                    .unwrap_or(true)
+                                {
+                                    self.stand_in =
+                                        Some(r.device.create_texture(&wgpu::TextureDescriptor {
+                                            label: Some("hidden window"),
+                                            size: wgpu::Extent3d {
+                                                width: w,
+                                                height: h,
+                                                depth_or_array_layers: 1,
+                                            },
+                                            mip_level_count: 1,
+                                            sample_count: 1,
+                                            dimension: wgpu::TextureDimension::D2,
+                                            format: r.format(),
+                                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                                            view_formats: &[],
+                                        }));
+                                }
+                                (
+                                    None,
+                                    self.stand_in
+                                        .as_ref()
+                                        .map(|t| t.create_view(&Default::default())),
+                                )
+                            }
                         wgpu::CurrentSurfaceTexture::Outdated
                         | wgpu::CurrentSurfaceTexture::Lost => {
                             reconfigure = true;
@@ -2345,10 +2438,10 @@ impl App {
                 if let Some(k) = hit {
                     let k = k
                         + self
-                            .ui
-                            .as_ref()
-                            .map(|u| u.menu_start)
-                            .unwrap_or(0);
+                        .ui
+                        .as_ref()
+                        .map(|u| u.menu_start)
+                        .unwrap_or(0);
 
                     if self.chooser.is_none() {
                         self.game_menu = Some(k);

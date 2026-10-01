@@ -519,6 +519,7 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
         look: (0.0, 0.0),
         view_looks: Default::default(),
         look_view: String::new(),
+        cam_blend: Default::default(),
         view_zoom: Default::default(),
         orbit: ORBIT_DEFAULT,
         frames: 0,

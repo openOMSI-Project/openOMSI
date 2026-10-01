@@ -1095,46 +1095,59 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, wet: f32, t: f32, o
     // pane coordinates turned so the runners run down +y
     let qr = rain_turn(q, fa);
 
-    // --- the runners: one lane every 4.5 cm, a few of them with a drop sliding down
-    let lane_w = 0.045;
+    // --- the runners: now and then a drop grown heavy breaks loose and slides down on its
+    // own - each at its own moment, a few centimetres to a hand's width, nearly straight
+    // with a little drift, in jerks (it sticks, then slips on), and stops again; it leaves a
+    // cleared track with a few beads in it. (They were lanes of drops on wavy paths all
+    // going at once: the pane looked like a wave of snakes.) One chance a cell of 3 x 25 cm;
+    // a pixel looks at its own cell and the one above, whose drop may have slid into it.
+    let lane_w = 0.03;
+    let seg_h = 0.25;
     let lane = floor(qr.x / lane_w);
-    let lh = rain_hash(vec2<f32>(lane, 7.0));
-    let lk = rain_hash(vec2<f32>(lane, 19.0));
+    let seg0 = floor(qr.y / seg_h);
     var track = 0.0;
-    if (lh.x < wet * 0.5 * (1.0 + 0.8 * blow)) {
-        let speed = (0.025 + 0.08 * lh.y) * (1.0 + 2.5 * blow);
-        // stick and slip: the drop pauses, then hurries on
-        let tt = t * speed + lh.x * 13.0;
-        let head_y = (floor(tt) + smoothstep(0.35, 1.0, fract(tt))) * 0.3;
-        let span = 1.6;
-        // how far above the head (along the glass, upwards), wrapped over the pane
-        var above = fract((head_y - qr.y) / span) * span;
-        above = select(above, above - span, above > span - 0.03);
-        // its path wanders a little across the glass, the same way every time
-        let path_x = (lane + 0.5 + (lk.x - 0.5) * 0.5) * lane_w
-            + sin(qr.y * 23.0 + lk.y * 6.3) * 0.005 + sin(qr.y * 67.0 + lane) * 0.0015;
-        let dx = qr.x - path_x;
-        // the head: a teardrop 4-8 mm across, drawn out upwards
-        let rh = 0.0011 + 0.0007 * lk.y;
-        let dd = vec2<f32>(dx, -above);
-        let head = rain_dome(dd, rh, px);
-        if (head.z > best) {
-            best = head.z;
+    for (var k = 0; k < 2; k = k + 1) {
+        let seg = seg0 - f32(k);
+        let h1 = rain_hash(vec2<f32>(lane * 1.7 + 3.0, seg * 2.3 + 11.0));
+        if (h1.x >= wet * 0.22 * (1.0 + blow)) {
+            continue;
+        }
+        let h2 = rain_hash(vec2<f32>(lane * 1.7 + 8.1, seg * 2.3 + 5.1));
+        let h3 = rain_hash(vec2<f32>(lane * 1.7 + 1.3, seg * 2.3 + 29.7));
+        let period = 12.0 + 28.0 * h1.y;
+        let tau = fract(t / period + h2.x) * period;
+        // sits and grows a moment, then goes in jerks, then lies still till it dries
+        let sit = 1.5 + 3.0 * h2.y;
+        let st = max(tau - sit, 0.0);
+        let pulse = 0.6 + 0.8 * h3.x;
+        let step_len = (0.012 + 0.02 * h3.y) * (1.0 + 2.0 * blow);
+        let run_len = 0.05 + 0.17 * h2.y;
+        let travel = min((floor(st / pulse) + smoothstep(0.2, 0.9, fract(st / pulse))) * step_len, run_len);
+        let vis = smoothstep(0.0, 0.05, tau / period) * (1.0 - smoothstep(0.85, 1.0, tau / period));
+        let y0 = (seg + 0.1 + 0.3 * h3.x) * seg_h;
+        let x0 = (lane + 0.35 + 0.3 * h3.y) * lane_w;
+        let drift = (h2.y - 0.5) * 0.12;
+        let rh = (0.0011 + 0.0008 * h1.y) * mix(0.8, 1.0, smoothstep(0.0, sit, tau));
+        let head = rain_dome(vec2<f32>(qr.x - (x0 + drift * travel), qr.y - (y0 + travel)), rh, px);
+        if (head.z * vis > best) {
+            best = head.z * vis;
             slope = rain_turn(head.xy, -fa);
         }
-        // the track above it: the mist and the sitting drops wiped away...
-        let trail_len = 0.08 + 0.3 * lh.y;
-        let hw = rh * 0.75;
-        track = (1.0 - smoothstep(hw * 0.6, hw, abs(dx))) * step(rh, above) * (1.0 - smoothstep(trail_len * 0.5, trail_len, above));
-        // ...and a string of small beads left behind in it
-        let bc = floor(above / 0.006);
-        let bh = rain_hash(vec2<f32>(lane * 3.1 + bc, 41.0));
-        if (bh.x < 0.6 && above > rh * 2.0 && above < trail_len) {
-            let bcen = vec2<f32>((bh.y - 0.5) * hw * 0.9, -((bc + 0.5) * 0.006 + (bh.x - 0.3) * 0.002));
-            let bead = rain_dome(vec2<f32>(dx, -above) - bcen, 0.0005 + 0.0008 * bh.y, px);
-            if (bead.z > best) {
-                best = bead.z;
-                slope = rain_turn(bead.xy, -fa);
+        // the track it cleared, and a few beads left in it
+        let along = qr.y - y0;
+        if (along > 0.0 && along < travel - rh) {
+            let dxp = qr.x - (x0 + drift * along);
+            let hw = rh * 0.7;
+            track = max(track, (1.0 - smoothstep(hw * 0.6, hw, abs(dxp))) * vis);
+            let bc = floor(along / 0.008);
+            let bh = rain_hash(vec2<f32>(lane * 3.1 + bc, seg * 1.9 + 41.0));
+            if (bh.x < 0.35) {
+                let bcen = vec2<f32>((bh.y - 0.5) * hw, (bc + 0.5) * 0.008 - along);
+                let bead = rain_dome(vec2<f32>(dxp, 0.0) - bcen, 0.0004 + 0.0005 * bh.y, px);
+                if (bead.z * vis > best) {
+                    best = bead.z * vis;
+                    slope = rain_turn(bead.xy, -fa);
+                }
             }
         }
     }
@@ -1394,7 +1407,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // (a light-mapped road or plate takes the map's lamps only in Vanilla+: as OMSI 2 shows
     // it, the vanilla picture lights it from the tile light map alone)
     let lm_only = light_map_mapped(material.params) && camera.sky_color.w > 0.5;
-    let map_lamps = select(1.0, 0.0, (material.params.y > 0.2 && material.params.y < 0.3) || lm_only);
+    // (and a [tree]'s leaf cards, params.y 0.15: OMSI 2 leaves a tree dark even right under
+    // a street lamp, where the lamp's 40 m core lit the crown up yellow-green)
+    let tree_unlamped = camera.sky_color.w > 0.5 && material.params.y > 0.1 && material.params.y < 0.2;
+    let map_lamps = select(1.0, 0.0, (material.params.y > 0.2 && material.params.y < 0.3) || lm_only || tree_unlamped);
     let lamp_light = point_lights(in.world, n, map_lamps);
     var light = diffuse + lamp_light;
     let light_mapped = material.params2.x > 0.5 && material.extra.x < 0.5;
@@ -1408,11 +1424,26 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // night wall at a quarter of OMSI 2's - a texture of 0.66 under a light of 0.05 came out
     // at 2 of 255 instead of 8.)
     let classic = camera.sky_color.w > 0.5;
+    // (the terrain's night map is its tile light map: light, not a glow - see below)
+    let terrain_night = classic
+        && material.params.y < 0.5
+        && material.extra.x > 0.5
+        && material.extra.w > 0.5
+        && material.extra.w < 1.5;
     if (classic && material.params.y < 0.5) {
         var v = clamp(material.emissive.rgb + material.color.rgb * (light + interior_lamps(in.world, n, in.params2.z)), vec3<f32>(0.0), vec3<f32>(1.0));
         if (light_mapped) {
             let lm = srgb_encode(textureSample(t_light, s_diffuse, buv).rgb) * clamp(in.params2.x, 0.0, 1.0);
             v = v + lm * (vec3<f32>(1.0) - v);
+        }
+        if (terrain_night) {
+            // the terrain's tile light map lights the ground as the lamps' own light: added
+            // to the vertex light before the texture is multiplied in. Laid over the lit
+            // ground instead, as a night map glows, its faint fringe (0.01, linear) put
+            // one beige veil over cobbles and grass alike, a whole car park the colour of
+            // sand where OMSI 2 shows it dark grey.
+            let nm = srgb_encode(textureSample(t_night, s_diffuse, vec2<f32>(in.uv.x, 1.0 - in.uv.y)).rgb);
+            v = min(v + nm * camera.sun_color.w * clamp(in.params2.y, 0.0, 1.0), vec3<f32>(1.0));
         }
         lit = srgb_decode(srgb_encode(albedo) * v);
     } else if (light_mapped) {
@@ -1450,7 +1481,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (!light_mapped && !classic) {
         lit = lit + tex.rgb * interior_lamps(in.world, n, in.params2.z);
     }
-    if (material.extra.w > 0.5) {
+    if (material.extra.w > 0.5 && !terrain_night) {
         // [matl_nightmap]: self-illumination that fades in with the night
         // terrain: the tile light map in tile space (north at the top row)
         let nuv = select(buv, vec2<f32>(in.uv.x, 1.0 - in.uv.y), material.extra.x > 0.5);
@@ -1516,7 +1547,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         } else {
             kk = omsi_texture_factor(material.params2.y, camera.ambient.rgb + vec3<f32>(g));
         }
-        lit = mix(lit, env.rgb, kk);
+        // In the vanilla picture the lerp is made on the encoded values, as the stage makes
+        // it, like the texture x light product above: made on linear ones it showed the
+        // reflection about twice as bright over a dark surface - since the nights got dark
+        // (#300) the instrument glass of the MAN NL/NG (Fenster.tga, factor 0.5, the sky
+        // at the sphere map's bottom) lay milky white over the unlit gauges.
+        if (classic) {
+            lit = srgb_decode(mix(srgb_encode(lit), srgb_encode(env.rgb), kk));
+        } else {
+            lit = mix(lit, env.rgb, kk);
+        }
     }
     // wet road: a surface whose texture carries [moisture] darkens under rain and starts
     // to mirror the sky, strongest where you look along it (the Fresnel sheen that makes a

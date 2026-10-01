@@ -4,6 +4,100 @@ Every push to `main` is released as `MAJOR.MINOR.COMMIT` (see
 [docs/VERSIONING.md](docs/VERSIONING.md)); the downloads are on the
 [Releases](https://github.com/turbo-devv/openOMSI/releases) page.
 
+## 0.1.451 - 2026-10-01
+
+### Vehicles
+- Wheels stay under their hub caps: the drawn tyres are seated on the physical hub at the
+  point they turn about (the rotation's `origin_trans`), not at the .o3d's own pivot. A tyre
+  without a pivot (the NEOMAN's right front) was measured at a point circling the hub and
+  moved up and down by centimetres as it turned, so its cap seemed to roll off it.
+
+### View
+- Smooth camera transitions when changing and entering views, a setting in the pause menu
+  as well (#408, by shloooo).
+
+### Graphics (Vanilla, at night)
+- The map's lamps leave `[tree]`s dark, as in OMSI 2 (#407, by Sulamufor).
+- The terrain's light map lights the ground instead of glowing over it (#406, by Sulamufor).
+
+## 0.1.438 - 2026-10-01
+
+### View
+- The driver's hands in the cab view are a setting now (Settings and the pause Options,
+  "Driver's hands in the cab view"), off by default.
+
+### Graphics
+- Vanilla: reflections blend in gamma like the rest of the classic picture; at night the
+  MAN NL/NG instrument glass no longer lies milky white over the unlit gauges (#401, by
+  Sulamufor).
+
+## 0.1.434 - 2026-10-01
+
+### Driving
+- An automatic gearbox is no longer taken for a manual one. A bus counted as manual when
+  its scripts answered to the gate keys (`kw_s_1`, `kw_s_2`) and read a `Clutch` anywhere -
+  many automatics do both (gear hold keys, a torque converter's own clutch) - and the
+  automatic clutch of the settings then worked their clutch at every stop and pull-away,
+  and the phone showed a manual's gate. Now a gearbox is manual when it has the gates and
+  no automatic's `automatic_D`, or when its first gate itself asks for the clutch, or when
+  it works a clutch of its own through `AutoClutch` (checked on the LiAZ MKPP/GMP, the
+  Sprinter G32/G-tronic, the SD202 and the NEOMAN A23).
+
+## 0.1.433 - 2026-10-01
+
+### Graphics
+- Enhanced graphics are there again on every device and graphics API (0.1.402 left them
+  out on phones and OpenGL). They are built whenever Enhanced is chosen; only a phone or
+  OpenGL device not set to Enhanced skips compiling them, as it never draws them - that
+  compile is what killed Mali and Adreno drivers at the start.
+
+### Driving and view
+- Scripts: a trigger starts with 1 on its stack, as in OMSI - a trigger guarded by a bare
+  `{if}` did nothing (the S315 UL-GT's ticket printer switch) (#388, by hannsadrian).
+- The interior camera glides between viewpoints (OMSI's `driverview_smooth`, a setting)
+  (#388).
+- The driver's hands are seen in the cab view, the rest of the figure folded away (#376, by
+  Neblina666).
+
+### Displays and translations
+- The Atron ticket machine shows its stop text and keeps its sales screen (#390, by
+  TruckiHD).
+- Brazilian Portuguese improved, European Portuguese added (#396, by isaacsa2).
+
+## 0.1.402 - 2026-09-30
+
+### Graphics
+- Rain on the windows: drops no longer run down in lanes of wavy lines all at once. Now and
+  then a single drop breaks loose, slides a few centimetres to a hand's width in jerks,
+  nearly straight with a little drift, and stops again - each at its own moment.
+
+### Vehicles (compared with Omsi.exe)
+- A `[matl_change]` with several `[matl_item]`s shows item n at value n, as Omsi.exe does:
+  only the first was kept and shown at 1, so e.g. the MAN New Lion's City's door buttons
+  (2 = lit while the door is open) stayed dark (#352).
+- `[animparent]` hangs a mesh on the last mesh before it that carries the name, as Omsi.exe
+  resolves it while reading: door variants reusing their arms' names moved the later
+  variant's leaves with the first one's arm (Solaris Urbino III "Bode new", #348).
+- Station displays and other scenery text show a string that arrives after their first
+  frame (they were only redrawn on `Refresh_Strings`, #367).
+
+### Driving
+- A throttle pedal takes off a brake the keyboard holds, as the throttle key does: the
+  bus was driven against its brakes (#377).
+
+### Traffic
+- Cars change only onto lanes open to their own traffic group: trucks no longer take the
+  cycle paths beside a road (#327); trucks keep to the speed limit (up to 80-90 km/h, it was
+  38-47 on every road), bicycles ride at 20-28 km/h.
+- In multiplayer the host has traffic round itself again (#342).
+
+### Phones and crash reports
+- Phones and OpenGL leave out the Enhanced graphics' pipelines: they are never drawn there,
+  and compiling the ray-marched clouds' sky killed Mali and Adreno drivers before the first
+  frame (#364, #333, #316, #371).
+- A crash report takes its title from the run itself: an error before the game started, or
+  one the game got over, titled reports of games that died much later (#381, #331).
+
 ## 0.1.400 - 2026-09-30
 
 ### Performance

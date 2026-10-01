@@ -112,8 +112,8 @@ impl App {
                     KeyCode::SuperLeft,
                     KeyCode::SuperRight,
                 ]
-                .iter()
-                .any(|k| self.keys.contains(k));
+                    .iter()
+                    .any(|k| self.keys.contains(k));
                 if lan::chat_key(l, &mut self.remotes, code, pressed, repeat, modifiers) {
                     return;
                 }
@@ -217,9 +217,14 @@ impl App {
                     && !own
                     && (fallback_action(code, &self.args.drive_keys).is_some()
                     || matches!(code, KeyCode::KeyZ | KeyCode::KeyX | KeyCode::KeyC | KeyCode::KeyI | KeyCode::KeyL));
+                // the arrows are never the camera keys without Ctrl (they move: drive, or turn the
+                // head when held, with any other modifier and in every layout); only Ctrl+Left/Right
+                // switch the interior camera, below.
+                let plain_arrow = matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) && !ctrl;
                 if let Some(scan) = keys::dik_code(code).filter(|_| !ours) {
                     let action = self.game_keys.iter().find(|b| b.scan_code == scan && b.matches(m)
-                        && !b.action.starts_with("vr_")).map(|b| b.action.clone());
+                        && !b.action.starts_with("vr_")
+                        && !(plain_arrow && b.action.starts_with("view_interiorcam_"))).map(|b| b.action.clone());
                     if let Some(a) = action {
                         if self.game_action(&a) {
                             return;
@@ -2183,15 +2188,24 @@ impl App {
                 #[cfg(windows)]
                 if let Some(vr) = self.vr.as_mut() { vr.recenter(); }
             }
-            // (Space in Inputs/keyboard.cfg: every view looks ahead again)
+            // (Space in Inputs/keyboard.cfg: every view looks ahead again, and back to the
+            // standard camera - "center")
             "view_reset_all_directions" => {
                 self.look = (0.0, 0.0);
                 self.view_looks.clear();
                 self.view_zoom.clear();
                 self.orbit = ORBIT_DEFAULT;
+                if let Some(p) = self.player.as_mut() {
+                    p.cam_choice = (0, 0);
+                }
             }
             "view_toggle_viewpoint" | "view_interiorcam_plus" | "view_interiorcam_minus" => {
                 let Some(p) = self.player.as_mut() else { return true };
+                // (the interior cameras only cycle in the interior: from outside the keys
+                // would change an invisible camera)
+                if !matches!(self.view.as_str(), "driver" | "pax") {
+                    return true;
+                }
                 let def = &p.vehicle.ty.def;
                 let (count, pax) = if self.view == "pax" { (p.pax_camera_count(), true) } else { (def.cameras_driver.len(), false) };
                 if count > 1 {

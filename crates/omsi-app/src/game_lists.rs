@@ -119,12 +119,14 @@ pub(crate) fn items(app: &App, kind: &ListKind) -> Vec<(String, String)> {
             out.push((format!("{}: {}", tr("Navigator"), tr(on_off(app.navigator.as_ref().is_some_and(|n| n.enabled)))), "navigator".into()));
             out.push((format!("{}: {}", tr("Sun shadows"), tr(on_off(s.shadows))), "shadows".into()));
             out.push((format!("{}: {}", tr("Head movement"), tr(on_off(s.head_movement))), "head".into()));
+            out.push((format!("{}: {}", tr("Camera glides between viewpoints"), tr(on_off(s.driverview_smooth))), "cam_smooth".into()));
             out.push((format!("{}: {}", tr("Collisions with objects"), tr(on_off(s.collision_objects))), "coll_objects".into()));
             out.push((format!("{}: {}", tr("Collisions with vehicles"), tr(on_off(s.collision_vehicles))), "coll_vehicles".into()));
             out.push((format!("{}: {}", tr("Steering with the mouse"), tr(on_off(app.mouse_drive))), "mouse".into()));
             out.push((format!("{}: {}", tr("Frame rate"), tr(on_off(s.show_fps))), "fps".into()));
             out.push((format!("{}: {}", tr("Camera collisions"), tr(on_off(s.camera_collision))), "camcoll".into()));
             out.push((format!("{}: {}", tr("View turns with steering"), tr(on_off(s.steer_look))), "steer_look".into()));
+            out.push((format!("{}: {}", tr("Driver's hands in the cab view"), tr(on_off(s.hands_in_cab))), "hands_in_cab".into()));
             out.push((format!("{}: {}", tr("Force feedback and vibration"), tr(on_off(s.ff_enabled))), "ff".into()));
             out.push((format!("{}: {}", tr("Keyboard brake stays on until the throttle"), tr(on_off(s.brake_hold))), "brake_hold".into()));
             out.push((format!("{}: {}", tr("Automatic clutch"), tr(on_off(s.auto_clutch))), "auto_clutch".into()));
@@ -302,6 +304,10 @@ pub(crate) fn run(app: &mut App, kind: &ListKind, action: &str) -> Option<ListKi
                     s.head_movement = !s.head_movement;
                     Some(("head_movement", (s.head_movement as u8).to_string()))
                 }
+                "cam_smooth" => {
+                    s.driverview_smooth = !s.driverview_smooth;
+                    Some(("driverview_smooth", (s.driverview_smooth as u8).to_string()))
+                }
                 // (at once: stuck under a bridge a map made too low, the bus drives on)
                 "coll_objects" => {
                     s.collision_objects = !s.collision_objects;
@@ -344,6 +350,10 @@ pub(crate) fn run(app: &mut App, kind: &ListKind, action: &str) -> Option<ListKi
                 "steer_look" => {
                     s.steer_look = !s.steer_look;
                     Some(("steer_look", (s.steer_look as u8).to_string()))
+                }
+                "hands_in_cab" => {
+                    s.hands_in_cab = !s.hands_in_cab;
+                    Some(("hands_in_cab", (s.hands_in_cab as u8).to_string()))
                 }
                 "pedal_t" => {
                     s.pedal_throttle = next_step(&PEDAL, s.pedal_throttle);

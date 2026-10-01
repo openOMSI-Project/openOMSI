@@ -664,6 +664,8 @@ fn settings_columns(ui: &mut Ui, s: &mut Value, dirty: &mut f32, body: Rect, upd
     toggle_setting(ui, s, dirty, row(&mut y), "Collisions with objects (walls, poles)", "collision_objects");
     toggle_setting(ui, s, dirty, row(&mut y), "Collisions with people", "collision_pedestrians");
     toggle_setting(ui, s, dirty, row(&mut y), "Head moves with the bus", "head_movement");
+    toggle_setting(ui, s, dirty, row(&mut y), "Camera glides between viewpoints", "driverview_smooth");
+    toggle_setting(ui, s, dirty, row(&mut y), "Driver's hands in the cab view", "hands_in_cab");
     // (in multiplayer the host's or the server's speed counts)
     sel_setting(ui, s, dirty, "s-timespeed", row(&mut y), "Time speed (not in multiplayer)", "time_speed", &[("1", "Real time"), ("2", "x2"), ("4", "x4"), ("8", "x8"), ("15", "x15"), ("30", "x30")]);
     // (the keys are on the Controls page)

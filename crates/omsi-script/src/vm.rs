@@ -205,7 +205,14 @@ impl Vm {
     pub fn run_trigger(&mut self, p: &Program, name: &str, state: &mut State, host: &mut dyn Host) -> bool {
         match p.trigger(name) {
             Some(b) => {
-                self.run_top(p, b, state, host);
+                // OMSI seeds the float stack with 1 when a trigger fires; scripts guard the
+                // body with a bare `{if}` (`{trigger:x} {if} ... {endif}`), which pops it -
+                // on an empty stack the guard read 0 and the whole body never ran (the
+                // ticket printer's switch did nothing). The engine's own blocks run on
+                // empty stacks (`run_top`).
+                self.stacks.clear();
+                self.stacks.push(1.0);
+                self.run_block(p, b, state, host);
                 true
             }
             None => false,

@@ -1020,7 +1020,17 @@ pub fn root_problem(root: &str) -> String {
 pub fn crash_of(log: &std::path::Path) -> Option<(String, String)> {
     let text = std::fs::read(log).ok()?;
     let text = String::from_utf8_lossy(&text[text.len().saturating_sub(64 * 1024)..]).to_string();
-    let lines: Vec<&str> = text.lines().collect();
+    let all: Vec<&str> = text.lines().collect();
+    // (the run itself only: an error the launcher logged before the game started - a
+    // preview's picture left out - titled the report of a game that died much later, and
+    // the phone's "died compiling a shader" hint never showed, #381, #331)
+    let lines: Vec<&str> = match all.iter().rposition(|l| l.contains("starting the game:")) {
+        Some(k) => all[k..].to_vec(),
+        None => all.clone(),
+    };
+    // (an error the game got over - "the game goes on", a part of the picture left out -
+    // is no crash)
+    let recovered = |l: &str| l.contains("the game goes on") || l.contains("left out") || l.contains("could not be recorded");
     // (a lost graphics device ends the game in order - it saves the run - but it is a crash
     // for the player all the same: the driver gave up)
     // (one the game got over by starting again with safer graphics is no crash)
@@ -1031,7 +1041,7 @@ pub fn crash_of(log: &std::path::Path) -> Option<(String, String)> {
     if lost.is_none() && lines.iter().any(|l| l.contains("game ends")) {
         return None;
     }
-    let at = lost.or_else(|| lines.iter().rposition(|l| l.contains("the game stopped on an error") || l.contains(" ERROR ")))?;
+    let at = lost.or_else(|| lines.iter().rposition(|l| l.contains("the game stopped on an error") || (l.contains(" ERROR ") && !recovered(l))))?;
     let first = lines[at].split_once("] ").map(|x| x.1).unwrap_or(lines[at]).trim();
     // (a panic's message is on the following lines)
     let mut what = first.to_string();
@@ -1042,7 +1052,7 @@ pub fn crash_of(log: &std::path::Path) -> Option<(String, String)> {
         what.push(' ');
         what.push_str(l.trim());
     }
-    let tail = lines[lines.len().saturating_sub(150)..].join("\n");
+    let tail = all[all.len().saturating_sub(150)..].join("\n");
     Some((what.chars().take(600).collect(), tail))
 }
 
@@ -1076,6 +1086,9 @@ mod crash_tests {
         assert!(super::crash_of(&p).is_none());
         std::fs::write(&p, "[t ERROR omsi_render] the graphics device was lost (Unknown): Unexpected error variant\n[t INFO openomsi_game::app_events] game ends\n").unwrap();
         assert!(super::crash_of(&p).unwrap().0.contains("device was lost"));
+        // an error before the game started, or one it got over, is not the crash
+        std::fs::write(&p, "[t ERROR omsi_render] a part of the picture could not be recorded (left out)\n[t INFO x] starting the game: omsi\n[t INFO omsi_render] renderer: compiling the sky and clouds shaders\n").unwrap();
+        assert!(super::crash_of(&p).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

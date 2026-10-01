@@ -1879,6 +1879,12 @@ impl Traffic {
             (LaneKind::Street, street_target),
             (LaneKind::Air, if has_air { 3 } else { 0 }),
         ] {
+            // (a LAN host counts the cars round itself only: counted over the whole map,
+            // the traffic it keeps round the other players met its own target and the
+            // host drove through empty streets, #342)
+            if kind == LaneKind::Street && !self.lan_centers.is_empty() {
+                self.count_near = Some((center, self.spawn_radius));
+            }
             self.populate_kind(world, renderer, scene, center, kind, target);
         }
         self.populate_lan_centers(world, renderer, scene, center, street_target);
@@ -2473,7 +2479,12 @@ impl Traffic {
             // with a little more on the arterial roads
             56.0 + (seed % 7) as f32
         } else if heavy {
-            38.0 + (seed % 10) as f32
+            // (a truck keeps to the limit like the cars, up to a truck's own 80-90 km/h: it
+            // took 38-47 on every road, crawling along 80 km/h roads, #327)
+            80.0 + (seed % 10) as f32
+        } else if kind == LaneKind::Street && ty.def.mass > 0.0 && ty.def.mass < 0.3 {
+            // a bicycle (or a moped): at the pace of one, not at the town's limit (#327)
+            20.0 + (seed % 8) as f32
         } else {
             100.0
         };
@@ -3023,7 +3034,7 @@ impl Traffic {
         let stuck = self.cars[i].stopped;
         if stuck > 20.0 && standing && omsi_cfg::env::var_os("OMSI_DEBUG_STUCK").is_some() && (self.time * 0.2).fract() < 0.01 {
             let lane = &self.net.lanes[st.lane];
-            log::info!("t={:.1}: car {} behind an obstacle {:.1} m for {stuck:.0} s: change {:?} route {} cooldown {:.1} light {} yielding {} left {:?} right {:?} left clear {:?}", self.time, self.cars[i].id, gap.unwrap_or(-1.0), st.change.map(|c| (c.to, c.t, c.wait, c.bypass, c.length)), st.route.len(), st.change_cooldown, self.cars[i].light_hold, self.cars[i].yielding, lane.left, lane.right, lane.left.map(|l| { let s_side = st.s / lane.length().max(1.0) * self.net.lanes[l].length(); (self.open_to_cars(l), self.lane_clear(i, l, s_side, 12.0, 30.0, by_lane), self.can_merge(i, l, s_side, by_lane)) }));
+            log::info!("t={:.1}: car {} behind an obstacle {:.1} m for {stuck:.0} s: change {:?} route {} cooldown {:.1} light {} yielding {} left {:?} right {:?} left clear {:?}", self.time, self.cars[i].id, gap.unwrap_or(-1.0), st.change.map(|c| (c.to, c.t, c.wait, c.bypass, c.length)), st.route.len(), st.change_cooldown, self.cars[i].light_hold, self.cars[i].yielding, lane.left, lane.right, lane.left.map(|l| { let s_side = st.s / lane.length().max(1.0) * self.net.lanes[l].length(); (self.open_to(i, l), self.lane_clear(i, l, s_side, 12.0, 30.0, by_lane), self.can_merge(i, l, s_side, by_lane)) }));
         }
         let st = &self.cars[i].state;
         if st.change.is_some()
@@ -3048,7 +3059,7 @@ impl Traffic {
         let (lane_idx, planned) = (st.lane, st.planned_next);
         let turn = planned.map(|n| self.net.lanes[n].turn).unwrap_or(0);
         for (side, dir) in [(lane.left, 1), (lane.right, 2)] {
-            let Some(side) = side.filter(|&l| self.open_to_cars(l)) else {
+            let Some(side) = side.filter(|&l| self.open_to(i, l)) else {
                 continue;
             };
             // never leave a turn lane just before the junction
@@ -3656,7 +3667,7 @@ impl Traffic {
         let turn = planned.map(|n| self.net.lanes[n].turn).unwrap_or(0);
         if to_junction < 150.0 && turn != 0 {
             let want = if turn == 1 { lane.left } else { lane.right };
-            if let Some(side) = want.filter(|&l| self.open_to_cars(l)) {
+            if let Some(side) = want.filter(|&l| self.open_to(i, l)) {
                 // only if that lane reaches a way out with the same turn
                 let ok = self.net.lanes[side]
                     .next
@@ -3682,7 +3693,7 @@ impl Traffic {
         // (on a left-hand-traffic map passing is on the right and the keeping to the left)
         let lht = self.net.left_hand;
         let (pass_side, keep_side, pass_dir, keep_dir) = if lht { (lane.right, lane.left, 2, 1) } else { (lane.left, lane.right, 1, 2) };
-        if let Some(left) = pass_side.filter(|&l| self.open_to_cars(l)) {
+        if let Some(left) = pass_side.filter(|&l| self.open_to(i, l)) {
             let plan: Vec<usize> = self.cars[i].state.upcoming().collect();
             if let Some((d, v, _)) = self.obstacle_from(i, lane_idx, s, Some(&plan), 45.0, by_lane)
             {
@@ -3707,7 +3718,7 @@ impl Traffic {
         }
         // keep right when the right lane is free (not into a parking lane: the outer lanes
         // of Spandau's six-lane roads carry `[rule] trafficdensity 0` and the parked cars)
-        if let Some(right) = keep_side.filter(|&l| self.open_to_cars(l)) {
+        if let Some(right) = keep_side.filter(|&l| self.open_to(i, l)) {
             let s_right = frac * self.net.lanes[right].length();
             if self.lane_clear(i, right, s_right, 30.0, 70.0, by_lane)
                 && self.can_merge(i, right, s_right, by_lane)
@@ -3731,12 +3742,23 @@ impl Traffic {
     }
 
     /// May random traffic drive on `lane` at all (`[rule] no_cars`, `trafficdensity 0`)?
-    fn open_to_cars(&self, lane: usize) -> bool {
-        self.net
-            .lanes
-            .get(lane)
-            .map(|l| !l.no_cars && l.density > 0.0)
-            .unwrap_or(false)
+    /// Whether car `i` may change onto `lane`: open to cars, open to its own traffic group
+    /// (`[rule]` densities per group: a path open to bicycles only counted as open to
+    /// everybody, and the trucks of Vlietlanden changed onto the cycle paths beside the
+    /// road, #327) and to trucks if it is one.
+    fn open_to(&self, i: usize, lane: usize) -> bool {
+        let Some(l) = self.net.lanes.get(lane) else { return false };
+        if l.no_cars || l.density <= 0.0 {
+            return false;
+        }
+        let car = &self.cars[i];
+        if l.no_trucks && car.vehicle.ty.def.mass > 6.0 {
+            return false;
+        }
+        match car.state.traffic_pool.as_ref() {
+            Some((pool, defaults)) if !l.group_density.is_empty() => l.pool_density(defaults, *pool) > 0.0,
+            _ => true,
+        }
     }
 
     /// The lanes of a car's way with their distance from its origin: the current lane (at

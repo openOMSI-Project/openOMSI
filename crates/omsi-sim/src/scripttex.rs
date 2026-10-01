@@ -9,9 +9,12 @@ pub struct ScriptTexture {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
-    /// Changed since the last upload.
+    /// Drawing buffer changed since the last unlock or upload.
     pub dirty: bool,
     pub locked: bool,
+    /// Last image released by STUnlock, retained even when the script locks again
+    /// before the renderer runs (the Atron AFR4 keeps its drawing buffer locked).
+    pending: Option<Vec<u8>>,
     /// `STFilter` was called after this texture was unlocked. OMSI then generates a mip
     /// chain, which keeps a distant matrix or IBIS screen stable instead of sampling its
     /// full-resolution pixels directly.
@@ -29,6 +32,7 @@ impl ScriptTexture {
             rgba: vec![0; (w * h * 4) as usize],
             dirty: true,
             locked: false,
+            pending: None,
             mipmaps: false,
             color: [255, 255, 255, 255],
         }
@@ -37,6 +41,26 @@ impl ScriptTexture {
     pub fn clear(&mut self) {
         self.rgba.iter_mut().for_each(|b| *b = 0);
         self.dirty = true;
+    }
+
+    pub fn unlock(&mut self) {
+        self.locked = false;
+        if self.dirty {
+            self.pending = Some(self.rgba.clone());
+            self.dirty = false;
+        }
+    }
+
+    /// Take the latest released image. A locked buffer may already contain edits
+    /// for the next unlock; those must not replace the image just released.
+    pub fn take_upload(&mut self) -> Option<Vec<u8>> {
+        if !self.locked && self.dirty {
+            self.dirty = false;
+            self.pending = None;
+            Some(self.rgba.clone())
+        } else {
+            self.pending.take()
+        }
     }
 
     pub fn put(&mut self, x: i32, y: i32, c: [u8; 4]) {
@@ -125,4 +149,35 @@ impl ScriptTexture {
 #[derive(Default)]
 pub struct FontTable {
     pub entries: Vec<(String, Option<Arc<FontAtlas>>)>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ScriptTexture;
+
+    #[test]
+    fn locked_edits_wait_for_unlock_and_latest_release_wins() {
+        let mut t = ScriptTexture::new(1, 1);
+        t.locked = true;
+        t.put(0, 0, [1; 4]);
+        assert!(t.take_upload().is_none());
+        t.unlock();
+        t.locked = true;
+        t.put(0, 0, [2; 4]);
+        t.unlock();
+        t.locked = true;
+        // A distant vehicle can release several pictures before its next upload.
+        assert_eq!(t.take_upload().unwrap(), vec![2; 4]);
+        assert!(t.take_upload().is_none());
+    }
+
+    #[test]
+    fn unlocked_drawing_still_uploads_without_st_callbacks() {
+        let mut t = ScriptTexture::new(1, 1);
+        t.put(0, 0, [1; 4]);
+        t.unlock();
+        t.put(0, 0, [2; 4]);
+        assert_eq!(t.take_upload().unwrap(), vec![2; 4]);
+        assert!(t.take_upload().is_none());
+    }
 }

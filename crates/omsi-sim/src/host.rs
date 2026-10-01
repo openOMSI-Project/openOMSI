@@ -355,8 +355,7 @@ impl Host for VehicleHost {
             "stunlock" => {
                 let i = stacks.pop() as usize;
                 if let Some(t) = self.script_textures.get_mut(i) {
-                    t.locked = false;
-                    t.dirty = true;
+                    t.unlock();
                 }
             }
             "stfilter" => {
@@ -365,8 +364,10 @@ impl Host for VehicleHost {
                 // must also refresh the chain when this matrix changes again.
                 let i = stacks.pop() as usize;
                 if let Some(t) = self.script_textures.get_mut(i) {
-                    t.mipmaps = true;
-                    t.dirty = true;
+                    if !t.mipmaps {
+                        t.mipmaps = true;
+                        t.dirty = true;
+                    }
                 }
             }
             "stsetcolor" => {
@@ -544,7 +545,14 @@ impl Host for VehicleHost {
             "getttlinestring" => stacks.push_str(self.tt_line.clone()),
             "getttdelay" => stacks.push(self.tt_delay),
             "getttbusstopcount" => stacks.push(self.tt_stops.len() as f32),
-            "getttbusstopindex" => stacks.push(self.tt_busstop_index as f32),
+            // Without a timetable there is no current stop. Returning the first
+            // stop (0) makes the Atron repeatedly detect an arrival and clear its
+            // sales text after the holding brake has been on for three seconds.
+            "getttbusstopindex" => stacks.push(if self.tt_stops.is_empty() {
+                -1.0
+            } else {
+                self.tt_busstop_index as f32
+            }),
             "gettterminusindex" | "getttterminusindex" => stacks.push(self.tt_terminus_index as f32),
             // how high a point of the vehicle stands over the ground (the NL/NG ramp
             // measures the kerb this way before extending)
@@ -678,6 +686,80 @@ mod tests {
         assert!(!host.script_textures[0].locked);
         assert!(host.script_textures[0].mipmaps);
         assert!(host.script_textures[0].dirty);
+    }
+
+    #[test]
+    fn atron_unlock_filter_relock_publishes_the_released_image() {
+        let dir = std::env::temp_dir().join(format!(
+            "omsi_host_atron_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("atron.osc");
+        std::fs::write(
+            &script,
+            "{trigger:draw}\n0 (M.V.STLock)\n0 255 255 255 255 (M.V.STSetColor)\n0 1 1 (M.V.STDrawPixel)\n0 (M.V.STUnlock)\n0 (M.V.STFilter)\n0 (M.V.STLock)\n0 2 1 (M.V.STDrawPixel)\n{end}\n{trigger:publish}\n0 (M.V.STUnlock)\n0 (M.V.STFilter)\n0 (M.V.STLock)\n{end}\n",
+        ).unwrap();
+        let p = compile(&CompileInput {
+            scripts: vec![script],
+            ..Default::default()
+        });
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        let mut host = VehicleHost::new(SimClock::default());
+        host.script_textures.push(ScriptTexture::new(4, 2));
+        let mut state = State::new(&p);
+        let mut vm = Vm::new();
+        assert!(vm.run_trigger(&p, "draw", &mut state, &mut host));
+        let t = &mut host.script_textures[0];
+        assert!(t.locked);
+        assert!(t.mipmaps);
+        let first = t.take_upload().expect("STUnlock must survive STLock in the same frame");
+        assert_eq!(&first[20..24], &[255; 4]);
+        assert_eq!(
+            &first[24..28],
+            &[0; 4],
+            "edits after relocking wait for the next unlock"
+        );
+        assert!(t.take_upload().is_none());
+        assert!(vm.run_trigger(&p, "publish", &mut state, &mut host));
+        let second = host.script_textures[0].take_upload().unwrap();
+        assert_eq!(&second[24..28], &[255; 4]);
+        assert!(vm.run_trigger(&p, "publish", &mut state, &mut host));
+        assert!(
+            host.script_textures[0].take_upload().is_none(),
+            "filtering unchanged pixels needs no new upload"
+        );
+    }
+
+    #[test]
+    fn atron_arrival_check_does_not_clear_sales_text_without_a_timetable() {
+        let dir = std::env::temp_dir().join(format!(
+            "omsi_host_atron_arrival_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("arrival.osc");
+        std::fs::write(&script, "{trigger:check}\n(M.V.GetTTBusstopIndex) 1 - -1 >=\n{if}\n0 (M.V.STNewTex)\n{endif}\n{end}\n").unwrap();
+        let p = compile(&CompileInput {
+            scripts: vec![script],
+            ..Default::default()
+        });
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        let mut host = VehicleHost::new(SimClock::default());
+        host.script_textures.push(ScriptTexture::new(1, 1));
+        host.script_textures[0].put(0, 0, [255; 4]);
+        let mut state = State::new(&p);
+        let mut vm = Vm::new();
+        assert!(vm.run_trigger(&p, "check", &mut state, &mut host));
+        assert_eq!(host.script_textures[0].rgba, vec![255; 4]);
+        // The first stop of an actual timetable still reports an arrival.
+        host.tt_stops.push(("First stop".into(), 0.0, 0.0));
+        assert!(vm.run_trigger(&p, "check", &mut state, &mut host));
+        assert_eq!(host.script_textures[0].rgba, vec![0; 4]);
+        host.script_textures[0].put(0, 0, [255; 4]);
+        host.tt_stops.clear();
+        assert!(vm.run_trigger(&p, "check", &mut state, &mut host));
+        assert_eq!(host.script_textures[0].rgba, vec![255; 4]);
     }
 
     /// The engine part of the stock SD200/SD202/NL202 collision block: a rear hit low down

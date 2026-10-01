@@ -212,6 +212,8 @@ pub(crate) struct App {
     /// belongs to now; see `App::sync_view_look`.
     pub(crate) view_looks: std::collections::HashMap<String, (f32, f32)>,
     pub(crate) look_view: String,
+    /// Smooth switch between two cockpit cameras (arrow keys), see `CamBlend`.
+    pub(crate) cam_blend: CamBlend,
     /// The zoom of the views inside the bus (driver, passenger): their field of view is
     /// the camera's times this (the mouse wheel, + and -, a pinch), per view.
     pub(crate) view_zoom: std::collections::HashMap<String, f32>,
@@ -893,5 +895,136 @@ pub(crate) fn report_missing_content(w: &World, msg: &mut Option<(String, f32)>)
             ),
             15.0,
         ));
+    }
+}
+
+/// How long the glide between two cockpit cameras takes (seconds). The eye, the turn of the
+/// view and the field of view all follow the same curve over this time. 0 = hard cut.
+pub(crate) const CAM_BLEND_SECS: f32 = 0.6;
+/// The longest step of time one frame adds to the glide (seconds): a frame that hitches at
+/// the start of a switch does not skip ahead in it.
+pub(crate) const CAM_BLEND_MAX_DT: f32 = 1.0 / 30.0;
+
+fn wrap_deg(a: f32) -> f32 {
+    (a + 180.0).rem_euclid(360.0) - 180.0
+}
+
+/// `a` (k = 0) to `b` (k = 1), both cameras fixed in the bus's frame: the eye, the turn of the
+/// view and the field of view on a straight way. The bus's own motion (its pitch, bank, the
+/// head) is put on the result afterwards, so the glide is the same standing and driving.
+pub(crate) fn blend_local(a: &omsi_vehicle::Camera, b: &omsi_vehicle::Camera, k: f32) -> omsi_vehicle::Camera {
+    // (measured from `b`: at k = 1 every value is exactly `b`'s - no 360 degree residue of a
+    // yaw that went the short way round, no rounding left over for the hand-over to the
+    // plain camera to show)
+    let k = k.clamp(0.0, 1.0);
+    if k >= 1.0 {
+        return b.clone();
+    }
+    let rest = 1.0 - k;
+    let l = |x: f32, y: f32| y + (x - y) * rest;
+    // The view direction turns along the great circle between the two (a slerp of the
+    // directions), not yaw and pitch each on their own straight line: that swept the view
+    // out in a bow - up and across at once - while the eye went straight, which looked like
+    // a zigzag in the glide.
+    let dir = |c: &omsi_vehicle::Camera| {
+        let (sy, cy) = c.yaw.to_radians().sin_cos();
+        let (sp, cp) = c.pitch.to_radians().sin_cos();
+        glam::Vec3::new(sy * cp, cy * cp, sp)
+    };
+    let (fa, fb) = (dir(a), dir(b));
+    let dot = fa.dot(fb).clamp(-1.0, 1.0);
+    let (yaw, pitch) = if dot < -0.9995 {
+        // (turned right round: no one great circle, so the plain way)
+        (b.yaw - wrap_deg(b.yaw - a.yaw) * rest, l(a.pitch, b.pitch))
+    } else {
+        let f = if dot > 0.9995 {
+            (fa * rest + fb * k).normalize_or(fb)
+        } else {
+            let theta = dot.acos();
+            let s = theta.sin();
+            ((fa * ((rest * theta).sin() / s)) + (fb * ((k * theta).sin() / s))).normalize_or(fb)
+        };
+        (f.x.atan2(f.y).to_degrees(), f.z.clamp(-1.0, 1.0).asin().to_degrees())
+    };
+    omsi_vehicle::Camera {
+        pos: [l(a.pos[0], b.pos[0]), l(a.pos[1], b.pos[1]), l(a.pos[2], b.pos[2])],
+        dist: l(a.dist, b.dist),
+        fov: l(a.fov, b.fov),
+        yaw,
+        pitch,
+        extra: b.extra,
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct CamBlend {
+    /// (view, camera numbers) of the last frame: a change of the numbers inside the same
+    /// view is a camera switch.
+    pub key: Option<(String, (usize, usize))>,
+    /// The camera the glide started from (in the bus's frame), while one is under way.
+    pub from: Option<omsi_vehicle::Camera>,
+    /// The cockpit camera as it was drawn last frame (in the bus's frame): where the next
+    /// glide starts from.
+    pub shown: Option<omsi_vehicle::Camera>,
+    /// Just sat down at the wheel (from on foot): the next cockpit frame glides in from where
+    /// the walker's eyes were.
+    pub entering: bool,
+    /// 0..1 progress of the glide.
+    pub t: f32,
+    /// What the glide's last picture was off from the plain camera by, let go of over a
+    /// fraction of a second after the hand-over (so that nothing is left to jump).
+    pub carry: Option<CamCarry>,
+}
+
+/// A small difference between two pictures of the camera (world position, angles in degrees,
+/// field of view) that is eased out instead of being cut.
+#[derive(Clone, Copy)]
+pub(crate) struct CamCarry {
+    pub pos: glam::DVec3,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub roll: f32,
+    pub fov: f32,
+}
+
+impl CamCarry {
+    /// `a` minus `b`.
+    pub fn between(a: &omsi_render::Camera, b: &omsi_render::Camera) -> Self {
+        Self {
+            pos: a.position - b.position,
+            yaw: wrap_deg(a.yaw - b.yaw),
+            pitch: a.pitch - b.pitch,
+            roll: wrap_deg(a.roll - b.roll),
+            fov: a.fov_deg - b.fov_deg,
+        }
+    }
+
+    /// Put on a camera.
+    pub fn apply(&self, c: &mut omsi_render::Camera) {
+        c.position += self.pos;
+        c.yaw += self.yaw;
+        c.pitch = (c.pitch + self.pitch).clamp(-89.0, 89.0);
+        c.roll += self.roll;
+        c.fov_deg += self.fov;
+    }
+
+    /// Ease out by one frame; false once nothing is left.
+    pub fn decay(&mut self, dt: f32) -> bool {
+        let k = (-dt.clamp(0.0, 0.1) * 12.0).exp();
+        self.pos *= k as f64;
+        self.yaw *= k;
+        self.pitch *= k;
+        self.roll *= k;
+        self.fov *= k;
+        self.pos.length() > 1e-4 || self.yaw.abs() > 0.01 || self.pitch.abs() > 0.01 || self.roll.abs() > 0.01 || self.fov.abs() > 0.01
+    }
+}
+
+impl CamBlend {
+    /// How far along the way from the old camera to the new one: smootherstep of the time
+    /// (no jolt in speed or acceleration at either end).
+    pub fn progress(&self) -> f32 {
+        let t = self.t.clamp(0.0, 1.0);
+        t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
     }
 }

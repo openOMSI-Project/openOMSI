@@ -2234,7 +2234,20 @@ impl VehicleInstance {
                 if k >= rb.wheels.len() {
                     continue;
                 }
-                seats.push((i, k, vm.pivot.w_axis.truncate()));
+                // (the hub is where the wheel turns about: its `origin_trans`, or the mesh's
+                // own pivot for `origin_from_mesh`. Measured at the .o3d's pivot, a tyre without
+                // one - the NEOMAN's right front, at the model's origin - was measured at a point
+                // swinging round the hub as the wheel turned: it was pushed up and down by
+                // centimetres while its hub cap stayed, and the cap "rolled off" the tyre.)
+                let mut hub = None;
+                for o in &an.origins {
+                    match o {
+                        omsi_model::AnimOrigin::Trans(t) => hub = Some(hub.unwrap_or(Vec3::ZERO) + Vec3::from(*t)),
+                        omsi_model::AnimOrigin::FromMesh => hub = Some(vm.pivot.w_axis.truncate()),
+                        _ => {}
+                    }
+                }
+                seats.push((i, k, hub.unwrap_or(vm.pivot.w_axis.truncate())));
             }
             self.wheel_seats = Some(seats);
         }
@@ -2243,7 +2256,7 @@ impl VehicleInstance {
             let comp = rb.wheels[k].compression.clamp(-crate::rigid::DROOP, crate::rigid::BUMP);
             let drawn = self.mesh_transforms[i].transform_point3(pivot).z;
             let dz = pivot.z + comp - drawn;
-            if k == 0 && omsi_cfg::env::var_os("OMSI_DEBUG_SEAT").is_some() {
+            if omsi_cfg::env::var_os("OMSI_DEBUG_SEAT").is_some() {
                 log::info!("seat mesh {i} wheel {k}: comp {:.4} drawn {:.4} pivot {:.4} dz {:.4}", comp, drawn, pivot.z, dz);
             }
             // (every frame, however small: a dead band of 3 mm had the correction switch on
@@ -2580,10 +2593,12 @@ pub fn compute_mesh_props(ty: &VehicleType, var: &dyn Fn(&str) -> Option<f32>) -
                 slot_uv: vec![[0.0; 2]; vm.materials.len().max(1)],
                 ..Default::default()
             };
-            for m in &def.materials {
+            for (mi, m) in def.materials.iter().enumerate() {
                 // [matl_change] tex idx var + [matl_item]: the variant (night map) is active
                 // when the variable is set
-                if let Some((_, _, v)) = &m.change {
+                if let Some((_, _, v)) = m.change.as_ref().filter(|_| !m.item) {
+                    // (its items follow it: item n shows at n, 1 <= n <= their number)
+                    let items = def.materials[mi + 1..].iter().take_while(|d| d.item).count().max(1) as f32;
                     if let Some(slot) = override_slot(&vm.materials, m) {
                         // (the item as Omsi.exe picks it: the variable rounded is 1; an
                         // undeclared one is 0 - see scene.rs `change_picks_item`)
@@ -2593,7 +2608,8 @@ pub fn compute_mesh_props(ty: &VehicleType, var: &dyn Fn(&str) -> Option<f32>) -
                             .ok()
                             .or_else(|| var(v))
                             .unwrap_or(0.0);
-                        props.slot_night[slot] = if x.is_finite() && x.round_ties_even() == 1.0 { 1.0 } else { 0.0 };
+                        let n = if x.is_finite() { x.round_ties_even() } else { 0.0 };
+                        props.slot_night[slot] = if n >= 1.0 && n <= items { 1.0 } else { 0.0 };
                     }
                 }
                 // several light maps: the slot is as bright as the brightest (the texture

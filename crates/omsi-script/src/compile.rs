@@ -147,6 +147,41 @@ impl Program {
         })
     }
 
+    /// Whether running `block` (with the macros it calls) reads variable `var`.
+    pub fn block_reads(&self, block: BlockId, var: VarId) -> bool {
+        let mut seen = hashbrown::HashSet::new();
+        self.block_reads_rec(block, var, &mut seen)
+    }
+
+    fn block_reads_rec(&self, block: BlockId, var: VarId, seen: &mut hashbrown::HashSet<BlockId>) -> bool {
+        if !seen.insert(block) {
+            return false;
+        }
+        let Some(b) = self.blocks.get(block as usize) else { return false };
+        b.ops.iter().any(|op| match op {
+            Op::Load(v) => *v == var,
+            Op::Macro(m) => self.block_reads_rec(*m, var, seen),
+            _ => false,
+        })
+    }
+
+    /// Whether the vehicle's gearbox is a manual one worked through gates (`kw_s_1`,
+    /// `kw_s_2` ...): it has the gates and either no automatic's `automatic_D`, or its first
+    /// gate asks for the clutch pedal (`{trigger:kw_s_1} (L.L.clutch) 1 = ...`). An
+    /// automatic whose scripts answer to the gate keys as well (gear hold, a dashboard's
+    /// display) and read a `Clutch` of their own somewhere (a torque converter's) is no
+    /// manual - taken for one, the automatic clutch of the settings worked its clutch at
+    /// every stop and pull-away.
+    pub fn manual_gearbox(&self) -> bool {
+        let (Some(g1), true) = (self.trigger("kw_s_1").or_else(|| self.trigger("kw_s_1_fest")), self.trigger("kw_s_2").or_else(|| self.trigger("kw_s_2_fest")).is_some()) else { return false };
+        // (a script that reads OMSI's `AutoClutch` works a clutch of its own: the Sprinter
+        // W906 MT, whose dashboard answers to `automatic_D` as well, #279)
+        if self.trigger("automatic_D").is_none() || self.reads_sys(SysVar::AutoClutch) {
+            return true;
+        }
+        ["Clutch", "clutch_pedal"].iter().filter_map(|n| self.var(n)).any(|v| self.block_reads(g1, v))
+    }
+
     /// Names (lower case, sorted) of the triggers that can set variable `name` (to anything
     /// but 0): which key or switch of a vehicle turns its electrics on or cranks its
     /// engine, whatever the mod called it. The engine's own `ai_*` triggers are left out.
@@ -780,6 +815,31 @@ fn patch(op: &mut Op, target: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn program_of(script: &str) -> Program {
+        let dir = std::env::temp_dir().join(format!("omsi_gearbox_{}_{}", std::process::id(), script.len()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let osc = dir.join("g.osc");
+        std::fs::write(&osc, script).unwrap();
+        let p = compile(&CompileInput { builtin_vars: vec!["Clutch".into()], scripts: vec![osc], ..Default::default() });
+        let _ = std::fs::remove_dir_all(&dir);
+        p
+    }
+
+    #[test]
+    fn a_manual_gearbox_is_told_from_an_automatic_with_gate_keys() {
+        // the LiAZ KPP: gates, the first one asks for the clutch
+        let kpp = program_of("{trigger:kw_s_1} (L.L.Clutch) 1 = {if} 1 (S.L.g) {endif} {end}\n{trigger:kw_s_2} 2 (S.L.g) {end}\n");
+        assert!(kpp.manual_gearbox());
+        // an automatic with gear-hold keys and a torque converter's clutch elsewhere
+        let auto = program_of("{trigger:automatic_D} 1 (S.L.d) {end}\n{trigger:kw_s_1} 1 (S.L.hold) {end}\n{trigger:kw_s_2} 2 (S.L.hold) {end}\n{macro:conv} (L.L.Clutch) (S.L.c) {end}\n");
+        assert!(!auto.manual_gearbox());
+        // gates and no automatic at all
+        let plain = program_of("{trigger:kw_s_1} 1 (S.L.g) {end}\n{trigger:kw_s_2} 2 (S.L.g) {end}\n");
+        assert!(plain.manual_gearbox());
+        // a stock automatic: no gates
+        assert!(!program_of("{trigger:automatic_D} 1 (S.L.d) {end}\n").manual_gearbox());
+    }
 
     #[test]
     fn tokens() {

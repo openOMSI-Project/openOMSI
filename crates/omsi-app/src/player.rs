@@ -526,8 +526,8 @@ impl Player {
         let gate = gate.strip_suffix("_fest").unwrap_or(gate);
         let is_gate = gate.eq_ignore_ascii_case("r") || gate.eq_ignore_ascii_case("n") || gate.parse::<u32>().is_ok();
         let program = &self.vehicle.ty.program;
-        let reads_clutch = program.var("Clutch").is_some_and(|v| program.reads(v));
-        if !is_gate || !reads_clutch || self.vehicle.host.auto_clutch < 0.5 || program.trigger(name).is_none() || program.reads_sys(omsi_script::SysVar::AutoClutch) {
+        // (a manual gearbox only: see `Program::manual_gearbox`)
+        if !is_gate || !program.manual_gearbox() || self.vehicle.host.auto_clutch < 0.5 || program.trigger(name).is_none() || program.reads_sys(omsi_script::SysVar::AutoClutch) {
             return;
         }
         self.vehicle.set_var("Clutch", 1.0);
@@ -1090,7 +1090,7 @@ impl Player {
     /// from a stop stalled the engine unless a clutch pedal was worked.
     pub(crate) fn auto_clutch_bite(&mut self, throttle: f32) {
         let program = &self.vehicle.ty.program;
-        let has_manual_gate = program.trigger("kw_s_1").is_some() || program.trigger("kw_s_1_fest").is_some();
+        let has_manual_gate = program.manual_gearbox();
         // (only a gearbox that reads the clutch pedal: an automatic whose scripts answer to
         // the number keys as well had its clutch pressed at every stop, and some went to
         // neutral when it stood, #234)
@@ -1120,6 +1120,12 @@ impl Player {
         self.axes.lock_curvature = self.vehicle.ty.def.inv_min_turn_radius;
         self.axes.update(dt);
         let a = self.analog;
+        // a throttle pedal takes off a brake the keys hold (`pedal_hold`), as the throttle
+        // key does: a brake tapped on the keys or a wheel's button stayed on under the
+        // pedal and the bus was driven against its brakes (#377)
+        if a.throttle.is_some_and(|t| t > 0.05) {
+            self.axes.brake = 0.0;
+        }
         self.auto_clutch_bite(a.throttle.unwrap_or(0.0).max(self.axes.throttle));
         self.vehicle.set_controls(omsi_sim::Controls {
             throttle: a.throttle.unwrap_or(self.axes.throttle).max(self.axes.throttle),
@@ -1555,8 +1561,50 @@ impl Player {
     /// Pose and place the driver at the wheel; `show` false hides the figure (the `driver`
     /// setting off), `mirror_only` keeps it to the mirrors (the cab view).
     pub(crate) fn sync_driver(&mut self, renderer: &Renderer, scene: &mut Scene, dt: f32, show: bool, mirror_only: bool) {
+        self.sync_driver_hands(renderer, scene, dt, show, mirror_only, false);
+    }
+
+    /// As [`Player::sync_driver`], with the driver's hands shown in the cab view or not
+    /// (Settings → "Driver's hands in the cab view").
+    pub(crate) fn sync_driver_hands(&mut self, renderer: &Renderer, scene: &mut Scene, dt: f32, show: bool, mirror_only: bool, hands: bool) {
         if let Some(d) = self.driver.as_mut() {
+            d.show_hands_in_cab = hands;
             d.update(renderer, scene, &self.vehicle, dt, show, mirror_only);
+        }
+    }
+
+    /// The driver's chosen camera as it is fixed in the bus (before the bus's own motion), turned
+    /// by the look and the steering: what a glide between two cameras mixes.
+    pub(crate) fn driver_local(&self, look: (f32, f32)) -> Option<omsi_vehicle::Camera> {
+        let def = &self.vehicle.ty.def;
+        let n = def.cameras_driver.len().max(1);
+        let c = def.cameras_driver.get((def.camera_std + self.cam_choice.0) % n).or(def.cameras_driver.first())?;
+        Some(omsi_vehicle::Camera {
+            yaw: c.yaw + look.0 + self.steer_look,
+            pitch: (c.pitch + look.1).clamp(-89.0, 89.0),
+            ..c.clone()
+        })
+    }
+
+    /// `driver_local`'s camera in the world, with the bus's pitch and bank and the head on it
+    /// (the same as `camera_look` makes of the driver's camera).
+    pub(crate) fn driver_world(&self, turned: &omsi_vehicle::Camera) -> Camera {
+        let (eye, yaw, pitch, roll) = self.vehicle.camera_world_full(turned);
+        let eye = eye + self.vehicle.body_rotation().transform_vector3(self.head + self.seat).as_dvec3();
+        Camera { position: eye, yaw, pitch: pitch.clamp(-89.0, 89.0), roll, fov_deg: turned.fov, near: 0.25, far: 6000.0 }
+    }
+
+    /// Where a camera in the world (the walker's eyes) is in the bus's frame.
+    pub(crate) fn local_of_world(&self, cam: &Camera) -> omsi_vehicle::Camera {
+        let inv = self.vehicle.body_rotation().inverse();
+        let pos = inv.transform_vector3((cam.position - self.vehicle.position).as_vec3());
+        let f = inv.transform_vector3(cam.forward());
+        omsi_vehicle::Camera {
+            pos: pos.to_array(),
+            yaw: f.x.atan2(f.y).to_degrees(),
+            pitch: f.z.clamp(-1.0, 1.0).asin().to_degrees(),
+            fov: cam.fov_deg,
+            ..Default::default()
         }
     }
 

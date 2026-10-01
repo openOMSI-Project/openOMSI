@@ -296,8 +296,7 @@ impl App {
             // manual bus as well - the Sprinter W906 MT showed R N D, #279: a gearbox
             // script that reads the clutch pedal is a manual one)
             let program = &p.vehicle.ty.program;
-            let reads_clutch = program.var("Clutch").is_some_and(|v| program.reads(v));
-            let manual = scripted("kw_s_1") && scripted("kw_s_2") && (!scripted("automatic_D") || reads_clutch);
+            let manual = program.manual_gearbox();
             let count = p.vehicle.ty.program.constant("antrieb_number_gears").map(|n| n.round() as usize).filter(|n| (1..=8).contains(n));
             let gears: Vec<(&'static str, &'static str)> = if manual {
                 MANUAL.iter().copied().enumerate().filter(|(k, (a, _))| {
