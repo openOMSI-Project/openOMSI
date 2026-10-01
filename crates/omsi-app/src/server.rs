@@ -38,6 +38,8 @@ pub(crate) struct ServerCfg {
     /// Only these buses may be driven on the server (vehicle files, empty: every bus the
     /// server has installed).
     pub vehicles: Vec<String>,
+    /// `GET /players` on the web port tells who drives what and where (for a web map).
+    pub share_positions: bool,
 }
 
 pub(crate) const DEFAULT_CFG: &str = "\
@@ -82,6 +84,10 @@ time_speed = 1
 # the buses players may drive, separated by ; (vehicle files such as
 # Vehicles/MAN_SD200/MAN_SD77.bus; empty: every bus installed on the server)
 vehicles =
+
+# tell anyone who asks the web port (GET /players) the players' names, buses, lines and
+# positions - for a live map of the server on a website; tell your players when it is on
+share_positions = 0
 ";
 
 impl ServerCfg {
@@ -125,6 +131,7 @@ impl ServerCfg {
             admin_password: kv.get("admin_password").cloned().unwrap_or_default(),
             time_speed: kv.get("time_speed").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite()).unwrap_or(1.0).clamp(1.0, 30.0),
             vehicles: kv.get("vehicles").map(|v| v.split(';').map(|x| x.trim().replace('\\', "/")).filter(|x| !x.is_empty()).collect()).unwrap_or_default(),
+            share_positions: flag("share_positions", false),
         })
     }
 }
@@ -144,6 +151,8 @@ pub(crate) fn info_of(cfg: &ServerCfg) -> omsi_net::ws::ServerInfo {
         password: false,
         vehicles: cfg.vehicles.clone(),
         reached_at: String::new(),
+        players_public: cfg.share_positions,
+        player_list: Vec::new(),
     }
 }
 
@@ -185,8 +194,32 @@ pub(crate) static SERVER_ADMIN: std::sync::OnceLock<(String, f64)> = std::sync::
 /// A dedicated server run: graphics without a device, the whole world by interest.
 pub(crate) static SERVER_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Every second of a server run: what the status page says (players, time, weather).
+/// Every second of a server run: what the status page says (players, time, weather) and
+/// who is where (`GET /players`, when `share_positions` is on).
 pub(crate) fn tick_status(lan: &omsi_net::LanSession, time: f64, weather: &str) {
     let players = lan.peers().filter(|p| p.has_info).count();
-    crate::lan::update_server_info(players, &crate::schedule::hhmm(time), weather);
+    // (the admin's clock shift may take the time below 0 or past midnight: 23:08 had come
+    // out as "00:-52")
+    crate::lan::update_server_info(players, &crate::schedule::hhmm(time.rem_euclid(86400.0)), weather);
+    let list = lan
+        .peers()
+        .filter(|p| p.has_info && p.has_pose)
+        .map(|p| {
+            let q = &p.pose;
+            omsi_net::ws::PlayerInfo {
+                id: q.id,
+                name: q.name.clone(),
+                bus: q.bus.clone(),
+                line: q.line.clone(),
+                destination: q.destination.clone(),
+                tour: q.tour.clone(),
+                x: q.x,
+                y: q.y,
+                heading: q.heading,
+                speed_kmh: q.speed_kmh,
+                lat_lon: omsi_map::world_to_lat_lon(q.x, q.y),
+            }
+        })
+        .collect();
+    crate::lan::update_server_players(list);
 }

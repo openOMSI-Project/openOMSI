@@ -115,6 +115,29 @@ pub fn world_to_tile_local(x: f64, y: f64) -> ((i32, i32), (f64, f64)) {
     ((tx, ty), ((x - tx as f64 * ts) / kx, (y - ty as f64 * ts) / ky))
 }
 
+/// Latitude and longitude (degrees) of a point given in tile (tx, ty)'s own frame on a
+/// `[worldcoordinates]` map: the tile is the Web Mercator tile of zoom 16 in column
+/// `tx + 32768` and row `ty` counted north from the equator (see [`world_row_width`]), its
+/// local metres run across at the tile's mid-height width and up at its upper edge's.
+pub fn tile_local_to_lat_lon(tx: i32, ty: i32, local_x: f64, local_y: f64) -> (f64, f64) {
+    let (w0, w1) = (world_row_width(ty), world_row_width(ty + 1));
+    let lon = ((tx + 32768) as f64 + local_x / ((w0 + w1) / 2.0)) / 65536.0 * 360.0 - 180.0;
+    let row = ty as f64 + local_y / w1;
+    let lat = 2.0 * (std::f64::consts::TAU * row / 65536.0).exp().atan() - std::f64::consts::FRAC_PI_2;
+    (lat.to_degrees(), lon)
+}
+
+/// Latitude and longitude (degrees) of a world point of the loaded map, for a web map of
+/// the server's players; `None` on a map without `[worldcoordinates]`, which lies nowhere
+/// on the earth.
+pub fn world_to_lat_lon(x: f64, y: f64) -> Option<(f64, f64)> {
+    if !world_coordinates() {
+        return None;
+    }
+    let ((tx, ty), (lx, ly)) = world_to_tile_local(x, y);
+    Some(tile_local_to_lat_lon(tx, ty, lx, ly))
+}
+
 /// The tile index in a `tile_<x>_<y>.map` file name.
 pub fn tile_index_of(name: &str) -> Option<(i32, i32)> {
     let stem = name.trim().to_ascii_lowercase();
@@ -135,6 +158,15 @@ mod world_tests {
         assert!(((world_row_width(11281) - world_row_width(11282)) - 0.0283).abs() < 0.002);
         assert_eq!(tile_index_of("tile_2405_11280.map"), Some((2405, 11280)));
         assert_eq!(tile_index_of("Tile_-2_3.map"), Some((-2, 3)));
+    }
+
+    #[test]
+    fn spandau_on_the_earth() {
+        // the bus stop "U Rathaus Spandau" of tile_2402_11279.map (object 67032): on the
+        // Carl-Schurz-Strasse, a few metres from where OpenStreetMap has the stop
+        let (lat, lon) = tile_local_to_lat_lon(2402, 11279, 342.786665653207, 276.13607466369);
+        assert!((lat - 52.53541).abs() < 1e-4, "{lat}");
+        assert!((lon - 13.19964).abs() < 1e-4, "{lon}");
     }
 }
 /// Terrain samples per tile edge.

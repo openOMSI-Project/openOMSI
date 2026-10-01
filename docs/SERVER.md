@@ -27,7 +27,12 @@ Players reach it two ways:
   tunnel --url http://127.0.0.1:<web_port>` and prints the `https://….trycloudflare.com`
   address). The same port answers `GET /status` (JSON: name, motd, map, players,
   max_players, time, weather, version, protocol) and `GET /icon.png`, which the launcher's
-  Multiplayer → Servers list shows.
+  Multiplayer → Servers list shows. With `share_positions = 1` it also answers
+  `GET /players`: a JSON array of the players (`id`, `name`, `bus`, `line`, `destination`,
+  `tour`, `x`/`y` in world metres east/north, `heading` in degrees clockwise from north,
+  `speed_kmh`, and `lat`/`lon` on a `[worldcoordinates]` map such as Berlin-Spandau, `null`
+  elsewhere), refreshed every second - what a live map of the server on a website needs.
+  It is off by default: the players' names and positions are then nobody's business.
 
 The same gateway and tunnel open for a player hosting by **code** (Connect by Code): its
 address goes to the rendezvous topic, and a joining game that gets no answer from the

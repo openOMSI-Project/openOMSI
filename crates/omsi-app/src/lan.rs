@@ -830,6 +830,17 @@ pub fn update_server_info(players: usize, time: &str, weather: &str) {
     }
 }
 
+/// A server run: the players `GET /players` lists now.
+pub fn update_server_players(list: Vec<omsi_net::ws::PlayerInfo>) {
+    if let Ok(w) = WS_PATH.lock() {
+        if let Some(g) = w.as_ref().and_then(|w| w.gateway.as_ref()) {
+            if let Ok(mut i) = g.info.lock() {
+                i.player_list = list;
+            }
+        }
+    }
+}
+
 /// Joining game: reach `url` (a server's or a host's tunnel) over a WebSocket; the local
 /// address to join instead.
 fn ws_join_target(url: &str) -> Result<String, String> {

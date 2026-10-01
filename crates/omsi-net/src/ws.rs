@@ -8,8 +8,9 @@
 //! * [`WsGateway`] (the host's or the server's side) listens for HTTP on a TCP port. A
 //!   WebSocket there gets a UDP socket of its own on 127.0.0.1, so the session sees every
 //!   player coming in this way as an address of its own. The same port answers
-//!   `GET /status` (a small JSON object about the server, for the launcher's list) and
-//!   `GET /icon.png`.
+//!   `GET /status` (a small JSON object about the server, for the launcher's list),
+//!   `GET /icon.png` and, when the server shares them (`share_positions`), `GET /players`:
+//!   who drives what and where, for a web map of the server.
 //! * [`WsClient`] (a joining game) connects to `wss://…/ws`, binds a UDP socket on
 //!   127.0.0.1 and gives its address to `LanSession::join`; whatever the game sends there
 //!   goes over the WebSocket and back.
@@ -42,6 +43,60 @@ pub struct ServerInfo {
     /// Where it answered (`http(s)://…`), set by `query`: a server added by its bare
     /// address (`1.2.3.4`, `host:27025`) is joined there.
     pub reached_at: String,
+    /// `GET /players` answers (the server shares its players' positions); otherwise 404.
+    pub players_public: bool,
+    /// The players now, for `GET /players`.
+    pub player_list: Vec<PlayerInfo>,
+}
+
+/// A player as `GET /players` tells it: a web map of the server draws it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PlayerInfo {
+    pub id: u32,
+    pub name: String,
+    /// Vehicle file (`Vehicles/…/….bus`), empty for a player on foot.
+    pub bus: String,
+    pub line: String,
+    pub destination: String,
+    /// The timetable tour, `<line>/<tour>` (empty for none).
+    pub tour: String,
+    /// World metres (x east, y north) and heading (degrees, clockwise from north).
+    pub x: f64,
+    pub y: f64,
+    pub heading: f32,
+    pub speed_kmh: f32,
+    /// Where that is on the earth, on a `[worldcoordinates]` map.
+    pub lat_lon: Option<(f64, f64)>,
+}
+
+impl PlayerInfo {
+    pub fn to_json(&self) -> String {
+        let num = |v: f64, digits: usize| if v.is_finite() { format!("{v:.digits$}") } else { "null".into() };
+        let (lat, lon) = match self.lat_lon {
+            Some((a, o)) => (num(a, 6), num(o, 6)),
+            None => ("null".into(), "null".into()),
+        };
+        format!(
+            "{{\"id\":{},\"name\":{},\"bus\":{},\"line\":{},\"destination\":{},\"tour\":{},\"x\":{},\"y\":{},\"heading\":{},\"speed_kmh\":{},\"lat\":{},\"lon\":{}}}",
+            self.id,
+            json_str(&self.name),
+            json_str(&self.bus),
+            json_str(&self.line),
+            json_str(&self.destination),
+            json_str(&self.tour),
+            num(self.x, 1),
+            num(self.y, 1),
+            num(self.heading as f64, 1),
+            num(self.speed_kmh as f64, 1),
+            lat,
+            lon
+        )
+    }
+}
+
+/// `GET /players`: a JSON array of the players.
+pub fn players_json(players: &[PlayerInfo]) -> String {
+    format!("[{}]", players.iter().map(PlayerInfo::to_json).collect::<Vec<_>>().join(","))
 }
 
 impl ServerInfo {
@@ -80,6 +135,7 @@ impl ServerInfo {
             password: json_value(s, "password").map(|v| v.trim() == "true").unwrap_or(false),
             vehicles: text("vehicles").map(|v| v.split(';').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default(),
             reached_at: String::new(),
+            ..Default::default()
         })
     }
 }
@@ -316,6 +372,14 @@ fn serve(stream: TcpStream, target: SocketAddr, info: &Mutex<ServerInfo>, stop: 
         let _ = s.read(&mut head);
         let (status, ctype, body): (&str, &str, Vec<u8>) = match path.as_str() {
             "/status" | "/status.json" => ("200 OK", "application/json", info.lock().unwrap_or_else(|e| e.into_inner()).to_json().into_bytes()),
+            "/players" | "/players.json" => {
+                let i = info.lock().unwrap_or_else(|e| e.into_inner());
+                if i.players_public {
+                    ("200 OK", "application/json", players_json(&i.player_list).into_bytes())
+                } else {
+                    ("404 Not Found", "text/plain", b"this server does not share its players' positions".to_vec())
+                }
+            }
             "/icon.png" => {
                 let icon = info.lock().unwrap_or_else(|e| e.into_inner()).icon.clone();
                 if icon.is_empty() {
@@ -636,6 +700,18 @@ mod tests {
     }
 
     #[test]
+    fn players_list() {
+        let p = PlayerInfo { id: 3, name: "Anna \"A\"".into(), bus: "Vehicles/MAN_SD200/MAN_SD77.bus".into(), line: "37".into(), x: 894179.74, y: 4196165.3, heading: 200.0, speed_kmh: 31.25, lat_lon: Some((52.535412, 13.199642)), ..Default::default() };
+        let j = players_json(&[p.clone(), PlayerInfo { id: 4, x: f64::NAN, ..Default::default() }]);
+        assert!(j.starts_with("[{\"id\":3,\"name\":\"Anna \\\"A\\\"\""), "{j}");
+        assert!(j.contains("\"line\":\"37\""), "{j}");
+        assert!(j.contains("\"x\":894179.7,"), "{j}");
+        assert!(j.contains("\"lat\":52.535412,\"lon\":13.199642}"), "{j}");
+        assert!(j.contains("\"id\":4,") && j.contains("\"x\":null") && j.ends_with("\"lat\":null,\"lon\":null}]"), "{j}");
+        assert_eq!(players_json(&[]), "[]");
+    }
+
+    #[test]
     fn datagrams_go_both_ways() {
         // a stand-in session: echoes every datagram
         let echo = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -664,5 +740,18 @@ mod tests {
         assert!(ok, "the datagram came back through the WebSocket");
         let st = query(&format!("http://{}", gw.addr), false).unwrap();
         assert_eq!(st.name, "t");
+        // the players' positions only when the server shares them
+        let get = |path: &str| {
+            let mut s = TcpStream::connect(gw.addr).unwrap();
+            s.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes()).unwrap();
+            let mut r = String::new();
+            let _ = s.read_to_string(&mut r);
+            r
+        };
+        assert!(get("/players").starts_with("HTTP/1.1 404"));
+        gw.info.lock().unwrap().players_public = true;
+        gw.info.lock().unwrap().player_list = vec![PlayerInfo { id: 1, name: "p".into(), ..Default::default() }];
+        let r = get("/players");
+        assert!(r.starts_with("HTTP/1.1 200") && r.ends_with("\"lat\":null,\"lon\":null}]"), "{r}");
     }
 }
