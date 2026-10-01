@@ -224,6 +224,10 @@ impl Launcher {
         let why = state::root_problem(&app.state.config.root);
         app.state.set_status(why, true);
     }
+    #[cfg(target_os = "android")]
+    if !app.state.config.root.trim().is_empty() {
+        omsi_cfg::ensure_nomedia_markers(std::path::Path::new(&app.state.config.root));
+    }
     if let Ok(p) = omsi_cfg::env::var("OMSI_LAUNCHER_PAGE") {
         if let Some((pg, _, _)) = PAGES.iter().find(|(_, n, _)| n.eq_ignore_ascii_case(p.split(':').next().unwrap_or(""))) {
             app.page = *pg;

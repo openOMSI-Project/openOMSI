@@ -56,6 +56,7 @@ fn android_main(app: AndroidApp) {
     };
     std::env::set_var("OMSI_CONTENT", &content);
     let _ = std::fs::write(content.join("README.txt"), README);
+    omsi_cfg::ensure_nomedia_markers(&content);
     // `openOMSI/env.txt`: the OMSI_* switches a computer takes from its environment, one
     // `NAME=value` a line (a phone has no environment to set; for looking into problems)
     if let Ok(t) = std::fs::read_to_string(content.join("env.txt")) {

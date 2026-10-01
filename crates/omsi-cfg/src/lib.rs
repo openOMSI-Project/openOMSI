@@ -957,7 +957,35 @@ pub fn ensure_content_layout(dir: &Path) -> std::io::Result<()> {
     if !readme.exists() {
         std::fs::write(&readme, "Put a mod here (a folder or a .zip) and start the launcher: it works out what the mod is\n(a bus, a map, scenery objects, splines, textures, fonts ...) and sorts it into the folders\nnext to this one. The original OMSI 2 folder is never written to.\n")?;
     }
+    ensure_nomedia_markers(dir);
     Ok(())
+}
+
+/// Ensure `.nomedia` markers exist in game asset directories so Android media scanners
+/// do not index tens of thousands of texture files into the photo gallery (#443).
+/// The `Screenshots` directory is explicitly excluded so user screenshots remain visible.
+pub fn ensure_nomedia_markers(dir: &Path) {
+    if !dir.is_dir() {
+        return;
+    }
+    let nomedia = |p: &Path| {
+        let f = p.join(".nomedia");
+        if !f.exists() {
+            let _ = std::fs::write(f, "");
+        }
+    };
+    for sub in ["OMSI 2", "Mods", "Archives"] {
+        let p = dir.join(sub);
+        if p.is_dir() {
+            nomedia(&p);
+        }
+    }
+    for folder in CONTENT_FOLDERS {
+        let p = dir.join(folder);
+        if p.is_dir() {
+            nomedia(&p);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1100,6 +1128,30 @@ mod tests {
         }
         let f = CfgFile::from_bytes("g.cfg", &b);
         assert_eq!(f.lines, vec!["[name]", "Grundorf"]);
+    }
+
+    #[test]
+    fn nomedia_markers_placed_in_asset_folders_only() {
+        let tmp = std::env::temp_dir().join(format!("openomsi_nomedia_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let omsi2 = tmp.join("OMSI 2");
+        let mods = tmp.join("Mods");
+        let vehicles = tmp.join("Vehicles");
+        let screenshots = tmp.join("Screenshots");
+        let _ = std::fs::create_dir_all(&omsi2);
+        let _ = std::fs::create_dir_all(&mods);
+        let _ = std::fs::create_dir_all(&vehicles);
+        let _ = std::fs::create_dir_all(&screenshots);
+
+        ensure_nomedia_markers(&tmp);
+
+        assert!(omsi2.join(".nomedia").exists());
+        assert!(mods.join(".nomedia").exists());
+        assert!(vehicles.join(".nomedia").exists());
+        assert!(!screenshots.join(".nomedia").exists());
+        assert!(!tmp.join(".nomedia").exists());
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
 
