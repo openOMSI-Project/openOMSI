@@ -66,3 +66,6 @@ opt-level = 1
 inherits = "release"
 debug = 0
 strip = "debuginfo"
+
+[patch.crates-io]
+gpu-allocator = { path = "vendor/gpu-allocator" }
