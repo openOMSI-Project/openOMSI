@@ -224,6 +224,7 @@ impl ApplicationHandler for App {
                     return;
                 }
                 self.mouse_look = state == ElementState::Pressed;
+                self.mmb_held = state == ElementState::Pressed;
                 self.update_hover();
             }
             WindowEvent::MouseWheel { delta, .. } => {

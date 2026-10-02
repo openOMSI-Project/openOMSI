@@ -492,6 +492,7 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
         speed: 30.0,
         mouse_look: false,
         buttons_held: (false, false),
+        mmb_held: false,
         both_drag: None,
         f1_reset: None,
         vr_zoom_active: false,
