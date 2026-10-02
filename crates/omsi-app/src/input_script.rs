@@ -1141,9 +1141,9 @@ impl App {
                 // the FOV-multiplier curve instead of the linear way, same
                 // floor. Past the authored field of view it stays linear.
                 let intent = if self.view == "driver" { ZOOM_INTENT_F1 } else { ZOOM_INTENT };
-                let dy = y0 - y;
+                let dy = y - y0;
                 let m = if v0 > 1.0 {
-                    (v0 + dy / 500.0).clamp(0.2, v0.max(1.0))
+                    (v0 - dy / 500.0).clamp(0.2, v0.max(1.0))
                 } else {
                     precision_zoom_step(v0, dy, intent).clamp(0.2, 1.0)
                 };
