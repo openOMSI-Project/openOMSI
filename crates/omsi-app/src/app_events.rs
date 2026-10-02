@@ -940,10 +940,30 @@ impl ApplicationHandler for App {
                                     c.fov_deg = (c.fov_deg * z).clamp(8.0, 120.0);
                                 }
                             };
+                            // Eased Space return (F1): look + zoom glide home on the
+                            // same ease-out as the viewpoint switch instead of
+                            // teleporting. Leaving the view drops a return in flight.
+                            if self.view == "driver" {
+                                if let Some((look_from, zoom_from, t)) = self.f1_reset {
+                                    let (look, zoom, done) =
+                                        crate::input_script::reset_blend(look_from, zoom_from, t + dt);
+                                    if done {
+                                        self.look = (0.0, 0.0);
+                                        self.view_zoom.remove(&self.view);
+                                        self.f1_reset = None;
+                                    } else {
+                                        self.look = look;
+                                        self.view_zoom.insert(self.view.clone(), zoom);
+                                        self.f1_reset = Some((look_from, zoom_from, t + dt));
+                                    }
+                                }
+                            } else if self.f1_reset.is_some() {
+                                self.f1_reset = None;
+                            }
                             let mut cam = p.camera_look(&self.view, &base, self.look, self.orbit);
                             finish(&mut cam);
                             // Smooth cockpit camera switch (arrow keys): the glide mixes the camera left and the one
-                            // taken in the bus's own frame (smootherstep over CAM_BLEND_SECS); the bus's motion and
+                            // taken in the bus's own frame (ease-out over CAM_BLEND_SECS); the bus's motion and
                             // the head go on top afterwards, so nothing of the last frame's picture is needed.
                             {
                                 let inside_view = self.view == "driver";
@@ -1472,6 +1492,7 @@ impl ApplicationHandler for App {
                         self.look = (0.0, 0.0);
                         self.orbit = ORBIT_DEFAULT;
                         self.view_zoom.remove(&self.view);
+                        self.f1_reset = None;
                     }
                 }
                 if self.view != "free" {
