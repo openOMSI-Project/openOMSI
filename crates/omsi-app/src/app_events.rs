@@ -182,6 +182,7 @@ impl ApplicationHandler for App {
                     return;
                 }
                 self.mouse_look = state == ElementState::Pressed;
+                self.mmb_held = state == ElementState::Pressed;
                 self.update_hover();
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -940,6 +941,26 @@ impl ApplicationHandler for App {
                                     c.fov_deg = (c.fov_deg * z).clamp(8.0, 120.0);
                                 }
                             };
+                            // Eased Space return (F1): look + zoom glide home over
+                            // CAM_BLEND_SECS instead of teleporting. Leaving
+                            // the view drops a return in flight.
+                            if self.view == "driver" {
+                                if let Some((look_from, zoom_from, t)) = self.f1_reset {
+                                    let (look, zoom, done) =
+                                        crate::input_script::reset_blend(look_from, zoom_from, t + dt);
+                                    if done {
+                                        self.look = (0.0, 0.0);
+                                        self.view_zoom.remove(&self.view);
+                                        self.f1_reset = None;
+                                    } else {
+                                        self.look = look;
+                                        self.view_zoom.insert(self.view.clone(), zoom);
+                                        self.f1_reset = Some((look_from, zoom_from, t + dt));
+                                    }
+                                }
+                            } else if self.f1_reset.is_some() {
+                                self.f1_reset = None;
+                            }
                             let mut cam = p.camera_look(&self.view, &base, self.look, self.orbit);
                             finish(&mut cam);
                             // Smooth cockpit camera switch (arrow keys): the glide mixes the camera left and the one
@@ -1472,6 +1493,7 @@ impl ApplicationHandler for App {
                         self.look = (0.0, 0.0);
                         self.orbit = ORBIT_DEFAULT;
                         self.view_zoom.remove(&self.view);
+                        self.f1_reset = None;
                     }
                 }
                 if self.view != "free" {
@@ -2446,7 +2468,27 @@ impl ApplicationHandler for App {
             // (in a view of the bus the cursor's own way turns it: move_cursor)
             if self.mouse_look {
                 if !self.cursor_looks() {
-                    if self.view == "outside" {
+                    // The right button held is precision zoom (vertical drag),
+                    // never a look — except while a both-drag owns the gesture
+                    // through the cursor handler. The middle button looks.
+                    let rmb_zoom = self.buttons_held.1
+                        && !self.mmb_held
+                        && self.both_drag.is_none()
+                        && matches!(self.view.as_str(), "driver" | "outside" | "free");
+                    if rmb_zoom {
+                        // zooming takes over from an eased Space return.
+                        self.f1_reset = None;
+                        let intent = if self.view == "driver" {
+                            crate::input_script::ZOOM_INTENT_F1
+                        } else {
+                            crate::input_script::ZOOM_INTENT
+                        };
+                        let m = self.view_zoom.get(&self.view).copied().unwrap_or(1.0);
+                        self.view_zoom.insert(
+                            self.view.clone(),
+                            crate::input_script::precision_zoom_step(m, delta.1 as f32, intent),
+                        );
+                    } else if self.view == "outside" {
                         // F3 chase orbits at its own gain, not the head's.
                         self.sync_view_look();
                         let (y, p) = crate::input_script::chase_orbit_step(

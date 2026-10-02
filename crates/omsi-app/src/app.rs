@@ -90,6 +90,8 @@ pub(crate) struct App {
     pub(crate) mouse_look: bool,
     /// The left and right mouse buttons held.
     pub(crate) buttons_held: (bool, bool),
+    /// The middle button held (looks round; the right button zooms).
+    pub(crate) mmb_held: bool,
     /// The right button (or both) held: OMSI's mouse zoom (0x82c5f8) - moving the mouse up
     /// widens the view in the bus or takes the outside camera further away, by the value at
     /// the press over 500 pixels: (the cursor's height then, the zoom or distance then).
@@ -235,6 +237,9 @@ pub(crate) struct App {
     /// The zoom of the views inside the bus (driver, passenger): their field of view is
     /// the camera's times this (the mouse wheel, + and -, a pinch), per view.
     pub(crate) view_zoom: std::collections::HashMap<String, f32>,
+    /// Eased Space return in flight (F1 only): ((look from), (zoom from), seconds in).
+    /// A hand on the view cancels it; other views reset instantly.
+    pub(crate) f1_reset: Option<((f32, f32), f32, f32)>,
     pub(crate) orbit: f32,
     pub(crate) frames: u32,
     pub(crate) fps_t: Instant,

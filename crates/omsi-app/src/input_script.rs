@@ -680,6 +680,8 @@ impl App {
 
     pub(crate) fn look_by(&mut self, dx: f32, dy: f32) {
         self.sync_view_look();
+        // a hand on the view cancels an eased Space return.
+        self.f1_reset = None;
         if self.view == "foot" {
             self.foot_look(dx, dy);
             return;
@@ -701,7 +703,6 @@ impl App {
         }
     }
 
-    /// The cursor moved to (x, y) in physical pixels - from the window or an `OMSI_INPUT` script.
     /// The cursor moved, and the switch under it is named at once (touch input and
     /// `OMSI_INPUT` scripts read `hover` right after).
     pub(crate) fn on_cursor(&mut self, x: f32, y: f32) {
@@ -962,7 +963,24 @@ impl App {
         // (0x82c5f8: yaw and pitch at the press plus the cursor's way times fov / 78.75):
         // raw device deltas are no window pixels (a tablet, a remote desktop or a VM
         // reports positions there and spun the view) and did not follow the zoom
-        if self.cursor_looks() {
+        // The right button held is precision zoom (vertical cursor travel),
+        // never a look — except while a both-drag owns the gesture above.
+        // The middle button looks round.
+        let rmb_zoom = self.buttons_held.1
+            && !self.mmb_held
+            && self.both_drag.is_none()
+            && matches!(self.view.as_str(), "driver" | "outside" | "pax");
+        if rmb_zoom {
+            let scale = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0).max(0.1);
+            // zooming takes over from an eased Space return.
+            self.f1_reset = None;
+            let intent = if self.view == "driver" { ZOOM_INTENT_F1 } else { ZOOM_INTENT };
+            let m = self.view_zoom.get(&self.view).copied().unwrap_or(1.0);
+            self.view_zoom.insert(
+                self.view.clone(),
+                precision_zoom_step(m, (y - last.1) / scale, intent),
+            );
+        } else if self.cursor_looks() {
             let scale = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0).max(0.1);
             let fov = self.camera.as_ref().map(|c| c.fov_deg).unwrap_or(60.0);
             let k = look_deg_per_px(fov);
@@ -2349,17 +2367,42 @@ impl App {
             // (Omsi.exe's camera reset, 0x7edde4, puts back the field of view with the
             // direction: the zoom goes as well, #244)
             "view_reset_direction" => {
-                self.look = (0.0, 0.0);
-                self.view_zoom.remove(&self.view);
+                // F1 eases home (look + zoom glide); anywhere else, and with
+                // the glide switched off, it snaps like before.
+                if self.view == "driver"
+                    && self.settings.driverview_smooth
+                    && (self.look != (0.0, 0.0) || self.view_zoom.contains_key(&self.view))
+                {
+                    let zoom = self.view_zoom.get(&self.view).copied().unwrap_or(1.0);
+                    self.f1_reset = Some((self.look, zoom, 0.0));
+                } else {
+                    self.f1_reset = None;
+                    self.look = (0.0, 0.0);
+                    self.view_zoom.remove(&self.view);
+                }
                 #[cfg(windows)]
                 if let Some(vr) = self.vr.as_mut() { vr.recenter(); }
             }
             // (Space in Inputs/keyboard.cfg: every view looks ahead again, and back to the
             // standard camera - "center")
             "view_reset_all_directions" => {
-                self.look = (0.0, 0.0);
-                self.view_looks.clear();
-                self.view_zoom.clear();
+                // F1 eases home (look + zoom glide) from the values in place:
+                // zeroing them first would flash a frame of the destination.
+                // Everything else snaps.
+                if self.view == "driver"
+                    && self.settings.driverview_smooth
+                    && (self.look != (0.0, 0.0) || self.view_zoom.contains_key(&self.view))
+                {
+                    let zoom = self.view_zoom.get(&self.view).copied().unwrap_or(1.0);
+                    self.f1_reset = Some((self.look, zoom, 0.0));
+                    self.view_looks.clear();
+                    self.view_zoom.retain(|k, _| k == "driver");
+                } else {
+                    self.f1_reset = None;
+                    self.look = (0.0, 0.0);
+                    self.view_looks.clear();
+                    self.view_zoom.clear();
+                }
                 self.orbit = ORBIT_DEFAULT;
                 if let Some(p) = self.player.as_mut() {
                     p.cam_choice = (0, 0);
@@ -2726,7 +2769,13 @@ impl App {
         // (steering with the mouse: a cross, as OMSI shows it; turning the view with the
         // right button held: the four arrows OMSI shows then, #185)
         // (zooming with the mouse: the up-down arrows, Omsi's crSizeNS)
+        let rmb_zoom = self.buttons_held.1
+            && !self.mmb_held
+            && self.both_drag.is_none()
+            && matches!(self.view.as_str(), "driver" | "outside" | "pax" | "free");
         let kind: u8 = if self.both_drag.is_some() && self.game_menu.is_none() {
+            4
+        } else if rmb_zoom && self.game_menu.is_none() {
             4
         } else if self.mouse_look && self.game_menu.is_none() {
             3
@@ -2770,6 +2819,38 @@ pub(crate) fn chase_orbit_step(yaw: f32, pitch: f32, dx_px: f32, dy_px: f32) -> 
     )
 }
 
+/// Precision zoom step from a vertical drag: the zoom state `z` (0 wide ..
+/// 1 full zoom) travels at `intent` per 364 px, and the FOV multiplier is
+/// `1/(1+5.5*z)` — full zoom ~6.5x in. Drag down (`dy > 0`) zooms in.
+/// Never past 1.0 (never wider than the bus's own field of view); the floor
+/// is the caller's clamp. Pure (tested below).
+pub(crate) fn precision_zoom_step(mult: f32, dy_px: f32, intent: f32) -> f32 {
+    const RANGE: f32 = 5.5;
+    const FULL_DRAG_PX: f32 = 364.0;
+    let z = ((1.0 / mult.max(0.154) - 1.0) / RANGE).clamp(0.0, 1.0);
+    let z2 = (z + dy_px * intent / FULL_DRAG_PX).clamp(0.0, 1.0);
+    1.0 / (1.0 + RANGE * z2)
+}
+
+/// F1 zoom intent: the head zoom runs 20% slower than outside/free.
+pub(crate) const ZOOM_INTENT_F1: f32 = 0.56;
+/// Outside/free zoom intent: a full 364 px drag takes `z` 0 to 0.70.
+pub(crate) const ZOOM_INTENT: f32 = 0.70;
+
+/// Eased Space return for the F1 head: look and zoom glide home with the same
+/// smootherstep the viewpoint glide uses (`CAM_BLEND_SECS`), instead of
+/// teleporting. `t` seconds in; returns the current look, zoom and done.
+/// Pure (tested below).
+pub(crate) fn reset_blend(look_from: (f32, f32), zoom_from: f32, t: f32) -> ((f32, f32), f32, bool) {
+    let x = (t / crate::app::CAM_BLEND_SECS).clamp(0.0, 1.0);
+    let s = x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
+    (
+        (look_from.0 * (1.0 - s), look_from.1 * (1.0 - s)),
+        zoom_from + (1.0 - zoom_from) * s,
+        x >= 1.0,
+    )
+}
+
 #[cfg(test)]
 mod look_tests {
     #[test]
@@ -2787,6 +2868,33 @@ mod look_tests {
         // pitch never leaves the stops, whichever way it is dragged.
         assert_eq!(super::chase_orbit_step(0.0, 0.0, 0.0, -1000.0).1, 25.0);
         assert_eq!(super::chase_orbit_step(0.0, 0.0, 0.0, 1000.0).1, -60.0);
+    }
+
+    #[test]
+    fn precision_zoom_follows_the_fov_curve_and_never_widens() {
+        // a full 364 px drag down takes z 0 to 0.70: m = 1/(1+5.5*0.70).
+        let m = super::precision_zoom_step(1.0, 364.0, super::ZOOM_INTENT);
+        assert!((m - 1.0 / (1.0 + 5.5 * 0.70)).abs() < 1e-4, "{m}");
+        // drag down zooms in, drag up undoes it, never past 1.0.
+        let mid = super::precision_zoom_step(1.0, 100.0, super::ZOOM_INTENT);
+        assert!(mid < 1.0 && mid > 0.45, "{mid}");
+        assert!((super::precision_zoom_step(mid, -100.0, super::ZOOM_INTENT) - 1.0).abs() < 1e-4);
+        assert_eq!(super::precision_zoom_step(1.0, -50.0, super::ZOOM_INTENT), 1.0);
+        // F1 runs the same curve 20% slower.
+        let slow = super::precision_zoom_step(1.0, 100.0, super::ZOOM_INTENT_F1);
+        assert!(slow > mid && slow < 1.0, "{slow} vs {mid}");
+    }
+
+    #[test]
+    fn space_return_eases_home_like_the_viewpoint_glide() {
+        // start: untouched; halfway: ~halfway home; end: exact and done.
+        let (look, zoom, done) = super::reset_blend((30.0, -10.0), 0.5, 0.0);
+        assert_eq!((look, zoom, done), ((30.0, -10.0), 0.5, false));
+        let (look, zoom, done) = super::reset_blend((30.0, -10.0), 0.5, 0.3);
+        assert!(look.0 > 3.0 && look.0 < 27.0 && zoom > 0.5 && zoom < 1.0 && !done);
+        let (look, zoom, done) = super::reset_blend((30.0, -10.0), 0.5, 0.6);
+        assert_eq!((look, zoom, done), ((0.0, 0.0), 1.0, true));
+        assert!(super::reset_blend((30.0, -10.0), 0.5, 5.0).2);
     }
 }
 
