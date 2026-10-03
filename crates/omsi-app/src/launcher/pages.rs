@@ -1372,12 +1372,17 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
         pv.wizard = None;
     }
     if let Some(name) = add {
+        // (a device of buttons only - a gear shifter, a button box - has no axes for the
+        // assistant: its buttons are given their keys on its page)
+        let axes = !pv.io.as_ref().is_some_and(|io| io.buttons_only(&name));
         devices.push(DeviceCfg { name, second: "0".into(), ..Default::default() });
         pv.selected = devices.len() - 1;
         pv.revealed_button = None;
         pv.dirty = true;
         // a new device starts with the assistant
-        pv.wizard = Some(Wizard { step: 0, rest: [None; 8], at: Vec::new(), error: None, calibration: None, ff_choice: None, test_strength: crate::ffb_calibration::PULSE_FORCE });
+        if axes {
+            pv.wizard = Some(Wizard { step: 0, rest: [None; 8], at: Vec::new(), error: None, calibration: None, ff_choice: None, test_strength: crate::ffb_calibration::PULSE_FORCE });
+        }
     }
     // the dead zone (a setting of the game's)
     let dz_r = Rect::new(inner.x, inner.bottom() - 98.0, inner.w, 34.0);
@@ -1442,7 +1447,8 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
             l.state.settings_dirty = 0.3;
         }
     }
-    if l.ui.button("pad-wizard", Rect::new(inner.right() - 220.0, inner.y - 36.0, 220.0, 30.0), "Set up step by step", Some("touch_app"), ButtonKind::Normal) {
+    let buttons_only = pv.io.as_ref().is_some_and(|io| io.buttons_only(&d.name));
+    if !buttons_only && l.ui.button("pad-wizard", Rect::new(inner.right() - 220.0, inner.y - 36.0, 220.0, 30.0), "Set up step by step", Some("touch_app"), ButtonKind::Normal) {
         pv.wizard = Some(Wizard { step: 0, rest: [None; 8], at: Vec::new(), error: None, calibration: None, ff_choice: None, test_strength: crate::ffb_calibration::PULSE_FORCE });
     }
     const AXES: [&str; 8] = ["X axis", "Y axis", "Z axis", "X rotation", "Y rotation", "Z rotation", "Slider 1", "Slider 2"];
@@ -1504,7 +1510,8 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
         let sel_w = (w - lab_w - inv_w - shp_w - 60.0 - 4.0 * GAP).clamp(120.0, 200.0);
         let bar_w = (w - lab_w - sel_w - inv_w - shp_w - 4.0 * GAP).max(30.0);
         let shapes: Vec<String> = crate::controllers::AXIS_SHAPES.iter().map(|s| s.0.to_string()).collect();
-        for a in 0..8 {
+        // (a device of buttons only has no axes to give a function)
+        for a in (0..8).filter(|_| !buttons_only) {
             let r = Rect::new(x0, y, w, ROW);
             ui.label(Rect::new(r.x, r.y, lab_w, r.h), AXES[a]);
             let bar = Rect::new(r.x + lab_w + GAP, r.y + 12.0, bar_w, r.h - 24.0);

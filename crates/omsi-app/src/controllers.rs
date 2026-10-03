@@ -258,6 +258,9 @@ pub(crate) struct Devices {
     gilrs: Option<Gilrs>,
     #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
     calibration_wheel: Option<crate::evdev_ff::Wheel>,
+    /// Linux: devices with buttons only (a gear shifter), which gilrs does not list
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    button_devices: crate::evdev_buttons::ButtonDevices,
     #[cfg(windows)]
     di: Option<crate::dinput::DirectInput>,
     /// macOS: every axis element of every wheel and joystick, as last read (see `mac_hid`)
@@ -293,6 +296,8 @@ impl Devices {
             gilrs,
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             calibration_wheel: None,
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            button_devices: crate::evdev_buttons::ButtonDevices::new(),
             #[cfg(windows)]
             di,
             #[cfg(target_os = "macos")]
@@ -316,6 +321,14 @@ impl Devices {
         return self.di.is_some();
         #[cfg(not(windows))]
         false
+    }
+
+    /// A device of buttons only (a gear shifter, a button box): nothing for the axis assistant.
+    pub(crate) fn buttons_only(&self, name: &str) -> bool {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        return self.button_devices.connected().any(|(n, _)| names_match(n, name));
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        { let _ = name; false }
     }
 
     /// A device was plugged in or removed; ask the worker to rescan without blocking a frame.
@@ -434,6 +447,8 @@ impl Devices {
         if let Some(h) = self.hid.as_mut() {
             self.hid_axes = h.read();
         }
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        self.button_devices.poll(&mut out);
         out
     }
 
@@ -507,6 +522,12 @@ impl Devices {
         for (name, axes) in &self.hid_axes {
             if !v.iter().any(|c| names_match(&c.name, name)) {
                 v.push(Connected { name: name.clone(), hardware_id: None, axes: di_slots(axes), gamepad: false, ff: false, ff_capable: false, buttons: 0 });
+            }
+        }
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        for (name, buttons) in self.button_devices.connected() {
+            if !v.iter().any(|c| names_match(&c.name, name)) {
+                v.push(Connected { name: name.to_string(), hardware_id: None, axes: Vec::new(), gamepad: false, ff: false, ff_capable: false, buttons });
             }
         }
         v
@@ -1171,8 +1192,14 @@ fn declared_button_index(name: &str, code: u32) -> Option<usize> {
     with_declared(name, |codes| button_index(codes, code & 0xFFFF)).flatten()
 }
 
+/// The button number of an evdev key code of a device read from evdev (`evdev_buttons`).
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+pub(crate) fn evdev_button_number(name: &str, code: u32) -> Option<usize> {
+    declared_button_index(name, code).or_else(|| code_button(code))
+}
+
 #[cfg(target_os = "linux")]
-fn declared_button_count(name: &str) -> usize {
+pub(crate) fn declared_button_count(name: &str) -> usize {
     with_declared(name, button_count).unwrap_or(0)
 }
 
@@ -1198,7 +1225,7 @@ fn declared_buttons(name: &str) -> Option<Vec<u32>> {
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn key_bitmap_buttons(bitmap: &str) -> Vec<u32> {
+pub(crate) fn key_bitmap_buttons(bitmap: &str) -> Vec<u32> {
     let words: Vec<u64> = bitmap.split_whitespace().rev().filter_map(|w| u64::from_str_radix(w, 16).ok()).collect();
     (0x100..words.len() as u32 * 64).filter(|b| words[*b as usize / 64] >> (b % 64) & 1 != 0).collect()
 }
@@ -1211,7 +1238,7 @@ fn button_index(declared: &[u32], code: u32) -> Option<usize> {
     declared.iter().position(|c| *c == code)
 }
 
-fn code_button(code: u32) -> Option<usize> {
+pub(crate) fn code_button(code: u32) -> Option<usize> {
     let (hi, lo) = (code >> 16, (code & 0xFFFF) as usize);
     if cfg!(target_os = "macos") {
         (hi == 9 && lo >= 1).then(|| lo - 1)
