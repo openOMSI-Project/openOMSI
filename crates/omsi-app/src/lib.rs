@@ -53,6 +53,7 @@ mod puddles;
 mod quit;
 mod rain;
 mod window_wipers;
+mod window_drops;
 mod scene;
 mod schedule;
 mod schedule_paper;

@@ -1,6 +1,7 @@
 //! Persistent wetness on the player's glass, cleared by the animated blade's swept area.
 //! A small mask uses the existing transmap binding: no extra draw or offscreen pass.
 
+use crate::window_drops::Drops;
 use glam::{Vec2, Vec3};
 use omsi_geometry::MeshData;
 use omsi_render::{MaterialId, Renderer, Scene, TextureId};
@@ -41,6 +42,9 @@ struct Film {
     slot: usize,
     material: MaterialId,
     texture: TextureId,
+    drops: Drops,
+    drops_texture: TextureId,
+    paint_time: f32,
     points: Vec<Vec3>,
     // Negative is a recent wipe's residual film; 0..1 droplets; 1..2 the pushed ridge.
     wet: Vec<f32>,
@@ -141,16 +145,25 @@ impl WindowWipers {
                     let Some(data) = vehicle.ty.mesh_data(mesh) else {
                         continue;
                     };
-                    let Some((points, bounds)) = film_points(&data, slot) else {
+                    let cab = blades
+                        .iter()
+                        .map(|b| (b.current[0] + b.current[1]) * 0.5)
+                        .sum::<Vec3>()
+                        / blades.len() as f32;
+                    let cab = vehicle.mesh_transforms[mesh]
+                        .inverse()
+                        .transform_point3(cab);
+                    let Some((points, bounds)) = film_points_in_cab(&data, slot, Some(cab)) else {
                         continue;
                     };
-                    // Leave panes away from the blades on their existing script path.
+                    // Include the cab's side windows; distant passenger panes retain
+                    // the procedural path and do not need individual drop simulations.
                     if !points.iter().filter(|p| p.is_finite()).any(|p| {
                         let p = vehicle.mesh_transforms[mesh].transform_point3(*p);
                         blades.iter().any(|b| {
                             let [a, c] = b.previous;
                             let t = ((p - a).dot(c - a) / a.distance_squared(c)).clamp(0.0, 1.0);
-                            p.distance_squared(a.lerp(c, t)) < 0.35 * 0.35
+                            p.distance_squared(a.lerp(c, t)) < 1.8 * 1.8
                         })
                     }) {
                         continue;
@@ -173,21 +186,31 @@ impl WindowWipers {
                     for (pixel, point) in image.rgba.chunks_exact_mut(4).zip(&points) {
                         // Store depth to distinguish panes which overlap in X/Z (a
                         // wraparound windscreen's side must not inherit a front wipe).
-                        let depth = ((point.y + 32.0) / 64.0 * 65535.0).round() as u16;
+                        let depth =
+                            ((pane_depth(*point, bounds) + 32.0) / 64.0 * 65535.0).round() as u16;
                         pixel[0] = (depth >> 8) as u8;
                         pixel[1] = depth as u8;
                         pixel[2] = (wetness * 255.0).round() as u8;
                         pixel[3] = encode_wetness(wetness);
                     }
                     let texture = renderer.add_data_texture(scene, &image);
+                    let drops = Drops::new(
+                        Vec2::new(bounds[2].abs().recip(), bounds[3].recip()),
+                        wetness,
+                        (mesh * 7919 + slot * 104729 + 1) as u32,
+                    );
+                    let drops_texture = renderer.add_data_texture(scene, &drops.image);
                     let material = renderer
-                        .add_window_wetness_material(scene, base, texture, bounds)
+                        .add_window_wetness_material(scene, base, texture, drops_texture, bounds)
                         .unwrap();
                     films.push(Film {
                         mesh,
                         slot,
                         material,
                         texture,
+                        drops,
+                        drops_texture,
+                        paint_time: 1.0,
                         points,
                         wet: vec![wetness; SIZE * SIZE],
                         unwiped: wetness,
@@ -211,7 +234,7 @@ impl WindowWipers {
     }
 
     pub(crate) fn textures(&self) -> impl Iterator<Item = TextureId> + '_ {
-        self.films.iter().map(|f| f.texture)
+        self.films.iter().flat_map(|f| [f.texture, f.drops_texture])
     }
 
     pub(crate) fn materials(&self) -> impl Iterator<Item = MaterialId> + '_ {
@@ -246,6 +269,7 @@ impl WindowWipers {
                 .map(|p| vehicle.mesh_transforms[blade.mesh].transform_point3(p));
         }
         for film in &mut self.films {
+            let liquid = vehicle.host.precip_type != 2.0 || vehicle.host.temperature > 0.0;
             if dt > 0.0 {
                 film.unwiped = (film.unwiped + rate * dt).clamp(0.0, 1.0);
                 for wet in &mut film.wet {
@@ -257,11 +281,15 @@ impl WindowWipers {
                 let mut air = inverse_world.transform_vector3(
                     vehicle.host.wind - crate::lights::vehicle_velocity(vehicle),
                 );
-                air.z += air.y.abs() * 0.6;
-                air.y = 0.0;
-                let force = inverse_world.transform_vector3(-Vec3::Z)
-                    + air.normalize_or_zero() * (air.length_squared() / 130.0).min(3.0);
-                if vehicle.host.precip_type != 2.0 || vehicle.host.temperature > 0.0 {
+                let normal_air = pane_depth(air, film.bounds).abs();
+                air.z += normal_air * 0.6;
+                let tangent = pane_project(air, film.bounds[2] < 0.0);
+                let air_force =
+                    tangent.normalize_or_zero() * (tangent.length_squared() / 130.0).min(9.0);
+                let gravity = inverse_world.transform_vector3(-Vec3::Z);
+                let force =
+                    gravity + air.normalize_or_zero() * (air.length_squared() / 130.0).min(3.0);
+                if liquid {
                     drain_water(
                         &mut film.wet,
                         &film.points,
@@ -269,6 +297,28 @@ impl WindowWipers {
                         force * 0.12,
                         dt,
                         &mut self.runoff,
+                    );
+                    let wet = &film.wet;
+                    let points = &film.points;
+                    let bounds = film.bounds;
+                    film.drops.advance(
+                        dt,
+                        vehicle.host.precip_rate + washer,
+                        pane_project(gravity, bounds[2] < 0.0),
+                        air_force,
+                        if bounds[2] > 0.0 {
+                            (normal_air * normal_air / 260.0).min(3.0)
+                        } else {
+                            0.0
+                        },
+                        |p| {
+                            let i = drop_pixel(p, bounds);
+                            if points[i].is_finite() {
+                                wet[i]
+                            } else {
+                                f32::NAN
+                            }
+                        },
                     );
                 }
                 let inverse = vehicle.mesh_transforms[film.mesh].inverse();
@@ -279,6 +329,29 @@ impl WindowWipers {
                     let previous = blade.previous.map(|p| inverse.transform_point3(p));
                     let current = blade.current.map(|p| inverse.transform_point3(p));
                     wipe(&mut film.wet, &film.points, film.bounds, previous, current);
+                    if liquid {
+                        wipe_drops(film, previous, current);
+                    }
+                }
+            }
+            film.paint_time += dt;
+            if film.paint_time >= 1.0 / 30.0 {
+                film.paint_time %= 1.0 / 30.0;
+                if liquid {
+                    // Also discard initial seeds which landed outside the mesh's slot.
+                    let bounds = film.bounds;
+                    film.drops.drops.retain(|d| {
+                        d.pos.cmpge(Vec2::ZERO).all()
+                            && (d.pos * Vec2::new(bounds[2].abs(), bounds[3]))
+                                .cmplt(Vec2::ONE)
+                                .all()
+                            && film.points[drop_pixel(d.pos, bounds)].is_finite()
+                    });
+                } else {
+                    film.drops.drops.clear();
+                }
+                if film.drops.paint() {
+                    renderer.update_texture(scene, film.drops_texture, &film.drops.image);
                 }
             }
             let mut changed = false;
@@ -313,6 +386,64 @@ impl WindowWipers {
         for blade in &mut self.blades {
             blade.previous = blade.current;
         }
+    }
+}
+
+// A signed inverse width selects X/Z for the front or Y/Z for a side pane.
+// The same convention is used by the vertex shader and the two texture maps.
+fn pane_project(p: Vec3, side: bool) -> Vec2 {
+    Vec2::new(if side { p.y } else { p.x }, p.z)
+}
+
+fn pane_depth(p: Vec3, bounds: [f32; 4]) -> f32 {
+    if bounds[2] < 0.0 {
+        p.x
+    } else {
+        p.y
+    }
+}
+
+fn pane_pixel(p: Vec3, bounds: [f32; 4]) -> Vec2 {
+    (pane_project(p, bounds[2] < 0.0) - Vec2::new(bounds[0], bounds[1]))
+        * Vec2::new(bounds[2].abs(), bounds[3])
+        * SIZE as f32
+}
+
+fn drop_pixel(p: Vec2, bounds: [f32; 4]) -> usize {
+    let uv = (p * Vec2::new(bounds[2].abs(), bounds[3]) * SIZE as f32)
+        .clamp(Vec2::ZERO, Vec2::splat((SIZE - 1) as f32));
+    uv.y as usize * SIZE + uv.x as usize
+}
+
+fn wipe_drops(film: &mut Film, previous: [Vec3; 2], current: [Vec3; 2]) {
+    let triangles = [
+        SweepTriangle::new(previous[0], previous[1], current[1]),
+        SweepTriangle::new(previous[0], current[1], current[0]),
+    ];
+    let edge = current[1] - current[0];
+    let length2 = edge.length_squared();
+    if length2 < 1e-8 {
+        return;
+    }
+    for drop in &mut film.drops.drops {
+        let mut p = film.points[drop_pixel(drop.pos, film.bounds)];
+        if film.bounds[2] < 0.0 {
+            p.y = drop.pos.x + film.bounds[0];
+        } else {
+            p.x = drop.pos.x + film.bounds[0];
+        }
+        p.z = drop.pos.y + film.bounds[1];
+        if !triangles.iter().flatten().any(|t| t.contains(p)) {
+            continue;
+        }
+        let t = ((p - current[0]).dot(edge) / length2).clamp(0.0, 1.0);
+        let motion = current[0].lerp(current[1], t) - previous[0].lerp(previous[1], t);
+        let across = (motion - edge * (motion.dot(edge) / length2)).normalize_or_zero();
+        let pushed = current[0] + edge * t + across * 0.008;
+        drop.displace(
+            pane_project(pushed, film.bounds[2] < 0.0) - Vec2::new(film.bounds[0], film.bounds[1]),
+            pane_project(across * 0.15, film.bounds[2] < 0.0),
+        );
     }
 }
 
@@ -390,9 +521,18 @@ fn blade_ends(points: &[Vec3]) -> Option<[Vec3; 2]> {
     (hi - lo > 0.15 && hi - lo < 2.0).then_some([centre + axis * lo, centre + axis * hi])
 }
 
-/// Rasterise only the precipitation slot, once. Mesh X/Z rather than texture UV keeps
+/// Rasterise only the precipitation slot, once. Mesh coordinates rather than texture UV keep
 /// the mask unique when rain textures repeat or several windows share a texture atlas.
+#[cfg(test)]
 fn film_points(data: &MeshData, slot: usize) -> Option<(Vec<Vec3>, [f32; 4])> {
+    film_points_in_cab(data, slot, None)
+}
+
+fn film_points_in_cab(
+    data: &MeshData,
+    slot: usize,
+    cab: Option<Vec3>,
+) -> Option<(Vec<Vec3>, [f32; 4])> {
     let triangles: Vec<[Vec3; 3]> = data
         .ranges
         .iter()
@@ -408,11 +548,23 @@ fn film_points(data: &MeshData, slot: usize) -> Option<(Vec<Vec3>, [f32; 4])> {
             ]
         })
         .collect();
+    let (mut lo3, mut hi3) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+    for &p in triangles.iter().flatten() {
+        lo3 = lo3.min(p);
+        hi3 = hi3.max(p);
+    }
+    let side = hi3.y - lo3.y > (hi3.x - lo3.x) * 1.5;
     let (mut lo, mut hi) = (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY));
     for p in triangles.iter().flatten() {
-        let p = Vec2::new(p.x, p.z);
+        let p = pane_project(*p, side);
         lo = lo.min(p);
         hi = hi.max(p);
+    }
+    if side {
+        if let Some(cab) = cab {
+            lo.x = lo.x.max(cab.y - 1.8);
+            hi.x = hi.x.min(cab.y + 1.8);
+        }
     }
     let size = hi - lo;
     if !size.is_finite() || size.min_element() < 0.05 {
@@ -429,9 +581,9 @@ fn film_points(data: &MeshData, slot: usize) -> Option<(Vec<Vec3>, [f32; 4])> {
                     );
             for &[a, b, c] in &triangles {
                 let (a2, b2, c2) = (
-                    Vec2::new(a.x, a.z),
-                    Vec2::new(b.x, b.z),
-                    Vec2::new(c.x, c.z),
+                    pane_project(a, side),
+                    pane_project(b, side),
+                    pane_project(c, side),
                 );
                 let det = (b2 - a2).perp_dot(c2 - a2);
                 if det.abs() < 1e-8 {
@@ -446,7 +598,15 @@ fn film_points(data: &MeshData, slot: usize) -> Option<(Vec<Vec3>, [f32; 4])> {
             }
         }
     }
-    Some((points, [lo.x, lo.y, 1.0 / size.x, 1.0 / size.y]))
+    Some((
+        points,
+        [
+            lo.x,
+            lo.y,
+            if side { -1.0 / size.x } else { 1.0 / size.x },
+            1.0 / size.y,
+        ],
+    ))
 }
 
 /// Only visit the small rectangle crossed this frame; stationary blades cost no scan.
@@ -466,9 +626,7 @@ fn wipe(
     }
     let lo = previous[0].min(previous[1]).min(current[0]).min(current[1]) - Vec3::splat(0.1);
     let hi = previous[0].max(previous[1]).max(current[0]).max(current[1]) + Vec3::splat(0.1);
-    let pixel = |p: Vec3| {
-        Vec2::new((p.x - bounds[0]) * bounds[2], (p.z - bounds[1]) * bounds[3]) * SIZE as f32
-    };
+    let pixel = |p: Vec3| pane_pixel(p, bounds);
     let lo = pixel(lo)
         .floor()
         .clamp(Vec2::ZERO, Vec2::splat((SIZE - 1) as f32));
@@ -515,11 +673,9 @@ fn push_water(
     if length2 < 1e-8 {
         return;
     }
-    let pixels = length2.sqrt() * WIDTH * (SIZE * SIZE) as f32 * bounds[2] * bounds[3] * 0.5;
+    let pixels = length2.sqrt() * WIDTH * (SIZE * SIZE) as f32 * bounds[2].abs() * bounds[3] * 0.5;
     let amount = water / pixels.max(1.0);
-    let pixel = |p: Vec3| {
-        Vec2::new((p.x - bounds[0]) * bounds[2], (p.z - bounds[1]) * bounds[3]) * SIZE as f32
-    };
+    let pixel = |p: Vec3| pane_pixel(p, bounds);
     let lo = pixel(current[0].min(current[1]) - Vec3::splat(WIDTH))
         .floor()
         .clamp(Vec2::ZERO, Vec2::splat((SIZE - 1) as f32));
@@ -558,7 +714,9 @@ fn drain_water(
     dt: f32,
     scratch: &mut [f32],
 ) {
-    let step = (Vec2::new(velocity.x * bounds[2], velocity.z * bounds[3]) * (SIZE as f32 * dt))
+    let step = (pane_project(velocity, bounds[2] < 0.0)
+        * Vec2::new(bounds[2].abs(), bounds[3])
+        * (SIZE as f32 * dt))
         .clamp(Vec2::splat(-0.95), Vec2::splat(0.95));
     if step.length_squared() < 1e-8 {
         return;
@@ -583,7 +741,10 @@ fn drain_water(
                         continue;
                     }
                     let j = ny as usize * SIZE + nx as usize;
-                    if !points[j].is_finite() || (points[j].y - points[i].y).abs() > 0.1 {
+                    if !points[j].is_finite()
+                        || (pane_depth(points[j], bounds) - pane_depth(points[i], bounds)).abs()
+                            > 0.1
+                    {
                         continue;
                     }
                     let wx = if dx == 0 {
@@ -791,6 +952,29 @@ mod tests {
         assert!(points.iter().all(|p| p.is_finite()));
         assert!(points[0].x < 0.01 && points[SIZE * SIZE - 1].x > 0.99);
         assert!(film_points(&data, 1).is_none());
+    }
+
+    #[test]
+    fn side_panes_use_longitudinal_coordinates_and_keep_the_map_in_the_cab() {
+        let data = MeshData {
+            positions: vec![
+                Vec3::ZERO,
+                Vec3::Y * 10.0,
+                Vec3::Z,
+                Vec3::Y * 10.0 + Vec3::Z,
+            ],
+            indices: vec![0, 1, 2, 1, 3, 2],
+            ranges: vec![(0, 6, 0)],
+            ..Default::default()
+        };
+        let (points, bounds) = film_points_in_cab(&data, 0, Some(Vec3::Y * 8.0)).unwrap();
+        assert!(bounds[2] < 0.0);
+        assert!(points
+            .iter()
+            .all(|p| p.is_finite() && p.y > 6.2 && p.y < 9.8));
+        let p = points[SIZE * SIZE / 2];
+        assert_eq!(pane_depth(p, bounds), 0.0);
+        assert!((pane_pixel(p, bounds).y - (SIZE / 2) as f32 - 0.5).abs() < 1e-4);
     }
 
     #[test]

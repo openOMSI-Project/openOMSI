@@ -4914,17 +4914,18 @@ impl Renderer {
         self.copy_material(scene, base, texture, None)
     }
 
-    /// A vehicle's precipitation layer with its own wetness map, in mesh X/Z coordinates.
+    /// A vehicle's precipitation layer with wetness and collector-drop maps.
     /// Reuses the transmap binding without changing the layer's authored texture alpha.
     pub fn add_window_wetness_material(
         &self,
         scene: &mut Scene,
         base: MaterialId,
         mask: TextureId,
+        drops: TextureId,
         bounds: [f32; 4],
     ) -> Option<MaterialId> {
         let texture = scene.materials.get(base)?.texture;
-        self.copy_material(scene, base, texture, Some((mask, bounds)))
+        self.copy_material(scene, base, texture, Some((mask, drops, bounds)))
     }
 
     fn copy_material(
@@ -4932,7 +4933,7 @@ impl Renderer {
         scene: &mut Scene,
         base: MaterialId,
         texture: Option<TextureId>,
-        wetness: Option<(TextureId, [f32; 4])>,
+        wetness: Option<(TextureId, TextureId, [f32; 4])>,
     ) -> Option<MaterialId> {
         let (
             alpha,
@@ -4946,7 +4947,7 @@ impl Renderer {
             lightmap,
             envmap,
             env_mask,
-            bump,
+            mut bump,
             emissive,
             mut transmap,
             address,
@@ -4972,8 +4973,9 @@ impl Renderer {
                 src.uniform,
             )
         };
-        if let Some((mask, bounds)) = wetness {
+        if let Some((mask, drops, bounds)) = wetness {
             transmap = Some((mask, true));
+            bump = Some((drops, 0.0));
             uniform.wipe_bounds = bounds;
             uniform.params[2] = 0.0;
         }
