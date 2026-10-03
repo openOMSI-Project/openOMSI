@@ -673,14 +673,30 @@ fn wipe(
         SweepTriangle::new(previous[0], previous[1], current[1], bounds[2] < 0.0),
         SweepTriangle::new(previous[0], current[1], current[0], bounds[2] < 0.0),
     ];
+    let cell = if bounds[2] < 0.0 { Vec3::Y } else { Vec3::X } / (SIZE as f32 * bounds[2].abs())
+        + Vec3::Z / (SIZE as f32 * bounds[3]);
+    let filters = triangles
+        .each_ref()
+        .map(|t| t.as_ref().map(|t| t.edge_filter(cell)));
     let mut water = 0.0;
     for y in lo.y as usize..=hi.y as usize {
         for x in lo.x as usize..=hi.x as usize {
             let i = y * SIZE + x;
-            if points[i].is_finite() && triangles.iter().flatten().any(|t| t.contains(points[i])) {
-                water += (wet[i] - 0.004).max(0.0);
+            if points[i].is_finite() {
+                // Sum the two disjoint triangles so their shared diagonal leaves no seam.
+                let coverage = triangles
+                    .iter()
+                    .zip(&filters)
+                    .filter_map(|(t, f)| Some(t.as_ref()?.coverage(points[i], (*f)?)))
+                    .sum::<f32>()
+                    .min(1.0);
+                water += (wet[i] - 0.004).max(0.0) * coverage;
                 if wet[i] > 0.004 {
-                    wet[i] = WIPED_FILM; // a wet blade leaves a brief, thin residual film
+                    wet[i] = if coverage >= 1.0 {
+                        WIPED_FILM
+                    } else {
+                        wet[i] + (WIPED_FILM - wet[i]) * coverage
+                    };
                 }
             }
         }
@@ -845,7 +861,8 @@ fn release_runoff(
     let pos = pane_project(points[i], side) - Vec2::new(bounds[0], bounds[1]);
     if drops.feed(pos, volume, velocity) {
         for j in pool {
-            wet[j] = 1.0;
+            // The runner takes the collected water with it; only a thin film remains.
+            wet[j] = WIPED_FILM;
         }
     }
 }
@@ -894,9 +911,30 @@ impl SweepTriangle {
         Some(Vec2::new(d.dot(self.u), d.dot(self.v)))
     }
 
+    #[cfg(test)]
     fn contains(&self, p: Vec3) -> bool {
         self.coordinates(p)
             .is_some_and(|uv| uv.min_element() >= -1e-5 && uv.element_sum() <= 1.00001)
+    }
+
+    // Barycentric edge widths are constant over a sweep: calculate them once,
+    // then filter partial mask cells without increasing the mask or its uploads.
+    fn edge_filter(&self, cell: Vec3) -> Vec3 {
+        Vec3::new(
+            (self.u * cell).abs().element_sum(),
+            (self.v * cell).abs().element_sum(),
+            ((self.u + self.v) * cell).abs().element_sum(),
+        )
+        .max(Vec3::splat(1e-6))
+        .recip()
+    }
+
+    fn coverage(&self, p: Vec3, filter: Vec3) -> f32 {
+        let Some(uv) = self.coordinates(p) else {
+            return 0.0;
+        };
+        ((Vec3::new(uv.x, uv.y, 1.0 - uv.element_sum()) * filter + Vec3::splat(0.5)).min_element())
+            .clamp(0.0, 1.0)
     }
 
     fn crosses(&self, a: Vec3, b: Vec3) -> bool {
@@ -927,6 +965,35 @@ impl SweepTriangle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sweep_edges_have_partial_coverage_without_a_shared_diagonal_seam() {
+        let a = Vec3::ZERO;
+        let b = Vec3::Z;
+        let c = Vec3::X + Vec3::Z;
+        let d = Vec3::X;
+        let triangles = [
+            SweepTriangle::new(a, b, c, false).unwrap(),
+            SweepTriangle::new(a, c, d, false).unwrap(),
+        ];
+        let cell = (Vec3::X + Vec3::Z) / SIZE as f32;
+        let coverage = |p| {
+            triangles
+                .iter()
+                .map(|t| t.coverage(p, t.edge_filter(cell)))
+                .sum::<f32>()
+                .min(1.0)
+        };
+        // Move by fractions of a mask cell across the outer edge.
+        for fraction in [-0.5, -0.25, 0.0, 0.25, 0.5] {
+            let p = Vec3::new(fraction / SIZE as f32, 0.03, 0.5);
+            assert!((coverage(p) - (fraction + 0.5)).abs() < 1e-5);
+        }
+        for t in [0.25, 0.5, 0.75] {
+            assert!((coverage(Vec3::new(t, 0.03, t)) - 1.0).abs() < 1e-5);
+        }
+        assert_eq!(coverage(Vec3::new(0.5, 0.3, 0.5)), 0.0);
+    }
 
     #[test]
     fn offset_glass_keeps_projected_endpoints_and_catches_crossing_runoff() {
@@ -1044,9 +1111,9 @@ mod tests {
             let mut wet = vec![1.0; SIZE * SIZE];
             assert!(wipe(&mut wet, &points, bounds, from, to));
             for (&p, &wet) in points.iter().zip(&wet) {
-                if p.x < 0.4 {
+                if p.x < 0.4 - 0.5 / SIZE as f32 {
                     assert!(wet <= 0.004, "{p:?}: {wet}");
-                } else if p.x > 0.435 || to == start {
+                } else if p.x > 0.435 || (to == start && p.x > 0.4 + 0.5 / SIZE as f32) {
                     assert_eq!(wet, 1.0, "{p:?}");
                 }
             }
@@ -1091,7 +1158,7 @@ mod tests {
         let mut drops = Drops::new(Vec2::ONE, 0.0, 1);
         wet[i] = 1.8;
         release_runoff(&mut wet, &points, bounds, &mut drops, -Vec2::Y * 0.12);
-        assert_eq!(wet[i], 1.0);
+        assert_eq!(wet[i], WIPED_FILM);
         assert_eq!(drops.drops.len(), 1);
         assert!((drops.drops[0].water - 0.8 * 20000.0 / (SIZE * SIZE) as f32).abs() < 1e-5);
         assert!(drops.drops[0].velocity.y < 0.0);
