@@ -1175,6 +1175,8 @@ pub(crate) fn run_offscreen(
                         .bounding_box
                         .map(|bb| (p.vehicle.position, p.vehicle.heading, bb))
                 });
+                lighting.glass_wind = player.as_ref().map(|p| lights::vehicle_velocity(&p.vehicle)).unwrap_or_default()
+                    - rain::weather_wind(&weather);
                 let puddle_surface = lighting.inside.and_then(|(o, _, _)| world.puddle_surface(o));
                 lighting.puddle_ground = puddle_surface.map(|(h, _)| h);
                 lighting.puddle_normal = puddle_surface.map_or(glam::Vec3::Z, |(_, n)| n);

@@ -1101,14 +1101,14 @@ fn rain_dome(d: vec2<f32>, r: f32, px: f32) -> vec3<f32> {
 }
 
 // Smooth noise over the glass (0..1): the rain gathers in patches, not evenly.
-fn rain_patches(q: vec2<f32>) -> f32 {
+fn rain_patches(q: vec2<f32>) -> vec2<f32> {
     let c = floor(q);
     let f = q - c;
     let w = f * f * (3.0 - 2.0 * f);
-    let a = rain_hash(c).x;
-    let b = rain_hash(c + vec2<f32>(1.0, 0.0)).x;
-    let d = rain_hash(c + vec2<f32>(0.0, 1.0)).x;
-    let e = rain_hash(c + vec2<f32>(1.0, 1.0)).x;
+    let a = rain_hash(c);
+    let b = rain_hash(c + vec2<f32>(1.0, 0.0));
+    let d = rain_hash(c + vec2<f32>(0.0, 1.0));
+    let e = rain_hash(c + vec2<f32>(1.0, 1.0));
     return mix(mix(a, b, w.x), mix(d, e, w.x), w.y);
 }
 
@@ -1219,17 +1219,17 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
     // own - each at its own moment, a few centimetres to a hand's width, nearly straight
     // with a little drift, in jerks (it sticks, then slips on), and stops again; it leaves a
     // cleared track with a few beads in it. (They were lanes of drops on wavy paths all
-    // going at once: the pane looked like a wave of snakes.) One chance a cell of 3 x 25 cm;
+    // going at once: the pane looked like a wave of snakes.) One chance a cell of 7 x 50 cm;
     // a pixel looks at its own cell and the one above, whose drop may have slid into it.
-    let lane_w = 0.03;
-    let seg_h = 0.25;
+    let lane_w = 0.07;
+    let seg_h = 0.5;
     let lane = floor(qr.x / lane_w);
     let seg0 = floor(qr.y / seg_h);
     var track = 0.0;
     for (var k = 0; k < 2; k = k + 1) {
         let seg = seg0 - f32(k);
         let h1 = rain_hash(vec2<f32>(lane * 1.7 + 3.0, seg * 2.3 + 11.0));
-        if (h1.x >= wet * 0.45 * (1.0 + blow)) {
+        if (h1.x >= wet * (0.4 + 0.12 * blow)) {
             continue;
         }
         let h2 = rain_hash(vec2<f32>(lane * 1.7 + 8.1, seg * 2.3 + 5.1));
@@ -1241,14 +1241,19 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         let st = max(tau - sit, 0.0);
         let pulse = 0.25 + 0.55 * h3.x;
         let step_len = (0.02 + 0.04 * h3.y) * (1.0 + 2.0 * blow);
-        let run_len = 0.12 + 0.28 * h2.y;
+        // Less than one segment: checking this cell and its predecessor sees the
+        // complete runner, including its head after it crosses the cell boundary.
+        let run_len = 0.18 + 0.27 * h2.y;
         let travel = min((floor(st / pulse) + smoothstep(0.2, 0.9, fract(st / pulse))) * step_len, run_len);
         let vis = smoothstep(0.0, 0.05, tau / period) * (1.0 - smoothstep(0.85, 1.0, tau / period));
         let y0 = (seg + 0.1 + 0.3 * h3.x) * seg_h;
         let x0 = (lane + 0.35 + 0.3 * h3.y) * lane_w;
-        let drift = (h2.y - 0.5) * 0.12;
-        let rh = (0.0018 + 0.0014 * h1.y) * mix(0.8, 1.0, smoothstep(0.0, sit, tau));
-        let head = rain_dome(vec2<f32>(qr.x - (x0 + drift * travel), qr.y - (y0 + travel)), rh, px);
+        let drift = (h2.y - 0.5) * 0.07;
+        let rh = (0.003 + 0.0035 * h1.y * h1.y) * mix(0.65, 1.0, smoothstep(0.0, sit, tau));
+        let bend = 0.0025 * sin(travel * (30.0 + 25.0 * h3.y) + h2.x * 6.283185);
+        var head_d = vec2<f32>(qr.x - (x0 + drift * travel + bend), qr.y - (y0 + travel));
+        head_d.y *= select(0.65, 1.0, head_d.y > 0.0);
+        let head = rain_dome(head_d, rh, px);
         if (head.z * vis > best) {
             best = head.z * vis;
             slope = rain_turn(head.xy, -fa);
@@ -1256,9 +1261,21 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         // the track it cleared, and a few beads left in it
         let along = qr.y - y0;
         if (along > 0.0 && along < travel - rh) {
-            let dxp = qr.x - (x0 + drift * along);
+            let path_bend = 0.0025 * sin(along * (30.0 + 25.0 * h3.y) + h2.x * 6.283185);
+            let dxp = qr.x - (x0 + drift * along + path_bend);
             let hw = rh * 0.7;
             track = max(track, (1.0 - smoothstep(hw * 0.6, hw, abs(dxp))) * vis);
+            // A heavy drop draws a narrowing, connected filament behind it. The
+            // tail breaks up as the head moves on; lighter runners leave only beads.
+            let tail_len = min(travel, (0.025 + 0.13 * h1.y) * wet);
+            let tail = smoothstep(travel - tail_len, travel, along);
+            let width = rh * (0.12 + 0.4 * tail) * (0.8 + 0.2 * sin(along * 170.0 + h3.x * 6.283185));
+            let filament = rain_dome(vec2<f32>(dxp, 0.0), width, px);
+            let filament_cover = filament.z * tail * vis;
+            if (filament_cover > best) {
+                best = filament_cover;
+                slope = rain_turn(filament.xy * 0.75, -fa);
+            }
             let bc = floor(along / 0.008);
             let bh = rain_hash(vec2<f32>(lane * 3.1 + bc, seg * 1.9 + 41.0));
             if (bh.x < 0.35) {
@@ -1273,14 +1290,18 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
     }
 
     // where the glass is wetter and where drier, in patches a hand across
-    let wetter = 0.45 + 1.1 * rain_patches(q * 9.0 + 3.1);
+    let patches = rain_patches(q * 12.0 + 3.1);
+    let wetter = 0.2 + 1.6 * patches.x * patches.x;
+    // Distort the shared sampling domain, rather than constraining all large
+    // drops to equally spaced cell centres. The field stays attached to the glass.
+    let scattered = q + (patches - vec2<f32>(0.5)) * 0.035;
 
     // --- the drops that sit: fine beads, medium drops and larger merged drops.
     for (var layer = 0; layer < 3; layer = layer + 1) {
         let fl = f32(layer);
-        let cellsz = select(select(0.014, 0.0055, layer == 1), 0.009, layer == 2);
+        let cellsz = select(select(0.022, 0.007, layer == 1), 0.012, layer == 2);
         let turn = 0.61 + fl * 1.37;
-        let g2 = rain_turn(q, turn) / cellsz + vec2<f32>(fl * 17.3, fl * 5.1);
+        let g2 = rain_turn(scattered, turn) / cellsz + vec2<f32>(fl * 17.3, fl * 5.1);
         let c = floor(g2);
         let h = rain_hash(c);
         let h2 = rain_hash(c + 3.7);
@@ -1293,7 +1314,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         if (present <= 0.0) {
             continue;
         }
-        let r = select(0.18 + 0.26 * h.y * h.y, 0.22 + 0.18 * h.y, layer == 0) * mix(0.75, 1.0, smoothstep(0.0, 0.5, ph)) * mix(0.8, 1.1, wet);
+        let r = (0.1 + 0.34 * h.y * h.y) * mix(0.75, 1.0, smoothstep(0.0, 0.5, ph)) * mix(0.8, 1.1, wet);
         // (anywhere in the cell it still fits in)
         let room = min(r * 1.12, 0.48);
         let centre = c + vec2<f32>(room) + rain_hash(c + 9.1) * (1.0 - 2.0 * room);
@@ -1332,10 +1353,10 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         }
     }
 
-    // --- the mist: droplets of a millimetre or less, scattered on two turned grids
+    // --- the mist: droplets of a millimetre or less in the same irregular patches
     var grain = 0.0;
-    for (var k = 0; k < 2; k = k + 1) {
-        let mg = rain_turn(q, 0.33 + f32(k) * 2.1) / 0.0028 + f32(k) * 7.7;
+    {
+        let mg = rain_turn(scattered, 0.33) / 0.0028;
         let mc = floor(mg);
         let mh = rain_hash(mc + 71.0);
         let mr = 0.1 + 0.16 * mh.y;
