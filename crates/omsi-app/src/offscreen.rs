@@ -2418,6 +2418,7 @@ pub(crate) fn run_offscreen(
         .filter_map(|t| t.ty.def.bounding_box.map(|bb| (t.position, t.heading, bb))).take(3).collect();
     lighting.detail = settings.detail_textures;
     lighting.glass_wind = player_ref.as_ref().or(player.as_ref()).map(|p| crate::lights::vehicle_velocity(&p.vehicle)).unwrap_or_default();
+    lighting.glass_wind -= rain::weather_wind(&weather);
     // OMSI_GLASS_WIND=<m/s>: the rain on the glass as the bus would meet it at that speed
     if let (Some(v), Some(p)) = (omsi_cfg::env::var("OMSI_GLASS_WIND").ok().and_then(|v| v.parse::<f32>().ok()), player_ref.as_ref().or(player.as_ref())) {
         let h = p.vehicle.heading.to_radians();
@@ -2488,7 +2489,7 @@ pub(crate) fn run_offscreen(
             rn.tick(
                 1.0 / 30.0,
                 camera.position,
-                Vec3::ZERO,
+                rain::weather_wind(&weather),
                 &mut scene,
                 &player_ref.as_ref().or(player.as_ref()).map(|p| rain::vehicle_boxes(&p.vehicle)).unwrap_or_default(),
             );

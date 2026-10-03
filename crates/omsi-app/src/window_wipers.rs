@@ -21,6 +21,7 @@ struct Film {
     material: MaterialId,
     texture: TextureId,
     points: Vec<Vec3>,
+    // 0..1 is droplet wetness; 1..2 holds the water ridge pushed by a blade.
     wet: Vec<f32>,
     unwiped: f32,
     image: omsi_texture::Image,
@@ -154,9 +155,9 @@ impl WindowWipers {
                         pixel[0] = (depth >> 8) as u8;
                         pixel[1] = depth as u8;
                         pixel[2] = (wetness * 255.0).round() as u8;
-                        pixel[3] = pixel[2];
+                        pixel[3] = (wetness * 127.5).round() as u8;
                     }
-                    let texture = renderer.add_texture(scene, &image, false);
+                    let texture = renderer.add_data_texture(scene, &image);
                     let material = renderer
                         .add_window_wetness_material(scene, base, texture, bounds)
                         .unwrap();
@@ -211,7 +212,9 @@ impl WindowWipers {
         // Do not read Front/Wiped wetness: the script resets those for the whole pane.
         // Keep rainfall local and let a dry pane evaporate gradually after the shower.
         let deposit = if vehicle.host.precip_rate > 0.0 || washer > 0.0 {
-            (vehicle.host.precip_rate * 0.32 + washer * 0.8) * dt
+            (vehicle.host.precip_rate * 0.45 * (1.0 + vehicle.physics.speed.abs() * 0.025)
+                + washer * 0.8)
+                * dt
         } else {
             -0.025 * dt
         };
@@ -224,7 +227,10 @@ impl WindowWipers {
             if dt > 0.0 {
                 film.unwiped = (film.unwiped + deposit).clamp(0.0, 1.0);
                 for wet in &mut film.wet {
-                    *wet = (*wet + deposit).clamp(0.0, 1.0);
+                    // Water piled up by a blade drains back into beads; ordinary rain
+                    // fills the cleared film without instantly erasing that moving ridge.
+                    let ridge = (*wet - 1.0).max(0.0) * (1.0 - dt * 3.0).max(0.0);
+                    *wet = ((*wet).min(1.0) + deposit).clamp(0.0, 1.0) + ridge;
                 }
                 let inverse = vehicle.mesh_transforms[film.mesh].inverse();
                 for blade in &self.blades {
@@ -242,7 +248,7 @@ impl WindowWipers {
                     *wet
                 } else {
                     film.unwiped
-                } * 255.0)
+                } * 127.5)
                     .round() as u8;
                 let unwiped = (film.unwiped * 255.0).round() as u8;
                 let pixel = &mut film.image.rgba[i * 4..i * 4 + 4];
@@ -276,14 +282,18 @@ impl WindowWipers {
 /// its dominant long, narrow strip first, using a bounded set of candidate lines.
 /// This runs once on loading; both density and length favour the blade over its joints.
 fn combined_blade_ends(points: &[Vec3]) -> Option<[Vec3; 2]> {
-    if points.len() < 2 { return None; }
+    if points.len() < 2 {
+        return None;
+    }
     let mut best = None;
     let mut score = 0.0;
     for i in 0..64 {
         let a = points[i * points.len() / 64];
-        // A coprime stride samples across exporter vertex groups without a runtime RNG.
+        // A fixed stride samples across exporter vertex groups without a runtime RNG.
         let b = points[(i * 811 + points.len() / 2) % points.len()];
-        if a.distance_squared(b) < 0.09 { continue; }
+        if a.distance_squared(b) < 0.09 {
+            continue;
+        }
         let axis = (b - a).normalize();
         let mut count = 0;
         let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
@@ -292,16 +302,22 @@ fn combined_blade_ends(points: &[Vec3]) -> Option<[Vec3; 2]> {
             if d.cross(axis).length_squared() < 0.015 * 0.015 {
                 count += 1;
                 let t = d.dot(axis);
-                lo = lo.min(t); hi = hi.max(t);
+                lo = lo.min(t);
+                hi = hi.max(t);
             }
         }
         let candidate = count as f32 * (hi - lo).powi(2);
-        if candidate > score { score = candidate; best = Some((a, axis)); }
+        if candidate > score {
+            score = candidate;
+            best = Some((a, axis));
+        }
     }
     let (a, axis) = best?;
-    let contact: Vec<_> = points.iter().copied().filter(|p| {
-        (*p - a).cross(axis).length_squared() < 0.015 * 0.015
-    }).collect();
+    let contact: Vec<_> = points
+        .iter()
+        .copied()
+        .filter(|p| (*p - a).cross(axis).length_squared() < 0.015 * 0.015)
+        .collect();
     blade_ends(&contact)
 }
 
@@ -425,11 +441,68 @@ fn wipe(
         SweepTriangle::new(previous[0], previous[1], current[1]),
         SweepTriangle::new(previous[0], current[1], current[0]),
     ];
+    let mut water = 0.0;
     for y in lo.y as usize..=hi.y as usize {
         for x in lo.x as usize..=hi.x as usize {
             let i = y * SIZE + x;
             if points[i].is_finite() && triangles.iter().flatten().any(|t| t.contains(points[i])) {
-                wet[i] = 0.0;
+                water += (wet[i] - 0.004).max(0.0);
+                wet[i] = wet[i].min(0.004); // a clean blade leaves a very thin residual film
+            }
+        }
+    }
+    if water > 0.0 {
+        if let Some(plane) = triangles.iter().flatten().next() {
+            push_water(wet, points, bounds, previous, current, plane.normal, water);
+        }
+    }
+}
+
+/// Move collected water to the leading side of the blade. The bounded ridge holds
+/// a little water; excess runs off, rather than growing an opaque wall indefinitely.
+fn push_water(
+    wet: &mut [f32],
+    points: &[Vec3],
+    bounds: [f32; 4],
+    previous: [Vec3; 2],
+    current: [Vec3; 2],
+    normal: Vec3,
+    water: f32,
+) {
+    const WIDTH: f32 = 0.035;
+    let edge = current[1] - current[0];
+    let length2 = edge.length_squared();
+    if length2 < 1e-8 {
+        return;
+    }
+    let pixels = length2.sqrt() * WIDTH * (SIZE * SIZE) as f32 * bounds[2] * bounds[3] * 0.5;
+    let amount = water / pixels.max(1.0);
+    let pixel = |p: Vec3| {
+        Vec2::new((p.x - bounds[0]) * bounds[2], (p.z - bounds[1]) * bounds[3]) * SIZE as f32
+    };
+    let lo = pixel(current[0].min(current[1]) - Vec3::splat(WIDTH))
+        .floor()
+        .clamp(Vec2::ZERO, Vec2::splat((SIZE - 1) as f32));
+    let hi = pixel(current[0].max(current[1]) + Vec3::splat(WIDTH))
+        .ceil()
+        .clamp(Vec2::ZERO, Vec2::splat((SIZE - 1) as f32));
+    for y in lo.y as usize..=hi.y as usize {
+        for x in lo.x as usize..=hi.x as usize {
+            let i = y * SIZE + x;
+            let p = points[i];
+            if !p.is_finite() {
+                continue;
+            }
+            let t = (p - current[0]).dot(edge) / length2;
+            if !(0.0..=1.0).contains(&t) {
+                continue;
+            }
+            let motion = (current[0] - previous[0]).lerp(current[1] - previous[1], t);
+            let across = (motion - edge * (motion.dot(edge) / length2)).normalize_or_zero();
+            let d = p - current[0] - edge * t;
+            let distance = d.dot(across);
+            if d.dot(normal).abs() <= 0.1 && distance > 0.0 && distance < WIDTH {
+                wet[i] = (wet[i] + amount * (1.0 - distance / WIDTH)).min(2.0);
             }
         }
     }
@@ -499,9 +572,29 @@ mod tests {
             let mut wet = vec![1.0; SIZE * SIZE];
             wipe(&mut wet, &points, bounds, from, to);
             for (&p, &wet) in points.iter().zip(&wet) {
-                assert_eq!(wet, if p.x < 0.4 { 0.0 } else { 1.0 }, "{p:?}");
+                if p.x < 0.4 {
+                    assert!(wet <= 0.004, "{p:?}: {wet}");
+                } else if p.x > 0.435 || to == start {
+                    assert_eq!(wet, 1.0, "{p:?}");
+                }
+            }
+            if to == end {
+                assert!(points.iter().zip(&wet).any(|(p, w)| p.x > 0.4 && *w > 1.0));
             }
         }
+        let mut wet = vec![1.0; SIZE * SIZE];
+        wipe(
+            &mut wet,
+            &points,
+            bounds,
+            end,
+            start.map(|p| p + Vec3::X * 0.2),
+        );
+        assert!(points.iter().zip(&wet).any(|(p, w)| p.x < 0.2 && *w > 1.0));
+        assert!(wet.iter().all(|w| *w <= 2.0));
+        let mut dry = vec![0.0; SIZE * SIZE];
+        wipe(&mut dry, &points, bounds, start, end);
+        assert!(dry.iter().all(|w| *w == 0.0));
         let mut wet = vec![0.6; SIZE * SIZE];
         wipe(&mut wet, &points, bounds, start, start);
         assert!(wet.iter().all(|w| *w == 0.6));

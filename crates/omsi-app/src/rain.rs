@@ -7,6 +7,11 @@ use omsi_render::{Corona, Scene};
 
 const HALF_WIDTH: f32 = 16.0;
 
+pub fn weather_wind(weather: &omsi_content::weather::Weather) -> Vec3 {
+    let heading = weather.wind.0.to_radians();
+    Vec3::new(heading.sin(), heading.cos(), 0.0) * weather.wind.1
+}
+
 pub struct Rain {
     particles: Vec<Vec3>,
     kind: i32,

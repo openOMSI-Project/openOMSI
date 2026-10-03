@@ -4368,6 +4368,13 @@ impl Renderer {
         scene.textures.len() - 1
     }
 
+    /// Unconverted RGBA channels for dynamic masks and other data rather than colour.
+    pub fn add_data_texture(&self, scene: &mut Scene, img: &omsi_texture::Image) -> TextureId {
+        let texture = upload_texture_format(&self.device, &self.queue, img, false, wgpu::TextureFormat::Rgba8Unorm);
+        scene.textures.push(texture);
+        scene.textures.len() - 1
+    }
+
     pub fn add_blank_texture(&self, scene: &mut Scene, width: u32, height: u32) -> TextureId {
         let (width, height) = fit_size(width.max(1), height.max(1), self.device.limits().max_texture_dimension_2d);
         // A newly allocated GPU texture has undefined contents. Script displays may be
@@ -10059,6 +10066,16 @@ fn upload_texture(
     img: &omsi_texture::Image,
     mipmaps: bool,
 ) -> GpuTexture {
+    upload_texture_format(device, queue, img, mipmaps, wgpu::TextureFormat::Rgba8UnormSrgb)
+}
+
+fn upload_texture_format(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    img: &omsi_texture::Image,
+    mipmaps: bool,
+    format: wgpu::TextureFormat,
+) -> GpuTexture {
     let mip_count = if mipmaps {
         (32 - img.width.max(img.height).leading_zeros()).max(1)
     } else {
@@ -10075,7 +10092,7 @@ fn upload_texture(
         mip_level_count: mip_count,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
@@ -10134,7 +10151,7 @@ fn upload_texture(
         view,
         size: (img.width, img.height),
         bytes: texture_bytes(
-            wgpu::TextureFormat::Rgba8UnormSrgb,
+            format,
             img.width,
             img.height,
             mip_count,

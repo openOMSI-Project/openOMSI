@@ -318,7 +318,7 @@ struct MaterialParams {
 // the opposite edge of the SAME tile, opening grass seams even when adjacent masks
 // agree. The diffuse/detail textures still repeat through s_diffuse.
 fn sample_transmap(uv: vec2<f32>) -> vec4<f32> {
-    if (material.extra.x > 0.5) {
+    if (material.extra.x > 0.5 || material.wipe_bounds.z > 0.0) {
         return textureSample(t_trans, s_tile, uv);
     }
     return textureSample(t_trans, s_diffuse, uv);
@@ -1039,9 +1039,9 @@ fn finite_or(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
 
 fn window_wetness(in: FsIn) -> f32 {
     if (material.wipe_bounds.z > 0.0) {
-        let mask = textureSample(t_trans, s_tile, in.wipe_uv.xy);
+        let mask = sample_transmap(in.wipe_uv.xy);
         let depth = dot(mask.rg, vec2<f32>(256.0, 1.0)) * (64.0 / 257.0) - 32.0;
-        return select(mask.b, mask.a, abs(depth - in.wipe_uv.z) <= 0.1);
+        return select(mask.b, mask.a * 2.0, abs(depth - in.wipe_uv.z) <= 0.1);
     }
     return in.params.x;
 }
@@ -1119,7 +1119,8 @@ fn rain_turn(q: vec2<f32>, a: f32) -> vec2<f32> {
     return vec2<f32>(q.x * cs.x - q.y * cs.y, q.x * cs.y + q.y * cs.x);
 }
 
-fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, wet: f32, t: f32, outside_in: bool) -> RainGlass {
+fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32, outside_in: bool) -> RainGlass {
+    let wet = clamp(water, 0.0, 1.0);
     var g: RainGlass;
     g.n = n;
     g.out = n;
@@ -1130,10 +1131,12 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, wet: f32, t: f32, o
     let dpy = dpdy(world);
     let dux = dpdx(uv);
     let duy = dpdy(uv);
+    let water_dx = dpdx(water);
+    let water_dy = dpdy(water);
     // the pixel's size on the glass
     let px = max(max(length(dpx), length(dpy)), 1e-5);
     let det = dux.x * duy.y - dux.y * duy.x;
-    if (wet <= 0.002 || abs(det) < 1e-12) {
+    if (wet <= 0.01 || abs(det) < 1e-12) {
         return g;
     }
     // world position's derivative along u and v (inverse of the screen Jacobian): metres
@@ -1181,8 +1184,16 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, wet: f32, t: f32, o
     down_w = down_w - out * dot(down_w, out) - side_w * dot(down_w, side_w);
     down_w = down_w / max(length(down_w), 1e-6);
 
-    var best = 0.0;
-    var slope = vec2<f32>(0.0);
+    // The wiper pushes a small ridge ahead of its lip. Its height gradient bends
+    // the view through this connected water, using the same sample as the droplets.
+    var best = clamp((water - 1.0) * 2.0, 0.0, 1.0);
+    let gradient = vec2<f32>((water_dx * duy.y - water_dy * dux.y) / (det * su),
+                            (water_dy * dux.x - water_dx * duy.x) / (det * sv));
+    var slope = clamp(-0.002 * vec2<f32>(dot(gradient, side), dot(gradient, down)), vec2<f32>(-0.6), vec2<f32>(0.6)) * best;
+    // Heavy rain and a strong relative airstream increase coverage. Three larger
+    // droplet layers leave room for filtering the view without adding a render pass.
+    let density = wet * (1.0 + 0.65 * smoothstep(0.35, 0.9, wet)
+                            + 0.45 * clamp(length(camera.wind.xyz) / 20.0, 0.0, 1.0));
 
     // --- the airstream: the glass moves through the air with the bus, and a drop's drag
     // grows with the speed squared - at about 40 km/h it matches the drop's weight. Along
@@ -1218,25 +1229,25 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, wet: f32, t: f32, o
     for (var k = 0; k < 2; k = k + 1) {
         let seg = seg0 - f32(k);
         let h1 = rain_hash(vec2<f32>(lane * 1.7 + 3.0, seg * 2.3 + 11.0));
-        if (h1.x >= wet * 0.22 * (1.0 + blow)) {
+        if (h1.x >= wet * 0.45 * (1.0 + blow)) {
             continue;
         }
         let h2 = rain_hash(vec2<f32>(lane * 1.7 + 8.1, seg * 2.3 + 5.1));
         let h3 = rain_hash(vec2<f32>(lane * 1.7 + 1.3, seg * 2.3 + 29.7));
-        let period = 12.0 + 28.0 * h1.y;
+        let period = 4.0 + 10.0 * h1.y;
         let tau = fract(t / period + h2.x) * period;
         // sits and grows a moment, then goes in jerks, then lies still till it dries
-        let sit = 1.5 + 3.0 * h2.y;
+        let sit = 0.6 + 1.4 * h2.y;
         let st = max(tau - sit, 0.0);
-        let pulse = 0.6 + 0.8 * h3.x;
-        let step_len = (0.012 + 0.02 * h3.y) * (1.0 + 2.0 * blow);
-        let run_len = 0.05 + 0.17 * h2.y;
+        let pulse = 0.25 + 0.55 * h3.x;
+        let step_len = (0.02 + 0.04 * h3.y) * (1.0 + 2.0 * blow);
+        let run_len = 0.12 + 0.28 * h2.y;
         let travel = min((floor(st / pulse) + smoothstep(0.2, 0.9, fract(st / pulse))) * step_len, run_len);
         let vis = smoothstep(0.0, 0.05, tau / period) * (1.0 - smoothstep(0.85, 1.0, tau / period));
         let y0 = (seg + 0.1 + 0.3 * h3.x) * seg_h;
         let x0 = (lane + 0.35 + 0.3 * h3.y) * lane_w;
         let drift = (h2.y - 0.5) * 0.12;
-        let rh = (0.0011 + 0.0008 * h1.y) * mix(0.8, 1.0, smoothstep(0.0, sit, tau));
+        let rh = (0.0018 + 0.0014 * h1.y) * mix(0.8, 1.0, smoothstep(0.0, sit, tau));
         let head = rain_dome(vec2<f32>(qr.x - (x0 + drift * travel), qr.y - (y0 + travel)), rh, px);
         if (head.z * vis > best) {
             best = head.z * vis;
@@ -1264,11 +1275,10 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, wet: f32, t: f32, o
     // where the glass is wetter and where drier, in patches a hand across
     let wetter = 0.45 + 1.1 * rain_patches(q * 9.0 + 3.1);
 
-    // --- the drops that sit: four sizes, one drop a cell at most, anywhere in it (the
-    // fourth the few big ones, a centimetre and more, grown from drops that ran together)
-    for (var layer = 0; layer < 4; layer = layer + 1) {
+    // --- the drops that sit: fine beads, medium drops and larger merged drops.
+    for (var layer = 0; layer < 3; layer = layer + 1) {
         let fl = f32(layer);
-        let cellsz = select(select(select(0.0045, 0.0075, layer == 1), 0.012, layer == 0), 0.015, layer == 3);
+        let cellsz = select(select(0.014, 0.0055, layer == 1), 0.009, layer == 2);
         let turn = 0.61 + fl * 1.37;
         let g2 = rain_turn(q, turn) / cellsz + vec2<f32>(fl * 17.3, fl * 5.1);
         let c = floor(g2);
@@ -1278,12 +1288,12 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, wet: f32, t: f32, o
         let ph = fract(t / life + h2.x);
         // landed, grown, drying: a drop comes and goes; more of them the wetter the pane,
         // and the big ones only on a wet pane
-        let dens = wet * wetter * select(select(select(0.60, 0.48, layer == 2), 0.50 * smoothstep(0.15, 0.6, wet), layer == 0), 0.12 * smoothstep(0.3, 0.8, wet), layer == 3);
+        let dens = density * wetter * select(0.62, 0.48 * smoothstep(0.15, 0.6, wet), layer == 0);
         let present = step(h.x, dens) * smoothstep(0.0, 0.04, ph) * (1.0 - smoothstep(0.85, 1.0, ph)) * (1.0 - track);
         if (present <= 0.0) {
             continue;
         }
-        let r = select(0.1 + 0.2 * h.y * h.y, 0.14 + 0.16 * h.y, layer == 3) * mix(0.75, 1.0, smoothstep(0.0, 0.5, ph)) * mix(0.8, 1.1, wet);
+        let r = select(0.18 + 0.26 * h.y * h.y, 0.22 + 0.18 * h.y, layer == 0) * mix(0.75, 1.0, smoothstep(0.0, 0.5, ph)) * mix(0.8, 1.1, wet);
         // (anywhere in the cell it still fits in)
         let room = min(r * 1.12, 0.48);
         let centre = c + vec2<f32>(room) + rain_hash(c + 9.1) * (1.0 - 2.0 * room);
@@ -1334,7 +1344,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, wet: f32, t: f32, o
     }
     // (seen from further than a millimetre a pixel: their average)
     let mist = mix(wet * wetter * 0.35 * 0.12, grain, smoothstep(0.0015, 0.0006, px));
-    g.mist = mist * (1.0 - track) * clamp(wet * 1.4, 0.0, 1.0);
+    g.mist = (0.28 * wet * wet + mist * (1.0 - track)) * clamp(wet * 1.4, 0.0, 1.0);
 
     g.cover = best;
     let nz = sqrt(max(1.0 - dot(slope, slope), 0.02));
@@ -1369,7 +1379,7 @@ fn rain_through(g: RainGlass, v: vec3<f32>) -> vec3<f32> {
 // one does. The rain film's reflection slot holds that picture (see `Renderer::glass_slot`);
 // without it (a mirror's view) or off the picture's edge,
 // `fallback` (the sky's colours). `scale` takes the picture into the caller's units.
-fn rain_behind(world: vec3<f32>, through: vec3<f32>, fallback: vec3<f32>, scale: f32) -> vec3<f32> {
+fn rain_behind(world: vec3<f32>, through: vec3<f32>, fallback: vec3<f32>, scale: f32, scatter: f32) -> vec3<f32> {
     if (camera.flags.z > -0.5 || dot(through, through) < 1e-4) {
         return fallback;
     }
@@ -1380,7 +1390,12 @@ fn rain_behind(world: vec3<f32>, through: vec3<f32>, fallback: vec3<f32>, scale:
     let ndc = c.xy / c.w;
     let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     let inside = smoothstep(0.0, 0.06, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
-    let seen = finite_or(textureSampleLevel(t_env, s_diffuse, clamp(uv, vec2<f32>(0.001), vec2<f32>(0.999)), 0.0).rgb * scale, fallback);
+    // A wet film scatters the view. Filter the existing scene history locally:
+    // clear glass has a sub-texel footprint, heavy water softens several pixels.
+    let offset = vec2<f32>(1.0, 0.6) * scatter * 12.0 / vec2<f32>(textureDimensions(t_env));
+    let a = textureSampleLevel(t_env, s_diffuse, clamp(uv - offset, vec2<f32>(0.001), vec2<f32>(0.999)), 0.0).rgb;
+    let b = textureSampleLevel(t_env, s_diffuse, clamp(uv + offset, vec2<f32>(0.001), vec2<f32>(0.999)), 0.0).rgb;
+    let seen = finite_or((a + b) * (0.5 * scale), fallback);
     return mix(fallback, seen, inside);
 }
 
@@ -1406,9 +1421,9 @@ fn rain_light(g: RainGlass, v: vec3<f32>, d_thru: vec3<f32>, refl: vec3<f32>, th
         c = c + sun * pow(max(dot(normalize(d_thru), s), 0.0), 60.0) * 1.5;
     }
     let a_drop = g.cover * 0.94;
-    let a_mist = g.mist * 0.2 * (1.0 - a_drop);
+    let a_mist = g.mist * 0.6 * (1.0 - a_drop);
     let a = a_drop + a_mist;
-    let col = (c * a_drop + mist_col * a_mist) / max(a, 1e-4);
+    let col = (c * a_drop + mix(mist_col, thru, 0.85) * a_mist) / max(a, 1e-4);
     return vec4<f32>(col, a);
 }
 
@@ -1455,8 +1470,9 @@ fn shade_vanilla(in: FsIn, puddle_weight: ptr<function, f32>, eye: vec3<f32>) ->
         let v = normalize(camera.cam_pos.xyz - in.world);
         let in_cab = inside_vehicle(camera.cam_pos.xyz) * near_player_vehicle(in.world) > 0.5;
         let g = rain_glass(in.world, in.uv - in.params.zw, in.normal, window_wetness(in), camera.post.y, in_cab);
+        if (g.cover <= 0.001 && g.mist <= 0.001) { return vec4<f32>(0.0); }
         let through = rain_through(g, v);
-        let seen = select(rain_behind(in.world, through, rain_env_vanilla(normalize(through)), 1.0), vec3<f32>(0.0), dot(through, through) < 1e-4);
+        let seen = select(rain_behind(in.world, through, rain_env_vanilla(normalize(through)), 1.0, g.mist), vec3<f32>(0.0), dot(through, through) < 1e-4);
         let d = rain_light(g, v, through, rain_env_vanilla(reflect(-v, g.n)), seen, rain_env_vanilla(vec3<f32>(0.0, 0.0, 0.5)) * 0.9, camera.sun_color.rgb * camera.sun_dir.w);
         // (fading out with the distance: see enhanced.wgsl)
         let near = 1.0 - smoothstep(5.0, 15.0, distance(in.world, camera.cam_pos.xyz));
@@ -1761,6 +1777,6 @@ fn shade_vanilla(in: FsIn, puddle_weight: ptr<function, f32>, eye: vec3<f32>) ->
     if (mode < 0.5) {
         a = 1.0;
     }
-    a = a * window_wetness(in);
+    a = a * min(window_wetness(in), 1.0);
     return vec4<f32>(rgb, a);
 }
