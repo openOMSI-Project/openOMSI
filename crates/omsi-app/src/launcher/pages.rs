@@ -699,6 +699,7 @@ fn camera_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, co
         s["look_sens"] = json!((look * 100.0).round() / 100.0);
         *dirty = 0.3;
     }
+    toggle_setting(ui, s, dirty, c.row(), "Right stick turns the view", "right_stick_look");
     toggle_setting(ui, s, dirty, c.row(), "Driver's view turns with the steering", "steer_look");
     let mut angle = get(s, "steer_look_angle").as_f64().unwrap_or(30.0) as f32;
     if ui.slider("s-steer-look-angle", c.row(), &mut angle, 0.0, 60.0, 1.0, "Steering view angle", &|v| format!("{v:.0}°")) {
@@ -2459,6 +2460,7 @@ mod settings_tests {
             "s-seatreset",
             "s-fov",
             "s-look-sens",
+            "set-right_stick_look",
             "set-steer_look",
             "s-steer-look-angle",
             "s-steer-look-response",
@@ -2548,6 +2550,23 @@ mod settings_tests {
             }
             assert_eq!(ui.drawn.len(), names.len(), "the {} tab has a clickable thing more than the list names", SETTINGS_TABS[tab]);
         }
+    }
+
+    #[test]
+    fn right_stick_look_switch_toggles_and_saves_from_the_camera_tab() {
+        let mut s = all_rows();
+        assert_eq!(s["right_stick_look"], json!(true));
+
+        click(2, "set-right_stick_look", &mut s);
+        assert_eq!(s["right_stick_look"], json!(false));
+        let saved = core::settings_to_text(&s, None);
+        assert_eq!(
+            core::settings_from_text(Some(&saved))["right_stick_look"],
+            json!(false)
+        );
+
+        click(2, "set-right_stick_look", &mut s);
+        assert_eq!(s["right_stick_look"], json!(true));
     }
 
     #[test]

@@ -329,6 +329,12 @@ view response** sets the smoothing time (50–1000 ms, default 250 ms; larger va
 more slowly). Manual looking remains available. The automatic turn is suppressed while
 VR or an active head tracker controls the view. It is off by default.
 
+In Settings → Camera, **Right stick turns the view** switches automatic gamepad
+camera movement on or off. It is on by default. Switch it off to keep using the
+Xbox controller for steering and pedals without the right stick moving the camera.
+The choice is saved as `right_stick_look=0` (off) or `right_stick_look=1` (on) in
+`settings.cfg`. Explicitly assigned look axes and camera buttons continue to work.
+
 ## Mods and the content folder
 
 The folder of the game binary (`dist/<platform>` in a build; beside `openOMSI.app` on macOS) is laid out like an OMSI 2
