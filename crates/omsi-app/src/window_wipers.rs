@@ -432,8 +432,8 @@ fn drop_pixel(p: Vec2, bounds: [f32; 4]) -> usize {
 
 fn wipe_drops(film: &mut Film, previous: [Vec3; 2], current: [Vec3; 2]) {
     let triangles = [
-        SweepTriangle::new(previous[0], previous[1], current[1]),
-        SweepTriangle::new(previous[0], current[1], current[0]),
+        SweepTriangle::new(previous[0], previous[1], current[1], film.bounds[2] < 0.0),
+        SweepTriangle::new(previous[0], current[1], current[0], film.bounds[2] < 0.0),
     ];
     let edge = current[1] - current[0];
     let length2 = edge.length_squared();
@@ -448,7 +448,15 @@ fn wipe_drops(film: &mut Film, previous: [Vec3; 2], current: [Vec3; 2]) {
             p.x = drop.pos.x + film.bounds[0];
         }
         p.z = drop.pos.y + film.bounds[1];
-        if !triangles.iter().flatten().any(|t| t.contains(p)) {
+        let old = drop.previous + Vec2::new(film.bounds[0], film.bounds[1]);
+        let mut before = p;
+        if film.bounds[2] < 0.0 {
+            before.y = old.x;
+        } else {
+            before.x = old.x;
+        }
+        before.z = old.y;
+        if !triangles.iter().flatten().any(|t| t.crosses(before, p)) {
             continue;
         }
         let t = ((p - current[0]).dot(edge) / length2).clamp(0.0, 1.0);
@@ -649,8 +657,8 @@ fn wipe(
         .ceil()
         .clamp(Vec2::ZERO, Vec2::splat((SIZE - 1) as f32));
     let triangles = [
-        SweepTriangle::new(previous[0], previous[1], current[1]),
-        SweepTriangle::new(previous[0], current[1], current[0]),
+        SweepTriangle::new(previous[0], previous[1], current[1], bounds[2] < 0.0),
+        SweepTriangle::new(previous[0], current[1], current[0], bounds[2] < 0.0),
     ];
     let mut water = 0.0;
     for y in lo.y as usize..=hi.y as usize {
@@ -683,7 +691,7 @@ fn push_water(
     normal: Vec3,
     water: f32,
 ) {
-    const WIDTH: f32 = 0.035;
+    const WIDTH: f32 = 0.018;
     let edge = current[1] - current[0];
     let length2 = edge.length_squared();
     if length2 < 1e-8 {
@@ -788,35 +796,94 @@ struct SweepTriangle {
     normal: Vec3,
     u: Vec3,
     v: Vec3,
+    depth: Vec3,
 }
 
 impl SweepTriangle {
-    fn new(a: Vec3, b: Vec3, c: Vec3) -> Option<Self> {
+    fn new(a: Vec3, b: Vec3, c: Vec3, side: bool) -> Option<Self> {
         let (ab, ac) = (b - a, c - a);
         let n = ab.cross(ac);
         let det = n.length_squared();
         if det < 1e-12 {
             return None;
         }
+        let axis = if side { Vec3::X } else { Vec3::Y };
+        let facing = axis.dot(n);
+        if facing.abs() < 1e-8 {
+            return None;
+        }
+        let depth = n / facing;
+        let u = ac.cross(n) / det;
+        let v = n.cross(ab) / det;
         Some(Self {
             origin: a,
             normal: n.normalize(),
-            u: ac.cross(n) / det,
-            v: n.cross(ab) / det,
+            u: u - depth * u.dot(axis),
+            v: v - depth * v.dot(axis),
+            depth,
         })
     }
 
-    fn contains(&self, p: Vec3) -> bool {
+    fn coordinates(&self, p: Vec3) -> Option<Vec2> {
         let d = p - self.origin;
-        let (u, v) = (d.dot(self.u), d.dot(self.v));
-        // The rain layer is offset from the rubber, and windshields can be curved.
-        d.dot(self.normal).abs() <= 0.1 && u >= -1e-5 && v >= -1e-5 && u + v <= 1.00001
+        let offset = d.dot(self.depth);
+        if offset.abs() > 0.12 {
+            return None;
+        }
+        // Project along the pane depth, not the slanted sweep's normal: an
+        // offset rain mesh must keep the same blade endpoints in the glass plane.
+        Some(Vec2::new(d.dot(self.u), d.dot(self.v)))
+    }
+
+    fn contains(&self, p: Vec3) -> bool {
+        self.coordinates(p)
+            .is_some_and(|uv| uv.min_element() >= -1e-5 && uv.element_sum() <= 1.00001)
+    }
+
+    fn crosses(&self, a: Vec3, b: Vec3) -> bool {
+        let (Some(a), Some(b)) = (self.coordinates(a), self.coordinates(b)) else {
+            return false;
+        };
+        let mut enter: f32 = 0.0;
+        let mut leave: f32 = 1.0;
+        for (start, end) in [
+            (a.x, b.x),
+            (a.y, b.y),
+            (1.0 - a.element_sum(), 1.0 - b.element_sum()),
+        ] {
+            if start < 0.0 && end < 0.0 {
+                return false;
+            }
+            if start < 0.0 {
+                enter = enter.max(start / (start - end));
+            }
+            if end < 0.0 {
+                leave = leave.min(start / (start - end));
+            }
+        }
+        enter <= leave
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offset_glass_keeps_projected_endpoints_and_catches_crossing_runoff() {
+        let sweep = SweepTriangle::new(
+            Vec3::ZERO,
+            Vec3::new(0.0, 0.04, 1.0),
+            Vec3::new(0.1, 0.04, 1.0),
+            false,
+        )
+        .unwrap();
+        assert!(sweep.contains(Vec3::new(0.045, 0.1, 0.5)));
+        assert!(!sweep.contains(Vec3::new(0.09, 0.1, 0.5)));
+        assert!(sweep.crosses(Vec3::new(0.045, 0.1, 1.1), Vec3::new(0.045, 0.1, 0.2)));
+        assert!(!sweep.crosses(Vec3::new(0.2, 0.1, 1.1), Vec3::new(0.2, 0.1, 0.2)));
+        assert!(!sweep.contains(Vec3::new(0.045, 0.4, 0.5)));
+    }
 
     #[test]
     fn a_wipe_leaves_brief_sheen_then_rewets_gradually_without_a_frame_rate_dependency() {

@@ -9,6 +9,7 @@ const TRAIL: usize = 8;
 
 pub(super) struct Drop {
     pub pos: Vec2,
+    pub previous: Vec2,
     pub velocity: Vec2,
     // Volume in cubic millimetres, with the common cap-shape factor omitted.
     pub water: f32,
@@ -20,6 +21,7 @@ impl Drop {
     fn new(pos: Vec2, water: f32) -> Self {
         Self {
             pos,
+            previous: pos,
             water,
             radius: water.cbrt() * 0.001,
             velocity: Vec2::ZERO,
@@ -33,6 +35,7 @@ impl Drop {
 
     pub fn displace(&mut self, pos: Vec2, velocity: Vec2) {
         self.pos = pos;
+        self.previous = pos;
         self.velocity = velocity;
         // A blade removes the old trail too; it must not reappear behind the blade.
         self.tail.fill(pos);
@@ -112,6 +115,9 @@ impl Drops {
     ) {
         let steps = (dt / (1.0 / 60.0)).ceil().max(1.0) as usize;
         let step = dt / steps as f32;
+        for drop in &mut self.drops {
+            drop.previous = drop.pos;
+        }
         for _ in 0..steps {
             self.arrivals += step * rain * self.size.element_product() * 24.0;
             while self.arrivals >= 1.0 {
@@ -129,7 +135,7 @@ impl Drops {
                 let outward = (drop.pos.x / self.size.x * 2.0 - 1.0) * spread;
                 let force = gravity + (air + Vec2::new(outward, 0.0)) / r;
                 let strength = force.length();
-                let pinning = 4.0 / (r * r);
+                let pinning = 1.7 / (r * r);
                 let drive = force.normalize_or_zero() * (strength - pinning).max(0.0) * 0.4;
                 drop.velocity = (drop.velocity + drive * step) / (1.0 + step * 4.0);
                 let previous = drop.pos;
@@ -174,6 +180,8 @@ impl Drops {
                             && drop.pos.distance_squared(other.pos) < contact * contact
                         {
                             let sum = drop.water + other.water;
+                            drop.previous =
+                                (drop.previous * drop.water + other.previous * other.water) / sum;
                             drop.pos = (drop.pos * drop.water + other.pos * other.water) / sum;
                             drop.velocity =
                                 (drop.velocity * drop.water + other.velocity * other.water) / sum;
@@ -203,7 +211,7 @@ impl Drops {
         for i in 0..self.drops.len() {
             let drop = &self.drops[i];
             let pos = drop.pos;
-            let radius = drop.radius().min(0.0035);
+            let radius = drop.radius().min(0.0022);
             let tail = drop.tail;
             // A short, narrowing filament is distinct from the rounded moving head.
             if drop.velocity.length_squared() > 0.0001 {

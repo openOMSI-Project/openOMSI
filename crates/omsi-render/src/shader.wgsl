@@ -1200,10 +1200,10 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
 
     // The wiper pushes a small ridge ahead of its lip. Its height gradient bends
     // the view through this connected water, using the same sample as the droplets.
-    var best = clamp((water - 1.0) * 2.0, 0.0, 1.0);
+    var best = clamp((water - 1.0) * 0.35, 0.0, 1.0);
     let gradient = vec2<f32>((water_dx * duy.y - water_dy * dux.y) / (det * su),
                             (water_dy * dux.x - water_dx * duy.x) / (det * sv));
-    if (wiped_film > 0.01) {
+    if (wiped_film > 0.01 && collectors.a <= 0.01) {
         // The age gradient follows the actual sweep. Fine, directional residual
         // streaks briefly distort the view, without repopulating the pane with drops.
         var along = vec2<f32>(0.0, 1.0);
@@ -1215,7 +1215,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         g.n = normalize(out + (side_w * across.x + down_w * across.y) * (streak.y - 0.5) * wiped_film * 0.3);
         return g;
     }
-    var slope = clamp(-0.002 * vec2<f32>(dot(gradient, side), dot(gradient, down)), vec2<f32>(-0.6), vec2<f32>(0.6)) * best;
+    var slope = clamp(-0.0003 * vec2<f32>(dot(gradient, side), dot(gradient, down)), vec2<f32>(-0.6), vec2<f32>(0.6)) * best;
     // Heavy rain and a strong relative airstream increase coverage. Three larger
     // droplet layers leave room for filtering the view without adding a render pass.
     let density = wet * wet * (1.0 + 0.65 * smoothstep(0.35, 0.9, wet)
@@ -1281,7 +1281,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         let y0 = (seg + 0.02 + 0.08 * h3.x) * seg_h;
         let x0 = (lane + 0.4 + 0.2 * h3.y) * lane_w;
         let drift = (h2.y - 0.5) * 0.025;
-        let rh = (0.0022 + 0.002 * h1.y * h1.y) * mix(0.3, 1.0, smoothstep(0.0, sit, tau));
+        let rh = (0.001 + 0.0012 * h1.y * h1.y) * mix(0.3, 1.0, smoothstep(0.0, sit, tau));
         let bend = 0.0015 * sin(travel * (30.0 + 25.0 * h3.y) + h2.x * 6.283185);
         var head_d = vec2<f32>(qr.x - (x0 + drift * travel + bend), qr.y - (y0 + travel));
         head_d.y *= select(0.65, 1.0, head_d.y > 0.0);
@@ -1379,8 +1379,8 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         let wob = 1.0 + (0.03 + 0.06 * h.y) * wave;
         d = d / max(wob, 0.4);
         d.y = d.y * mix(1.0, 0.88, h.y * h.y * h3.x);
-        // Larger drops on simulated panes belong to the mobile population.
-        let radius = select(r * cellsz, min(r * cellsz, 0.0015), tracked);
+        // Large drops belong to moving water; stationary spray stays fine.
+        let radius = min(r * cellsz, 0.0015);
         let drop = rain_dome(d, radius, px);
         let cover = drop.z * present;
         if (cover > best) {
