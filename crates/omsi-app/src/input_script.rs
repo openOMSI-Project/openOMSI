@@ -3780,9 +3780,11 @@ pub(crate) fn gate_gear_var(program: &omsi_script::Program) -> Option<String> {
 }
 
 /// Degrees the view turns per (logical) pixel of the cursor's way while looking round:
-/// Omsi.exe's fov / 78.75 (TForm_main.Panel1MouseMove 0x82c5f8).
+/// FOV-proportional like Omsi.exe (fov / 78.75, TForm_main.Panel1MouseMove 0x82c5f8),
+/// normalized so a 60° field turns at the long-standing 0.15 deg/px feel — the raw
+/// fov / 78.75 ran ~5x hotter than OMSI and regressed feel (#859).
 fn look_deg_per_px(fov_deg: f32) -> f32 {
-    fov_deg / 78.75
+    0.15 * (fov_deg / 60.0)
 }
 
 /// F3 chase orbit step from raw drag pixels: full turn in yaw at 0.35
@@ -3849,8 +3851,11 @@ mod look_tests {
     }
 
     #[test]
-    fn a_cursor_way_of_78_75_px_turns_by_the_field_of_view() {
-        assert!((78.75 * super::look_deg_per_px(60.0) - 60.0).abs() < 1e-4);
+    fn a_cursor_way_turns_at_015_deg_px_at_60_fov() {
+        assert!((super::look_deg_per_px(60.0) - 0.15).abs() < 1e-6);
+        // FOV-proportional: zoomed views turn slower, wide ones faster.
+        assert!(super::look_deg_per_px(30.0) < super::look_deg_per_px(60.0));
+        assert!(super::look_deg_per_px(90.0) > super::look_deg_per_px(60.0));
     }
 
     #[test]
