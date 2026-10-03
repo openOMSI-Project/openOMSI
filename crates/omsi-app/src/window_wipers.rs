@@ -45,6 +45,7 @@ struct Film {
     drops: Drops,
     drops_texture: TextureId,
     paint_time: f32,
+    runoff_time: f32,
     points: Vec<Vec3>,
     // Negative is a recent wipe's residual film; 0..1 droplets; 1..2 the pushed ridge.
     wet: Vec<f32>,
@@ -212,6 +213,7 @@ impl WindowWipers {
                         drops,
                         drops_texture,
                         paint_time: 1.0,
+                        runoff_time: 0.0,
                         points,
                         wet: vec![wetness; SIZE * SIZE],
                         unwiped: wetness,
@@ -259,12 +261,6 @@ impl WindowWipers {
         let washer = vehicle.var("wiper_wash").unwrap_or(0.0).clamp(0.0, 1.0);
         // Do not read Front/Wiped wetness: the script resets those for the whole pane.
         // Keep rainfall local and let a dry pane evaporate gradually after the shower.
-        let rate = if vehicle.host.precip_rate > 0.0 || washer > 0.0 {
-            vehicle.host.precip_rate * 0.10 * (1.0 + vehicle.physics.speed.abs() * 0.015)
-                + washer * 0.8
-        } else {
-            -0.025
-        };
         for blade in &mut self.blades {
             blade.current = blade
                 .ends
@@ -274,6 +270,19 @@ impl WindowWipers {
             let liquid = vehicle.host.precip_type != 2.0 || vehicle.host.temperature > 0.0;
             let previous_wetness = film.unwiped;
             if dt > 0.0 {
+                // Gravity follows the pane's actual inclination. Relative airflow can
+                // carry mobile water sideways/upwards; small pinned beads stay put.
+                let inverse_world = scene.instances[instances[film.mesh]].transform.inverse();
+                let mut air = inverse_world.transform_vector3(
+                    vehicle.host.wind - crate::lights::vehicle_velocity(vehicle),
+                );
+                let normal_air = pane_depth(air, film.bounds).abs();
+                let rain = vehicle.host.precip_rate * (1.0 + normal_air * 0.035).min(2.0);
+                let rate = if rain > 0.0 || washer > 0.0 {
+                    rain * (0.09 + vehicle.host.precip_rate * 0.10) + washer * 0.8
+                } else {
+                    -0.025
+                };
                 film.unwiped = (film.unwiped + rate * dt).clamp(0.0, 1.0);
                 // An untouched pane has uniform wetness. Once it is saturated,
                 // only its moving drops need updates, not every mask pixel.
@@ -284,13 +293,6 @@ impl WindowWipers {
                 } else if previous_wetness != film.unwiped {
                     film.wet.fill(film.unwiped);
                 }
-                // Gravity follows the pane's actual inclination. Relative airflow can
-                // carry mobile water sideways/upwards; small pinned beads stay put.
-                let inverse_world = scene.instances[instances[film.mesh]].transform.inverse();
-                let mut air = inverse_world.transform_vector3(
-                    vehicle.host.wind - crate::lights::vehicle_velocity(vehicle),
-                );
-                let normal_air = pane_depth(air, film.bounds).abs();
                 air.z += normal_air * 0.6;
                 let tangent = pane_project(air, film.bounds[2] < 0.0);
                 let air_force =
@@ -314,7 +316,7 @@ impl WindowWipers {
                     let bounds = film.bounds;
                     film.drops.advance(
                         dt,
-                        vehicle.host.precip_rate + washer,
+                        rain + washer,
                         pane_project(gravity, bounds[2] < 0.0),
                         air_force,
                         if bounds[2] > 0.0 {
@@ -343,6 +345,17 @@ impl WindowWipers {
                     if liquid {
                         wipe_drops(film, previous, current);
                     }
+                }
+                film.runoff_time += dt;
+                if liquid && film.local && film.runoff_time >= 0.2 {
+                    film.runoff_time %= 0.2;
+                    release_runoff(
+                        &mut film.wet,
+                        &film.points,
+                        film.bounds,
+                        &mut film.drops,
+                        pane_project(force * 0.12, film.bounds[2] < 0.0),
+                    );
                 }
             }
             film.paint_time += dt;
@@ -793,6 +806,50 @@ fn drain_water(
     }
 }
 
+/// A bank drains as distinct runners instead of remaining only a ridge in the mask.
+/// Its excess is transferred, not duplicated; keep the same pane depth and drop limit.
+fn release_runoff(
+    wet: &mut [f32],
+    points: &[Vec3],
+    bounds: [f32; 4],
+    drops: &mut Drops,
+    velocity: Vec2,
+) {
+    let side = bounds[2] < 0.0;
+    let down = velocity.normalize_or_zero();
+    let score = |i: usize| wet[i] + pane_project(points[i], side).dot(down) * 0.1;
+    let Some(i) = (0..wet.len())
+        .filter(|&i| wet[i] > 1.15 && points[i].is_finite())
+        .max_by(|&a, &b| score(a).total_cmp(&score(b)))
+    else {
+        return;
+    };
+    // Gather a small pool so it can overcome adhesion instead of emitting pinned specks.
+    let (x, y) = (i % SIZE, i / SIZE);
+    let mut pool = Vec::with_capacity(9);
+    let mut water = 0.0;
+    for y in y.saturating_sub(1)..=(y + 1).min(SIZE - 1) {
+        for x in x.saturating_sub(1)..=(x + 1).min(SIZE - 1) {
+            let j = y * SIZE + x;
+            if wet[j] > 1.0
+                && points[j].is_finite()
+                && (pane_depth(points[j], bounds) - pane_depth(points[i], bounds)).abs() < 0.1
+            {
+                pool.push(j);
+                water += wet[j] - 1.0;
+            }
+        }
+    }
+    // Calibrate mobile excess as a thin film (~20 micrometres), not total pane wetness.
+    let volume = water * 20000.0 / (SIZE * SIZE) as f32 / (bounds[2].abs() * bounds[3]);
+    let pos = pane_project(points[i], side) - Vec2::new(bounds[0], bounds[1]);
+    if drops.feed(pos, volume, velocity) {
+        for j in pool {
+            wet[j] = 1.0;
+        }
+    }
+}
+
 struct SweepTriangle {
     origin: Vec3,
     normal: Vec3,
@@ -1022,6 +1079,33 @@ mod tests {
             off_glass.map(|p| p + Vec3::X * 0.4),
         );
         assert!(wet.iter().all(|w| *w == 0.6));
+    }
+
+    #[test]
+    fn pooled_water_becomes_runoff_and_stays_in_the_bank_if_capacity_is_full() {
+        let bounds = [0.0, 0.0, 1.0, 1.0];
+        let mut points = vec![Vec3::NAN; SIZE * SIZE];
+        let i = SIZE * 64 + 64;
+        points[i] = Vec3::new(0.5, 0.0, 0.5);
+        let mut wet = vec![0.0; SIZE * SIZE];
+        let mut drops = Drops::new(Vec2::ONE, 0.0, 1);
+        wet[i] = 1.8;
+        release_runoff(&mut wet, &points, bounds, &mut drops, -Vec2::Y * 0.12);
+        assert_eq!(wet[i], 1.0);
+        assert_eq!(drops.drops.len(), 1);
+        assert!((drops.drops[0].water - 0.8 * 20000.0 / (SIZE * SIZE) as f32).abs() < 1e-5);
+        assert!(drops.drops[0].velocity.y < 0.0);
+        // Fill all 128 slots with drops away from this bank: excess must remain there.
+        let mut full = Drops::new(Vec2::splat(2.0), 1.0, 2);
+        let extra = Drops::new(Vec2::splat(2.0), 1.0, 3);
+        let remaining = 128 - full.drops.len();
+        full.drops.extend(extra.drops.into_iter().take(remaining));
+        for drop in &mut full.drops {
+            drop.pos = Vec2::ZERO;
+        }
+        wet[i] = 1.8;
+        release_runoff(&mut wet, &points, bounds, &mut full, -Vec2::Y * 0.12);
+        assert_eq!(wet[i], 1.8);
     }
 
     #[test]

@@ -4,8 +4,9 @@
 use glam::Vec2;
 
 const LIMIT: usize = 128;
+const RAIN_LIMIT: usize = LIMIT - 4; // leave room for runoff from the wiper banks
 const MAP: usize = 512;
-const TRAIL: usize = 8;
+const TRAIL: usize = 4;
 
 pub(super) struct Drop {
     pub pos: Vec2,
@@ -81,12 +82,33 @@ impl Drops {
             image,
         };
         // Match an already wet script state without making all the drops the same age.
-        for _ in 0..((wet * size.element_product() * 60.0) as usize).min(LIMIT) {
+        for _ in 0..((wet * size.element_product() * 60.0) as usize).min(RAIN_LIMIT) {
             let pos = Vec2::new(this.random(), this.random()) * size;
             let water = 0.4 + this.random().powi(3) * 14.0;
             this.drops.push(Drop::new(pos, water));
         }
         this
+    }
+
+    /// Transfer pooled water into a nearby drop, or start a bounded new runner.
+    pub fn feed(&mut self, pos: Vec2, water: f32, velocity: Vec2) -> bool {
+        if let Some(drop) = self
+            .drops
+            .iter_mut()
+            .find(|d| d.pos.distance_squared(pos) < 0.015 * 0.015)
+        {
+            let sum = drop.water + water;
+            drop.velocity = (drop.velocity * drop.water + velocity * water) / sum;
+            drop.water = sum;
+            drop.radius = sum.cbrt() * 0.001;
+        } else if self.drops.len() < LIMIT {
+            let mut drop = Drop::new(pos, water);
+            drop.velocity = velocity;
+            self.drops.push(drop);
+        } else {
+            return false;
+        }
+        true
     }
 
     fn random(&mut self) -> f32 {
@@ -124,7 +146,7 @@ impl Drops {
                 self.arrivals -= 1.0;
                 let pos = Vec2::new(self.random(), self.random()) * self.size;
                 // Freshly wiped glass needs time to collect visible drops again.
-                if self.drops.len() < LIMIT && wetness(pos) > 0.06 {
+                if self.drops.len() < RAIN_LIMIT && wetness(pos) > 0.06 {
                     let water = 0.12 + self.random() * 0.5;
                     self.drops.push(Drop::new(pos, water));
                 }
@@ -147,7 +169,7 @@ impl Drops {
                     drop.water = (drop.water - step * 0.015).max(0.0);
                 }
                 drop.radius = drop.water.cbrt() * 0.001;
-                if drop.pos.distance_squared(drop.tail[0]) > 0.015 * 0.015 {
+                if drop.pos.distance_squared(drop.tail[0]) > 0.08 * 0.08 {
                     drop.tail.copy_within(0..TRAIL - 1, 1);
                     drop.tail[0] = previous;
                 }
@@ -158,28 +180,43 @@ impl Drops {
                     && d.pos.cmplt(self.size).all()
                     && wetness(d.pos).is_finite()
             });
-            self.merge();
+            self.merge(step);
         }
     }
 
-    fn merge(&mut self) {
+    fn merge(&mut self, step: f32) {
         self.heads.fill(-1);
+        let padding = self
+            .drops
+            .iter()
+            .map(|d| d.radius() + d.velocity.length() * step)
+            .fold(0.0, f32::max);
         for i in 0..self.drops.len() {
-            let [cx, cy] = self.cell(self.drops[i].pos);
-            // The small spatial grid avoids comparing every pair of drops.
-            let reach = (self.drops[i].radius() / 0.01).ceil().max(1.0) as usize;
-            for y in cy.saturating_sub(reach)..=(cy + reach).min(self.grid[1] - 1) {
-                for x in cx.saturating_sub(reach)..=(cx + reach).min(self.grid[0] - 1) {
+            let drop = &self.drops[i];
+            let start = drop.pos - drop.velocity * step;
+            let reach = Vec2::splat(drop.radius() + padding);
+            let lo = self.cell(start.min(drop.pos) - reach);
+            let hi = self.cell(start.max(drop.pos) + reach);
+            // Query only cells touched by this step, including the other drops' motion.
+            for y in lo[1]..=hi[1] {
+                for x in lo[0]..=hi[0] {
                     let mut j = self.heads[y * self.grid[0] + x];
                     while j >= 0 {
                         let k = j as usize;
                         let (a, b) = self.drops.split_at_mut(i);
                         let (other, drop) = (&mut a[k], &mut b[0]);
                         let contact = drop.radius() + other.radius();
+                        let motion = (drop.velocity - other.velocity) * step;
+                        let start = drop.pos - other.pos - motion;
+                        let t = (-start.dot(motion) / motion.length_squared().max(1e-12))
+                            .clamp(0.0, 1.0);
                         if other.water > 0.0
-                            && drop.pos.distance_squared(other.pos) < contact * contact
+                            && (start + motion * t).length_squared() < contact * contact
                         {
                             let sum = drop.water + other.water;
+                            if other.velocity.length_squared() > drop.velocity.length_squared() {
+                                drop.tail = other.tail;
+                            }
                             drop.previous =
                                 (drop.previous * drop.water + other.previous * other.water) / sum;
                             drop.pos = (drop.pos * drop.water + other.pos * other.water) / sum;
@@ -218,7 +255,9 @@ impl Drops {
                 let mut start = pos;
                 for (k, &end) in tail.iter().enumerate() {
                     let fade = 1.0 - k as f32 / TRAIL as f32;
-                    self.stamp(start, end, radius * 0.25 * fade, true);
+                    if start.distance_squared(end) > 1e-10 {
+                        self.stamp(start, end, radius * fade, true);
+                    }
                     start = end;
                 }
             }
@@ -237,15 +276,41 @@ impl Drops {
             .ceil()
             .min(Vec2::splat((MAP - 1) as f32));
         let edge = b - a;
+        let inverse_length = edge.length_squared().max(1e-10).recip();
+        let water_radius = if trail { radius * 0.25 } else { radius };
         for y in lo.y as usize..=hi.y as usize {
-            for x in lo.x as usize..=hi.x as usize {
+            // Clip a diagonal trail per row instead of visiting its mostly empty rectangle.
+            let (left, right) = if edge.y.abs() > 1e-8 {
+                let centre = (y as f32 + 0.5) / scale.y - a.y;
+                let t0 = ((centre - radius - aa) / edge.y).clamp(0.0, 1.0);
+                let t1 = ((centre + radius + aa) / edge.y).clamp(0.0, 1.0);
+                let x0 = a.x + edge.x * t0;
+                let x1 = a.x + edge.x * t1;
+                (
+                    ((x0.min(x1) - radius - aa) * scale.x).floor().max(lo.x),
+                    ((x0.max(x1) + radius + aa) * scale.x).ceil().min(hi.x),
+                )
+            } else {
+                (lo.x, hi.x)
+            };
+            for x in left as usize..=right as usize {
                 let pos = Vec2::new(x as f32 + 0.5, y as f32 + 0.5) / scale;
-                let t = ((pos - a).dot(edge) / edge.length_squared().max(1e-10)).clamp(0.0, 1.0);
+                let t = ((pos - a).dot(edge) * inverse_length).clamp(0.0, 1.0);
                 let offset = pos - a.lerp(b, t);
-                let coverage = ((radius + aa - offset.length()) / (2.0 * aa)).clamp(0.0, 1.0)
+                let distance = offset.length();
+                let coverage = ((radius + aa - distance) / (2.0 * aa)).clamp(0.0, 1.0)
                     * (radius / aa).min(1.0);
-                let alpha = (coverage * 255.0).round() as u8;
-                if alpha == 0 {
+                // The collected channel is as wide as the head; only the water
+                // filament left in its centre is thin.
+                let track = if trail {
+                    (coverage * 255.0 + 0.5) as u8
+                } else {
+                    0
+                };
+                let water_coverage = ((water_radius + aa - distance) / (2.0 * aa)).clamp(0.0, 1.0)
+                    * (water_radius / aa).min(1.0);
+                let alpha = (water_coverage * 255.0 + 0.5) as u8;
+                if alpha == 0 && track == 0 {
                     continue;
                 }
                 let i = y * MAP + x;
@@ -254,12 +319,12 @@ impl Drops {
                     self.dirty.push(i);
                 }
                 if trail {
-                    pixel[2] = pixel[2].max(alpha);
+                    pixel[2] = pixel[2].max(track);
                 }
                 if pixel[3] < alpha {
-                    let slope = (offset / radius.max(1e-5)).clamp_length_max(1.0) * 0.5;
-                    pixel[0] = (128.0 + slope.x * 127.0).round() as u8;
-                    pixel[1] = (128.0 + slope.y * 127.0).round() as u8;
+                    let slope = (offset / water_radius.max(1e-5)).clamp_length_max(1.0) * 0.5;
+                    pixel[0] = (128.5 + slope.x * 127.0) as u8;
+                    pixel[1] = (128.5 + slope.y * 127.0) as u8;
                     pixel[3] = alpha;
                 }
             }
@@ -298,10 +363,60 @@ mod tests {
         a.velocity = Vec2::X;
         drops.drops.push(a);
         drops.drops.push(Drop::new(Vec2::new(0.501, 0.5), 1.0));
-        drops.merge();
+        drops.merge(0.0);
         assert_eq!(drops.drops.len(), 1);
         assert_eq!(drops.drops[0].water, 9.0);
         assert!((drops.drops[0].velocity.x - 8.0 / 9.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_runner_collects_crossed_beads_without_swallowing_near_misses() {
+        let mut drops = Drops::new(Vec2::ONE, 0.0, 1);
+        drops.drops.push(Drop::new(Vec2::new(0.5, 0.5), 1.0));
+        drops.drops.push(Drop::new(Vec2::new(0.515, 0.5), 1.0));
+        let mut runner = Drop::new(Vec2::new(0.5, 0.49), 8.0);
+        runner.velocity = -Vec2::Y;
+        drops.drops.push(runner);
+        drops.merge(0.02);
+        assert_eq!(drops.drops.len(), 2);
+        let moving = drops.drops.iter().find(|d| d.velocity.y < 0.0).unwrap();
+        assert_eq!(moving.water, 9.0);
+        assert!((moving.velocity.y + 8.0 / 9.0).abs() < 1e-6);
+        assert_eq!(drops.drops.iter().map(|d| d.water).sum::<f32>(), 10.0);
+    }
+
+    #[test]
+    fn a_runner_clears_a_wider_channel_than_its_thin_water_filament() {
+        let mut drops = Drops::new(Vec2::ONE, 0.0, 1);
+        drops.stamp(Vec2::new(0.5, 0.3), Vec2::new(0.5, 0.7), 0.0022, true);
+        assert!(drops
+            .image
+            .rgba
+            .chunks_exact(4)
+            .any(|p| p[2] > 150 && p[3] < 100));
+    }
+
+    #[test]
+    fn clipping_trails_keeps_the_whole_capsule_in_both_directions() {
+        for (a, b) in [
+            (Vec2::new(0.2, 0.3), Vec2::new(0.8, 0.7)),
+            (Vec2::new(0.8, 0.7), Vec2::new(0.2, 0.3)),
+            (Vec2::new(0.2, 0.3), Vec2::new(0.8, 0.3)),
+            (Vec2::new(0.2, 0.3), Vec2::new(0.2, 0.7)),
+        ] {
+            let mut drops = Drops::new(Vec2::ONE, 0.0, 1);
+            drops.stamp(a, b, 0.0022, true);
+            for y in 0..MAP {
+                for x in 0..MAP {
+                    let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5) / MAP as f32;
+                    let edge = b - a;
+                    let t = ((p - a).dot(edge) / edge.length_squared()).clamp(0.0, 1.0);
+                    if p.distance(a + edge * t) < 0.0022 {
+                        assert!(drops.image.rgba[(y * MAP + x) * 4 + 2] > 0);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
