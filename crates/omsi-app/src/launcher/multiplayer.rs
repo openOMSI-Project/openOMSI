@@ -11,7 +11,7 @@
 //!   one turns the Drive page into the server's: the map, time, date and weather are the
 //!   server's, the bus and the duty are the player's, and "Leave Server" goes back.
 
-use super::state::ServerEntry;
+use super::state::{JoinProto, ServerEntry};
 use super::theme::*;
 use super::ui::{id_of, ButtonKind};
 use super::Launcher;
@@ -26,6 +26,8 @@ pub struct MultiplayerView {
     pub add_address: String,
     pub add_name: String,
     pub selected: Option<usize>,
+    /// 0 Auto, 1 UDP, 2 WebSocket (see `JoinProto`).
+    pub proto: usize,
 }
 
 pub fn draw(l: &mut Launcher, area: Rect) {
@@ -231,7 +233,8 @@ fn servers(l: &mut Launcher, r: Rect) {
     }
     if let Some(a) = join {
         l.state.ask_server(&a, 5.0);
-        l.state.join_server(&a);
+        let proto = [JoinProto::Auto, JoinProto::Udp, JoinProto::WebSocket][l.mp.proto.min(2)];
+        l.state.join_server(&a, proto);
         if l.state.joined_server.as_deref() == Some(a.as_str()) {
             l.go(super::Page::Drive);
         }
@@ -240,6 +243,12 @@ fn servers(l: &mut Launcher, r: Rect) {
         for e in &entries {
             l.state.ask_server(&e.address, 0.0);
         }
+    }
+    // how Join connects: UDP goes straight to the game port and needs no status answer
+    l.ui.text_in("Join via", Rect::new(r.x + 170.0, r.bottom() - ROW, 70.0, ROW), 12.5, Weight::Regular, TEXT_DIM, Align::Left);
+    let mut proto = l.mp.proto;
+    if l.ui.segmented("mp-proto", Rect::new(r.x + 244.0, r.bottom() - ROW, 330.0, ROW), &mut proto, &["Auto", "UDP", "WebSocket"]) {
+        l.mp.proto = proto;
     }
     let _ = id_of;
 }

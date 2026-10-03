@@ -1143,7 +1143,7 @@ fn online(l: &mut Launcher, body: Rect) {
 
 fn join(l: &mut Launcher, address: &str) {
     l.state.ask_server(address, 5.0);
-    l.state.join_server(address);
+    l.state.join_server(address, super::state::JoinProto::Auto);
     if l.state.joined_server.as_deref() == Some(address) {
         l.phone.tab = Tab::Play;
         l.go(Page::Drive);

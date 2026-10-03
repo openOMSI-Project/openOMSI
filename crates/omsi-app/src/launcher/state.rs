@@ -47,6 +47,18 @@ pub struct ServerEntry {
     pub address: String,
 }
 
+/// How the Multiplayer page joins a server.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JoinProto {
+    /// The web gateway where the server answered, else UDP.
+    #[default]
+    Auto,
+    /// Straight to the game port over UDP (no status needed).
+    Udp,
+    /// Through the server's web gateway (a WebSocket).
+    WebSocket,
+}
+
 /// A code host's status page (its gateway is the session's port + 10).
 fn host_status(code: &str) -> Result<omsi_net::ws::ServerInfo, String> {
     let c = omsi_net::SessionCode::decode(code)?;
@@ -150,7 +162,18 @@ fn choice_path() -> std::path::PathBuf {
 
 impl Choice {
     pub fn load() -> Choice {
-        let mut c: Choice = std::fs::read_to_string(choice_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let c: Choice = std::fs::read_to_string(choice_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        Self::fresh(c)
+    }
+
+    /// A duty read back from the file, as a new launcher starts with it.
+    fn fresh(mut c: Choice) -> Choice {
+        // A server is joined on purpose, in the launcher's own session (Multiplayer page): a
+        // join left in the file made every later start connect to it, with no sign of it on
+        // the Drive page ("Leave Server" is only there for a server joined since the launch).
+        if c.lan_mode == "join" {
+            c.lan_mode = "off".into();
+        }
         if c.version < 2 {
             // the start was always the map's first entry point: now it is automatic
             c.entry = -1;
@@ -488,29 +511,53 @@ impl State {
     }
 
     /// The Drive page joins `address`: the server's map is the map, the session is joined.
-    pub fn join_server(&mut self, address: &str) {
-        let Some((_, Ok(info))) = self.server_info.get(address).cloned() else {
-            self.set_status("The server has not answered yet (is its address right? is it running?)", true);
-            return;
+    /// `proto` says how: over UDP straight to the game port, over the server's web gateway
+    /// (a WebSocket), or `Auto` (the web gateway where the server answered, else UDP).
+    pub fn join_server(&mut self, address: &str, proto: JoinProto) {
+        let info = self.server_info.get(address).cloned().and_then(|(_, r)| r.ok());
+        let is_web = omsi_net::ws::ws_url(address).is_some() || omsi_net::official::is_alias(address);
+        let proto = match (proto, &info) {
+            (JoinProto::Auto, Some(_)) => JoinProto::WebSocket,
+            (JoinProto::Auto, None) if !is_web => JoinProto::Udp,
+            (p, _) => p,
         };
-        // A map not installed here comes with the server's mods when the game joins
-        // (`lan_mods`), so this is a notice, not a refusal. The Drive page needs a map of
-        // this installation chosen, so the choice stays as it is then: `duty()` starts the
-        // game on the server's map anyway.
-        if !self.maps.is_empty() && !self.maps.iter().any(|m| m.file.eq_ignore_ascii_case(&info.map)) {
-            self.set_status(format!("The server plays {}, which is not installed here: it is fetched from the server on joining.", info.map), false);
-        } else {
-            self.choice.map = info.map.clone();
+        let lan_addr = match proto {
+            JoinProto::Udp => {
+                if is_web {
+                    self.set_status("UDP needs the game's address (host or host:port), not a web link", true);
+                    return;
+                }
+                address.to_string()
+            }
+            _ => {
+                let Some(info) = info.as_ref() else {
+                    self.set_status("The server has not answered yet (is its address right? is it running?)", true);
+                    return;
+                };
+                // (a server added by its bare address is joined where it answered: its web gateway)
+                if !is_web && !info.reached_at.is_empty() { info.reached_at.clone() } else { address.to_string() }
+            }
+        };
+        if let Some(info) = info.as_ref() {
+            // A map not installed here comes with the server's mods when the game joins
+            // (`lan_mods`), so this is a notice, not a refusal.
+            // The Drive page needs a map of this installation chosen, so the choice stays
+            // as it is then: `duty()` starts the game on the server's map anyway.
+            if !self.maps.is_empty() && !self.maps.iter().any(|m| m.file.eq_ignore_ascii_case(&info.map)) {
+                self.set_status(format!("The server plays {}, which is not installed here: it is fetched from the server on joining.", info.map), false);
+            } else {
+                self.choice.map = info.map.clone();
+            }
         }
         self.choice.lan_mode = "join".into();
-        // (a server added by its bare address is joined where it answered: its web gateway)
-        let bare = omsi_net::ws::ws_url(address).is_none() && !omsi_net::official::is_alias(address);
-        self.choice.lan_addr = if bare && !info.reached_at.is_empty() { info.reached_at.clone() } else { address.to_string() };
+        self.choice.lan_addr = lan_addr;
         self.joined_server = Some(address.to_string());
-        self.join = (true, format!("the server {}", info.name));
+        let name = info.as_ref().map(|i| i.name.clone()).unwrap_or_else(|| address.to_string());
+        self.join = (true, format!("the server {name}"));
         self.join_checked = address.to_string();
         self.touched();
-        self.set_status(format!("Joined {} - choose your bus and duty, then Start the duty", info.name), false);
+        let how = if proto == JoinProto::Udp { " over UDP" } else { "" };
+        self.set_status(format!("Joined {name}{how} - choose your bus and duty, then Start the duty"), false);
     }
 
     /// Back to playing alone (the Drive page's "Leave Server").
@@ -1241,6 +1288,15 @@ pub fn crash_of(log: &std::path::Path) -> Option<(String, String)> {
 mod choice_tests {
     /// `launcher-duty.json` from before the number plate field: the missing key falls back to
     /// the default (no plate), and a typed plate survives a round trip.
+    #[test]
+    fn a_remembered_join_is_not_resumed_at_launch() {
+        let saved: super::Choice = serde_json::from_str(r#"{"lan_mode":"join","lan_addr":"main.example.org"}"#).unwrap();
+        assert_eq!(saved.lan_mode, "join");
+        assert_eq!(super::Choice::fresh(saved).lan_mode, "off");
+        let host: super::Choice = serde_json::from_str(r#"{"lan_mode":"host"}"#).unwrap();
+        assert_eq!(super::Choice::fresh(host).lan_mode, "host");
+    }
+
     #[test]
     fn an_old_duty_file_loads_and_a_typed_plate_is_kept() {
         let old: super::Choice = serde_json::from_str(r#"{"bus":"Vehicles/x.bus","map":"maps/x/global.cfg"}"#).unwrap();
