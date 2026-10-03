@@ -269,6 +269,11 @@ pub(crate) struct App {
     /// How far the player has turned the head (driver, passenger) or swung the outside
     /// camera around the bus, and how far that camera sits from it.
     pub(crate) look: (f32, f32),
+    /// Where the view is drawn between that angle and the one of the frame before: the way
+    /// the mouse (or the stick, or the keys) went is eased in, so the head glides to the
+    /// angle asked for rather than jumping to it (`look_smoothing_ms`; 0 keeps it equal to
+    /// `look`). Only the camera reads this - everything that turns the view writes `look`.
+    pub(crate) look_smooth: (f32, f32),
     /// Each view keeps its own `look` (as OMSI's cameras do): turning the outside camera
     /// (F3) leaves the driver's head (F1) where it was. `look_view` is the view `look`
     /// belongs to now; see `App::sync_view_look`.

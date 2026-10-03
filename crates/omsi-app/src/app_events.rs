@@ -1028,7 +1028,16 @@ impl ApplicationHandler for App {
                                     c.fov_deg = (c.fov_deg * z).clamp(8.0, 120.0);
                                 }
                             };
-                            let mut cam = p.camera_look(&self.view, &base, self.look, self.orbit);
+                            // Where the view is drawn: the way the mouse (or the stick, or the
+                            // arrow keys) turned the head is eased in, so the picture glides to
+                            // the angle asked for instead of jumping to it (off by default).
+                            let look = crate::input_script::ease_look(
+                                &mut self.look_smooth,
+                                self.look,
+                                dt,
+                                self.settings.look_smoothing_ms,
+                            );
+                            let mut cam = p.camera_look(&self.view, &base, look, self.orbit);
                             finish(&mut cam);
                             // Smooth cockpit camera switch (arrow keys): the glide mixes the camera left and the one
                             // taken in the bus's own frame (smootherstep over CAM_BLEND_SECS); the bus's motion and
@@ -1041,7 +1050,7 @@ impl ApplicationHandler for App {
                                     .key
                                     .as_ref()
                                     .is_some_and(|k| k.0 == self.view && k.1 .0 != p.cam_choice.0);
-                                let target = if inside_view { p.driver_local(self.look) } else { None };
+                                let target = if inside_view { p.driver_local(look) } else { None };
                                 let mut started = false;
                                 if let Some(to) = target.as_ref() {
                                     if (entering || left) && crate::app::CAM_BLEND_SECS > 0.0 && self.settings.driverview_smooth {

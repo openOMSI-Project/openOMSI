@@ -816,7 +816,12 @@ impl App {
     /// the first time).
     pub(crate) fn sync_view_look(&mut self) {
         let key = self.look_key();
-        swap_view_look(&mut self.look, &mut self.view_looks, &mut self.look_view, &key);
+        // A change of view is not a turn of the head: the direction of the view entered is
+        // where the head already is, so the angle the camera is drawn at starts there as
+        // well (a glide belongs between angles of one and the same view).
+        if swap_view_look(&mut self.look, &mut self.view_looks, &mut self.look_view, &key) {
+            self.look_smooth = self.look;
+        }
     }
 
     /// Which camera the look belongs to: the view, and for the driver's and the passengers'
@@ -4363,13 +4368,83 @@ pub(crate) fn cab_look_yaw(view: &str, yaw: f32) -> f32 {
     }
 }
 
-pub(crate) fn swap_view_look(look: &mut (f32, f32), looks: &mut std::collections::HashMap<String, (f32, f32)>, look_view: &mut String, view: &str) {
-    if look_view != view {
-        let old = std::mem::replace(look_view, view.to_string());
-        if !old.is_empty() {
-            looks.insert(old, *look);
+/// Put the direction of the view left away and take up the one of the view entered; `true`
+/// when that was another view (the caller then knows the head did not just move: it is where
+/// the view entered last left it).
+pub(crate) fn swap_view_look(look: &mut (f32, f32), looks: &mut std::collections::HashMap<String, (f32, f32)>, look_view: &mut String, view: &str) -> bool {
+    if look_view == view {
+        return false;
+    }
+    let old = std::mem::replace(look_view, view.to_string());
+    if !old.is_empty() {
+        looks.insert(old, *look);
+    }
+    *look = looks.get(view).copied().unwrap_or((0.0, 0.0));
+    true
+}
+
+/// Ease the angle the view is drawn at out of the head's own angle, once a frame, and give it
+/// back: `shown` keeps the angle of the frame before, `ms` is the time constant
+/// (`look_smoothing_ms`, 0 = the view is drawn where the head points at once).
+///
+/// The step is `1 - e^(-dt/tau)`, so 30 and 300 frames a second smooth alike (a plain
+/// fraction of the way would smooth the faster machine harder) and the yaw goes the short way
+/// round. Off, the angle is taken over at once, which is also what puts the view back in step
+/// after a change of view or a `look` a script set whole.
+///
+/// A free function: it is called where `self` is borrowed in parts, and needs nothing of the
+/// app but the two angles.
+pub(crate) fn ease_look(shown: &mut (f32, f32), wanted: (f32, f32), dt: f32, ms: f32) -> (f32, f32) {
+    let tau = ms * 0.001;
+    if !(tau > 0.0) || !dt.is_finite() || dt <= 0.0 {
+        *shown = wanted;
+        return wanted;
+    }
+    let f = 1.0 - (-dt / tau).exp();
+    let dyaw = (wanted.0 - shown.0 + 180.0).rem_euclid(360.0) - 180.0;
+    shown.0 = (shown.0 + dyaw * f).rem_euclid(360.0);
+    shown.1 += (wanted.1 - shown.1) * f;
+    *shown
+}
+
+#[cfg(test)]
+mod look_smoothing_tests {
+    use super::ease_look;
+
+    /// The step is `1 - e^(-dt/tau)`: a machine drawing 600 frames a second glides exactly
+    /// as far in a second as one drawing 60 (a plain fraction of the way would smooth the
+    /// faster of the two harder, and the same setting would feel different on a faster PC).
+    #[test]
+    fn the_glide_does_not_depend_on_the_frame_rate() {
+        let (from, to) = ((0.0, 0.0), (30.0, 10.0));
+        let mut slow = from;
+        for _ in 0..60 {
+            ease_look(&mut slow, to, 1.0 / 60.0, 100.0);
         }
-        *look = looks.get(view).copied().unwrap_or((0.0, 0.0));
+        let mut fast = from;
+        for _ in 0..600 {
+            ease_look(&mut fast, to, 1.0 / 600.0, 100.0);
+        }
+        assert!((slow.0 - fast.0).abs() < 0.01 && (slow.1 - fast.1).abs() < 0.01, "{slow:?} against {fast:?}");
+        // a whole second at a time constant of 100 ms is very nearly there
+        assert!(slow.0 > 29.9 && slow.1 > 9.9, "{slow:?}");
+    }
+
+    /// A head turned a degree past north eases a degree forward, not 359 back.
+    #[test]
+    fn the_glide_goes_the_short_way_round() {
+        let mut shown = (359.0, 0.0);
+        let there = ease_look(&mut shown, (1.0, 0.0), 0.05, 100.0);
+        assert!((there.0 - 359.0).rem_euclid(360.0) < 1.0, "{there:?}");
+    }
+
+    /// Off, the view is drawn exactly where the head points, at once: what every machine
+    /// had before this was a setting.
+    #[test]
+    fn without_the_setting_the_view_is_where_the_head_points() {
+        let mut shown = (0.0, 0.0);
+        assert_eq!(ease_look(&mut shown, (30.0, 10.0), 1.0 / 60.0, 0.0), (30.0, 10.0));
+        assert_eq!(shown, (30.0, 10.0));
     }
 }
 
