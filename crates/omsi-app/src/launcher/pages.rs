@@ -75,6 +75,13 @@ impl PadsView {
             }
         }
     }
+
+    /// Give every controller handle up before handing the hardware to the game. The normal
+    /// controller list uses non-exclusive DirectInput too, not only the force-feedback test.
+    pub(super) fn release_io(&mut self) {
+        self.cancel_feedback_test();
+        self.io = None;
+    }
 }
 
 fn release_feedback(io: &mut Option<crate::controllers::Devices>, active: &mut bool) {

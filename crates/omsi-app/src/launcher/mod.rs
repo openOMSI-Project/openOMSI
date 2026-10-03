@@ -304,7 +304,7 @@ impl Launcher {
     /// launcher's window).
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub fn release_window(&mut self) -> Option<Arc<Window>> {
-        self.pages.pads.cancel_feedback_test();
+        self.pages.pads.release_io();
         self.surface = None;
         self.drop_gpu();
         self.renderer = None;
@@ -771,7 +771,9 @@ impl Launcher {
             // Finish the Discord handoff in the background before starting the child.
             #[cfg(not(target_os = "android"))]
             drop(self.discord.take());
-            self.pages.pads.cancel_feedback_test();
+            // The Controls page may still own the same DirectInput wheel non-exclusively.
+            // Drop it before the child asks for exclusive foreground access for force feedback.
+            self.pages.pads.release_io();
             self.state.spawn_launch(d);
         }
     }

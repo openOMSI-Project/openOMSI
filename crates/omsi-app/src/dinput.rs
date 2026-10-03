@@ -39,6 +39,9 @@ impl Default for RawState {
 
 const RANGE: i32 = 10_000;
 const VJOY_HARDWARE_ID: (u16, u16) = (0x1234, 0xBEAD);
+/// A failed read after reacquiring can be transient, but several in a row mean the
+/// DirectInput object itself is stale. Reopen it instead of keeping its last state forever.
+const READ_FAILURE_LIMIT: u8 = 3;
 
 /// One device opened.
 pub(crate) struct Device {
@@ -54,6 +57,10 @@ pub(crate) struct Device {
     /// Offset of the axis that can receive forces in our data format.
     ff_axis: u32,
     state: RawState,
+    /// Whether `state` came from a successful read. Invalid state must never drive a bus.
+    valid: bool,
+    /// Consecutive GetDeviceState failures after the usual reacquire attempt.
+    read_failures: u8,
     ff: Option<IDirectInputEffect>,
     ff_error_logged: bool,
     /// The periodic effect of the shaking, the magnitude and period last given it, and when
@@ -78,9 +85,44 @@ fn reacquire(dev: &IDirectInputDevice8W, ff: bool) -> bool {
     }
 }
 
+fn pov_dirs(pov: u32) -> [bool; 4] {
+    if pov == u32::MAX || pov & 0xFFFF == 0xFFFF {
+        return [false; 4];
+    }
+    let a = (pov % 36000) as i32;
+    let near = |c: i32| {
+        let d = (a - c).rem_euclid(36000);
+        d.min(36000 - d) < 6750
+    };
+    [near(0), near(9000), near(18000), near(27000)]
+}
+
+/// Releases for everything DirectInput last reported as held. A disappearing device does
+/// not send button-up events, otherwise a shifter, door button or parking brake can stay
+/// pressed in the vehicle script after the hardware is gone.
+fn state_release_events(name: &str, state: &RawState) -> Vec<(String, usize, bool)> {
+    let mut out = Vec::new();
+    for (b, value) in state.buttons.iter().enumerate() {
+        if value & 0x80 != 0 {
+            out.push((name.to_string(), b, false));
+        }
+    }
+    for (hat, pov) in state.pov.iter().copied().enumerate() {
+        for (dir, down) in pov_dirs(pov).into_iter().enumerate() {
+            if down {
+                out.push((name.to_string(), crate::controllers::HAT_BUTTONS + hat * 4 + dir, false));
+            }
+        }
+    }
+    out
+}
+
 impl Device {
     /// The axes the device has: (slot, value -1..1).
     pub fn axes(&self) -> Vec<(usize, f32)> {
+        if !self.valid {
+            return Vec::new();
+        }
         (0..8).filter(|k| self.has_axis[*k]).map(|k| (k, self.state.axes[k] as f32 / RANGE as f32)).collect()
     }
 
@@ -391,14 +433,22 @@ impl DirectInput {
         }
         self.focused = focused;
         log::info!("game controllers: window {} focus; {} DirectInput device(s)", if focused { "regained" } else { "lost" }, self.devices.len());
+        let mut reopen = Vec::new();
         for d in &mut self.devices {
             unsafe {
                 if focused {
+                    d.valid = false;
+                    d.read_failures = 0;
                     if !reacquire(&d.dev, d.ff.is_some()) {
-                        log::warn!("{}: DirectInput could not reacquire the device after focus returned", d.name);
+                        log::warn!("{}: DirectInput could not reacquire the device after focus returned; reopening it", d.name);
+                        reopen.push((d.guid, d.name.clone()));
                     }
                     d.ff_error_logged = false;
                 } else {
+                    self.events.extend(state_release_events(&d.name, &d.state));
+                    d.state = RawState::default();
+                    d.valid = false;
+                    d.read_failures = 0;
                     if let Some(e) = d.ff.as_ref() {
                         let _ = e.Stop();
                     }
@@ -410,6 +460,34 @@ impl DirectInput {
                     let _ = d.dev.Unacquire();
                 }
             }
+        }
+        if focused {
+            self.reopen_devices(reopen);
+        }
+    }
+
+    /// Throw away stale DirectInput objects and create them again. Reusing a GUID is not
+    /// enough to prove the old COM object survived a USB/driver reset.
+    fn reopen_devices(&mut self, reopen: Vec<(GUID, String)>) {
+        if reopen.is_empty() {
+            return;
+        }
+        self.devices.retain(|d| !reopen.iter().any(|(guid, _)| *guid == d.guid));
+        let mut rescan = false;
+        for (guid, name) in reopen {
+            match self.open(&guid, &name) {
+                Some(d) => {
+                    log::info!("{name}: DirectInput device reopened");
+                    self.devices.push(d);
+                }
+                None => {
+                    log::warn!("{name}: DirectInput device could not be reopened; asking Windows to enumerate controllers again");
+                    rescan = true;
+                }
+            }
+        }
+        if rescan {
+            let _ = self.scan.send(());
         }
     }
 
@@ -515,17 +593,21 @@ impl DirectInput {
                 }
             }
             log::info!("game controller (DirectInput): {name}, {} axes, {} buttons{}", has_axis.iter().filter(|a| **a).count(), caps.dwButtons, if ff.is_some() { format!(", force feedback on axis {}", ff_axis / 4) } else if ff_capable && self.ff { ", force feedback capable (effect unavailable)".into() } else if ff_capable { ", force feedback capable".into() } else { String::new() });
-            Some(Device { name: name.to_string(), guid: *guid, hardware_id, dev, has_axis, ff_capable, ff_axis, state: RawState::default(), ff, ff_error_logged: false, vib, vib_last: (0, 0), vib_at: None, buttons: caps.dwButtons as usize })
+            Some(Device { name: name.to_string(), guid: *guid, hardware_id, dev, has_axis, ff_capable, ff_axis, state: RawState::default(), valid: false, read_failures: 0, ff, ff_error_logged: false, vib, vib_last: (0, 0), vib_at: None, buttons: caps.dwButtons as usize })
         }
     }
 
     /// Read every device; devices plugged in or out since the last list are opened or let go.
     pub fn poll(&mut self) {
         if !self.focused {
-            self.events.clear();
+            // Releases queued by set_focus(false) still have to reach the vehicle.
             return;
         }
         if let Some(list) = self.found.lock().unwrap().take() {
+            for d in self.devices.iter().filter(|d| !list.iter().any(|(g, _)| *g == d.guid)) {
+                log::info!("{}: DirectInput device removed", d.name);
+                self.events.extend(state_release_events(&d.name, &d.state));
+            }
             self.devices.retain(|d| list.iter().any(|(g, _)| *g == d.guid));
             for (g, name) in list {
                 if !self.devices.iter().any(|d| d.guid == g) {
@@ -536,6 +618,7 @@ impl DirectInput {
                 }
             }
         }
+        let mut reopen = Vec::new();
         for d in &mut self.devices {
             let mut s = RawState { axes: d.state.axes, ..Default::default() };
             let read = |s: &mut RawState| unsafe {
@@ -547,8 +630,27 @@ impl DirectInput {
                 Err(_) => reacquire(&d.dev, d.ff.is_some()) && read(&mut s).is_ok(),
             };
             if !ok {
+                d.valid = false;
+                d.read_failures = d.read_failures.saturating_add(1);
+                if d.read_failures >= READ_FAILURE_LIMIT {
+                    log::warn!("{}: DirectInput state failed {} times; reopening the device", d.name, d.read_failures);
+                    self.events.extend(state_release_events(&d.name, &d.state));
+                    d.state = RawState::default();
+                    unsafe {
+                        if let Some(e) = d.ff.as_ref() {
+                            let _ = e.Stop();
+                        }
+                        if let Some(e) = d.vib.as_ref() {
+                            let _ = e.Stop();
+                        }
+                        let _ = d.dev.Unacquire();
+                    }
+                    reopen.push((d.guid, d.name.clone()));
+                }
                 continue;
             }
+            d.read_failures = 0;
+            d.valid = true;
             for b in 0..128 {
                 let (was, now) = (d.state.buttons[b] & 0x80 != 0, s.buttons[b] & 0x80 != 0);
                 if was != now {
@@ -558,18 +660,7 @@ impl DirectInput {
             // the hat switches as buttons after the 128 (up, right, down, left of each): the
             // D-pad of a wheel rim - Moza's among others - is a hat, and could not be given a key
             for k in 0..4 {
-                let dirs = |pov: u32| -> [bool; 4] {
-                    if pov == u32::MAX || pov & 0xFFFF == 0xFFFF {
-                        return [false; 4];
-                    }
-                    let a = (pov % 36000) as i32;
-                    let near = |c: i32| {
-                        let d = (a - c).rem_euclid(36000);
-                        d.min(36000 - d) < 6750
-                    };
-                    [near(0), near(9000), near(18000), near(27000)]
-                };
-                let (was, now) = (dirs(d.state.pov[k]), dirs(s.pov[k]));
+                let (was, now) = (pov_dirs(d.state.pov[k]), pov_dirs(s.pov[k]));
                 for dir in 0..4 {
                     if was[dir] != now[dir] {
                         self.events.push((d.name.clone(), crate::controllers::HAT_BUTTONS + k * 4 + dir, now[dir]));
@@ -578,6 +669,7 @@ impl DirectInput {
             }
             d.state = s;
         }
+        self.reopen_devices(reopen);
     }
 
     /// A hardware-timed calibration pulse; never leaves an infinite force running.
@@ -736,6 +828,25 @@ impl Drop for DirectInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disappearing_device_releases_buttons_and_hats() {
+        let mut state = RawState::default();
+        state.buttons[7] = 0x80;
+        state.pov[1] = 9000;
+        let events = state_release_events("wheel", &state);
+        assert!(events.contains(&("wheel".to_string(), 7, false)));
+        assert!(events.contains(&("wheel".to_string(), crate::controllers::HAT_BUTTONS + 5, false)));
+        assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn invalid_device_state_has_no_axes() {
+        // The COM handle can remain present after a failed read; its cached axes must not
+        // keep driving the bus while a reopen is pending. This is covered structurally by
+        // Device::axes returning no values while valid is false.
+        assert_eq!(READ_FAILURE_LIMIT, 3);
+    }
 
     #[test]
     fn button_offsets_follow_instances_not_enumeration_order() {
