@@ -1,1 +1,8 @@
 blank_issues_enabled: false
+contact_links:
+  - name: Questions and help
+    url: https://discord.gg/VG2EKVafYG
+    about: How do I...? Setting up, mods, or a chat with other players - ask on our Discord server.
+  - name: User guide
+    url: https://github.com/openOMSI-Project/openOMSI/blob/main/docs/USER_GUIDE.md
+    about: Settings, controls, multiplayer and common problems explained.

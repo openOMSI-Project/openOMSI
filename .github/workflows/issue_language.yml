@@ -1,0 +1,50 @@
+# Issues are written in English (see CONTRIBUTING.md): an issue in another language is
+# closed with a comment asking for an English version, and opened again by itself once its
+# title and text are edited into English. Code blocks and logs do not count, so a crash log
+# with a non-English user folder is fine. Maintainers' issues are left alone.
+name: Issue language
+
+on:
+  issues:
+    types:
+      - opened
+      - edited
+      - reopened
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    if: ${{ !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association) }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      NUMBER: ${{ github.event.issue.number }}
+      STATE: ${{ github.event.issue.state }}
+      LABEL: not in English
+      HAS_LABEL: ${{ contains(github.event.issue.labels.*.name, 'not in English') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Check the language
+        id: lang
+        run: echo "result=$(python3 .github/scripts/issue_language.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Close an issue that is not in English
+        if: steps.lang.outputs.result == 'not-english' && env.STATE == 'open'
+        run: |
+          gh label create "$LABEL" --color d4c5f9 --description "Closed until the issue is written in English" 2>/dev/null || true
+          gh issue edit "$NUMBER" --add-label "$LABEL"
+          gh issue close "$NUMBER" --reason "not planned" --comment "Thanks for the report! Issues here are written in English, so that every contributor can read them and search for them. Please edit the title and text of this issue into English - a translator such as DeepL or Google Translate is fine, and logs or game text can stay as they are. The issue opens again by itself once it is in English."
+
+      - name: Reopen an issue edited into English
+        if: steps.lang.outputs.result == 'english' && env.HAS_LABEL == 'true'
+        run: |
+          gh issue edit "$NUMBER" --remove-label "$LABEL"
+          if [ "$STATE" = closed ]; then
+            gh issue reopen "$NUMBER" --comment "Thanks for translating it - the issue is open again."
+          fi

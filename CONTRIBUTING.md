@@ -11,6 +11,15 @@ Thanks for helping! A few rules keep the project healthy:
 * `cargo test --workspace` and `cargo build --release` must pass (CI checks all platforms).
 * Code style: `rustfmt` defaults, comments explain *why*.
 
+## Issues
+
+* **English only** - titles and text, so every contributor can read and search them. An
+  issue in another language is closed automatically with a request to translate it, and
+  opens again by itself once it is edited into English. Logs and game text can stay as
+  they are.
+* One problem or idea per issue, on the latest release. Questions go to the
+  [Discord server](https://discord.gg/VG2EKVafYG).
+
 ## Where things are
 
 See the layout in the [README](README.md#repository-layout) and

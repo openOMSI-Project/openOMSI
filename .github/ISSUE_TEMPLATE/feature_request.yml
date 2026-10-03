@@ -5,23 +5,59 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the suggestion! Please describe your idea below.
+        Thanks for the suggestion! Please **write in English** - issues in other languages are closed until they are translated, and a translator such as DeepL or Google Translate is fine. One idea per issue, please.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you start
+      options:
+        - label: I wrote this request in English.
+          required: true
+        - label: I searched the [open and closed issues](https://github.com/openOMSI-Project/openOMSI/issues?q=is%3Aissue) and nobody has asked for this yet.
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: What is it about?
+      options:
+        - Passengers, doors, tickets and money
+        - Driving, controls, input devices and cameras
+        - AI traffic, timetable and navigation
+        - Multiplayer or dedicated server
+        - Graphics, weather and effects
+        - Sound
+        - Launcher, menus and HUD
+        - Modding (vehicle, map and script features)
+        - A new platform or game mode (VR, mobile, trams...)
+        - Something else
+    validations:
+      required: true
 
   - type: textarea
     id: problem
     attributes:
       label: What problem does this solve?
-      description: Is your request related to something that's currently missing or annoying?
+      description: What is missing or annoying today, and when do you run into it?
     validations:
-      required: false
+      required: true
 
   - type: textarea
     id: solution
     attributes:
       label: What would you like to see?
-      description: Describe the feature or change you're proposing.
+      description: Describe the feature or change you're proposing. Mock-ups and screenshots help.
     validations:
       required: true
+
+  - type: textarea
+    id: omsi2
+    attributes:
+      label: How does OMSI 2 do it?
+      description: If OMSI 2 or one of its add-ons already has this, how does it work there?
+    validations:
+      required: false
 
   - type: textarea
     id: alternatives
