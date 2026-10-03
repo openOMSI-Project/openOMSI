@@ -697,18 +697,13 @@ pub fn vehicle_bodies(v: &VehicleInstance) -> Vec<omsi_sim::collision::Obb> {
     let mut out = vec![omsi_sim::collision::Obb::from_box(
         v.ty.def.bounding_box.unwrap_or(DEFAULT_BOX),
         v.position,
-        v.heading,
+        v.body_heading(),
     )];
     for t in &v.trailers {
-        let heading = if t.reversed {
-            t.heading + 180.0
-        } else {
-            t.heading
-        };
         out.push(omsi_sim::collision::Obb::from_box(
             t.ty.def.bounding_box.unwrap_or(DEFAULT_BOX),
             t.position,
-            heading,
+            t.body_heading(),
         ));
     }
     out
@@ -869,7 +864,7 @@ fn open_trace() -> Option<std::io::BufWriter<std::fs::File>> {
 /// The vehicle's extent from its origin: (to the front bumper, to the rear bumper, half
 /// the width) from its `[boundingbox]`.
 fn extents(ty: &VehicleType, length: f32) -> (f32, f32, f32) {
-    match ty.def.bounding_box {
+    let (front, rear, width) = match ty.def.bounding_box {
         Some(bb) if bb[1] > 1.0 => (
             bb[1] * 0.5 + bb[4],
             bb[1] * 0.5 - bb[4],
@@ -881,6 +876,11 @@ fn extents(ty: &VehicleType, length: f32) -> (f32, f32, f32) {
             Some((lo, hi)) if hi.y - lo.y > 1.0 => (hi.y.max(0.5), (-lo.y).max(0.5), (hi.x.max(-lo.x)).max(0.5)),
             _ => (length * 0.5, length * 0.5, 0.9),
         },
+    };
+    if omsi_sim::vehicle::body_reversed(&ty.def, false) {
+        (rear, front, width)
+    } else {
+        (front, rear, width)
     }
 }
 
@@ -4770,7 +4770,7 @@ impl Traffic {
                 if let Some(bb) = t.ty.def.bounding_box {
                     out.push(Footprint::from_obb(
                         i,
-                        &omsi_sim::collision::Obb::from_box(bb, t.position, t.heading),
+                        &omsi_sim::collision::Obb::from_box(bb, t.position, t.body_heading()),
                         st.speed,
                     ));
                 }
@@ -6547,33 +6547,20 @@ impl Traffic {
         let mut bodies = vec![grown(omsi_sim::collision::Obb::from_box(
             ty.def.bounding_box.unwrap_or(DEFAULT_BOX),
             pos,
-            heading,
+            omsi_sim::vehicle::body_heading(&ty.def, heading, false),
         ))];
         let (mut origin, mut lead, mut lead_rev) = (pos, ty.clone(), false);
         for (t, rev) in self.trailer_chain(ty) {
-            let (back, front) = match omsi_sim::vehicle::coupling_offsets(&lead, lead_rev, &t, rev) {
-                Some((back, front)) => (back, front),
-                None => {
-                    // the declared joint, each end the one the part's own way names (as
-                    // `TrailerPart::new_ex` takes it): a part turned round couples by its
-                    // `[coupling_front]`, not by its `[coupling_back]`
-                    let cb = if lead_rev { lead.def.coupling_front.as_ref() } else { lead.def.coupling_back.as_ref() };
-                    let cf = if rev { t.def.coupling_back.as_ref() } else { t.def.coupling_front.as_ref() };
-                    (
-                        cb.map(|c| c.pos[1]).unwrap_or(if lead_rev { 4.0 } else { -4.0 }),
-                        cf.map(|c| c.pos[1]).unwrap_or(if rev { -4.0 } else { 4.0 }),
-                    )
-                }
-            };
+            let (back, front) = omsi_sim::vehicle::coupling_points(&lead, lead_rev, &t, rev);
             // each car stands along the consist's heading, turned round by its own
             // (absolute) orientation - never by the car in front of it
             let (center, car_heading) = omsi_sim::vehicle::coupling_placement(
                 origin,
                 heading,
-                lead_rev,
-                back,
-                rev,
-                front,
+                omsi_sim::vehicle::body_reversed(&lead.def, lead_rev),
+                back.y,
+                omsi_sim::vehicle::body_reversed(&t.def, rev),
+                front.y,
             );
             bodies.push(grown(omsi_sim::collision::Obb::from_box(
                 t.def.bounding_box.unwrap_or(DEFAULT_BOX),
@@ -6759,12 +6746,12 @@ impl Traffic {
                 let (mass, id) = (c.vehicle.physics.mass_kg, c.id);
                 let rear = c.vehicle.trailers.iter().filter_map(move |t| {
                     t.ty.def.bounding_box.map(|bb| {
-                        omsi_sim::collision::Obb::from_box(bb, t.position, t.heading)
+                        omsi_sim::collision::Obb::from_box(bb, t.position, t.body_heading())
                             .moving(v, mass, id)
                     })
                 });
                 std::iter::once(
-                    omsi_sim::collision::Obb::from_box(bb, c.vehicle.position, c.vehicle.heading)
+                    omsi_sim::collision::Obb::from_box(bb, c.vehicle.position, c.vehicle.body_heading())
                         .moving(v, mass, id),
                 )
                 .chain(rear)
