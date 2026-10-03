@@ -652,11 +652,29 @@ fn driving_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
     toggle_setting(ui, s, dirty, c.row(), "Force feedback and vibration", "ff_enabled");
     toggle_setting(ui, s, dirty, c.row(), "Invert force feedback by default", "ff_invert");
     c.y += ui.paragraph("Wheels with a saved direction use their own setting under Controls → Game controllers.", Vec2::new(c.inner.x, c.y), c.inner.w, 12.5, Weight::Regular, TEXT_DIM) + 8.0;
+    toggle_setting(ui, s, dirty, c.row(), "Invert force feedback", "ff_invert");
+    // what the wheel feels all the time while the bus runs: the road's grain and the
+    // engine's buzz, and how long a jolt eases away once it is over
+    for (key, label, id) in [("ff_road_vib", "Road texture vibration", "s-ffroad"), ("ff_engine_vib", "Engine vibration", "s-ffeng")] {
+        let mut v = get(s, key).as_f64().unwrap_or(1.0) as f32;
+        if ui.slider(id, c.row(), &mut v, 0.0, 4.0, 0.05, label, &|v| if v < 0.01 { "Off".to_string() } else if (v - 1.0).abs() < 0.01 { "Normal".to_string() } else { format!("{:.0}%", v * 100.0) }) {
+            s[key] = json!((v * 20.0).round() / 20.0);
+            *dirty = 0.3;
+        }
+    }
+    let mut fade = get(s, "ff_fade").as_f64().unwrap_or(0.28) as f32;
+    if ui.slider("s-fffade", c.row(), &mut fade, 0.0, 1.5, 0.05, "Vibration fade-out", &|v| if v < 0.01 { "Off".to_string() } else { format!("{:.0} ms", (v * 1000.0).round() as i32) }) {
+        s["ff_fade"] = json!((fade * 100.0).round() / 100.0);
+        *dirty = 0.3;
+    }
     if ui.button("s-wreset", c.row(), "Reset wheel settings", Some("restart_alt"), ButtonKind::Normal) {
         s["wheel_range"] = json!(900.0);
         s["wheel_lock"] = json!(0.0);
         s["ff_invert"] = json!(false);
         s["ff_enabled"] = json!(true);
+        s["ff_road_vib"] = json!(1.0);
+        s["ff_engine_vib"] = json!(1.0);
+        s["ff_fade"] = json!(0.28);
         *dirty = 0.3;
     }
     if ui.button("s-go-pads", c.row(), "Set up a wheel or pedals", Some("sports_esports"), ButtonKind::Normal) {
@@ -2327,7 +2345,7 @@ mod settings_tests {
         }
         let driving = vec![
             "s-keys", "set-steering_linear", "set-old_steering", "set-red_steer_spd", "s-mouse", "set-mouse_right_off", "set-blinker_cancel", "set-brake_hold", "set-auto_clutch", "set-momentary_gears", "s-go-keys",
-            "s-wrange", "s-wlock", "s-pedt", "s-pedb", "set-ff_enabled", "set-ff_invert", "s-wreset", "s-go-pads",
+            "s-wrange", "s-wlock", "s-pedt", "s-pedb", "set-ff_enabled", "set-ff_invert", "s-ffroad", "s-ffeng", "s-fffade", "s-wreset", "s-go-pads",
         ];
         let mut camera = vec![
             "s-seaty", "s-seatz", "s-seatx", "s-seatreset", "s-fov", "s-look-sens", "set-steer_look", "s-steer-look-angle", "s-steer-look-response", "set-head_movement", "set-driverview_smooth", "set-hands_in_cab", "set-alt_view",

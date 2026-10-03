@@ -8,6 +8,12 @@
 //! presses. A device the file does not know is taken as a gamepad: the left stick steers,
 //! the right trigger is the throttle, the left one the brake. K switches the controller on
 //! and off (OMSI's `toggel_ctrler`).
+//!
+//! The force feedback is what a heavy vehicle needs (see `Micro` and `Controllers::feedback`):
+//! the parking resistance and centring of a bus that weighs twelve tonnes, and over the top
+//! of it what it drives over and runs on - the grain of the road, the engine's buzz, a kerb
+//! and whatever a script shakes the wheel with - every vibration that comes to an end eased
+//! away rather than cut off.
 
 use gilrs::{Axis, EventType, Gilrs};
 use std::path::Path;
@@ -574,7 +580,203 @@ pub struct FfInput {
     /// `FF_Vib_Amp` 0..1 and `FF_Vib_Period` (hundredths of a second) of the scripts.
     pub vib_amp: f32,
     pub vib_period: f32,
+    /// `StreetCond` of the road under the wheels: 0 dry, 1 wet, 2 covered in snow.
+    pub street_cond: f32,
+    /// The engine's speed (rpm; 0 while it is not running).
+    pub engine_rpm: f32,
+    /// How hard the engine is working (0..1).
+    pub engine_load: f32,
+    /// The trembling of the tarmac and the engine, worked out here from the four above
+    /// (see `Micro`); the caller leaves it at 0.
+    pub(crate) micro: f32,
     pub dt: f32,
+}
+
+/// How long (s) a jolt's or a script's vibration eases away once it stops, unless the
+/// settings say otherwise (`ff_fade`).
+const FF_FADE: f32 = 0.28;
+
+/// What is left of a vibration `t` seconds after its source stopped: all of it while it is
+/// still coming, then easing away over `fade` seconds. A force that falls to zero in a
+/// single step is a jolt of its own - the rim feels it and the wheel's motor clunks - so
+/// everything that shakes the wheel once eases out rather than letting go. `fade` 0 is the
+/// old behaviour of stopping where it stands.
+fn fade_gain(t: f32, fade: f32) -> f32 {
+    if fade <= 0.0 {
+        return 1.0;
+    }
+    if t >= fade {
+        return 0.0;
+    }
+    // a smoothstep, so the fade neither starts nor ends with a step of its own
+    let k = 1.0 - t / fade;
+    k * k * (3.0 - 2.0 * k)
+}
+
+/// A script's shaking (`FF_Vib_Amp` and `FF_Vib_Period`) and the little state its fade
+/// needs. The scripts write both afresh every frame, so once they stop there is nothing
+/// left to ease away unless the last of what they asked for is kept here.
+#[derive(Debug, Clone, Copy, Default)]
+struct ScriptVib {
+    /// The last amplitude the scripts reached the wheel with.
+    amp: f32,
+    /// The period that came with it: the scripts stop writing that too, and a rattle eased
+    /// away at the wrong period would not be the one that stopped.
+    period: f32,
+    /// How long ago (s) they last reached the wheel.
+    t: f32,
+}
+
+impl ScriptVib {
+    /// What the wheel is told this frame: the retained amplitude eased on the settings'
+    /// fade since the scripts went quiet, and the period to shake it at.
+    ///
+    /// The fade cannot be a gain applied to the incoming amplitude, because that amplitude
+    /// is already zero on the frame the scripts stop and any gain leaves zero at zero - the
+    /// wheel then drops the shake in a single step, which is the jolt the fade is here to
+    /// avoid. It shows on the DirectInput path, where a zero amplitude stops the periodic
+    /// effect outright, and on the fallback, whose shake is worked out of the same
+    /// amplitude. The fade at zero stops the shake where it stands, as it always did.
+    fn step(&mut self, on: bool, incoming: f32, period: f32, fade: f32, dt: f32) -> (f32, f32) {
+        let incoming = if on { incoming.clamp(0.0, 1.0) } else { 0.0 };
+        if incoming > 0.004 {
+            self.amp = incoming;
+            if period > 0.0 {
+                self.period = period;
+            }
+            self.t = 0.0;
+        } else if on && fade > 0.01 {
+            self.t += dt.max(0.0);
+        } else {
+            self.amp = 0.0;
+            self.t = 0.0;
+        }
+        (self.amp * fade_gain(self.t, fade), self.period)
+    }
+}
+
+/// The trembling that never stops while the bus runs: the grain of the tarmac under the
+/// wheels, and the engine's own buzz coming up through the frame.
+///
+/// Both are small - a tenth of the wheel's lock at most, and a wheel with a real motor
+/// spends most of its travel on parking resistance anyway - and both are fast enough to be
+/// felt, which is why a wheel feels them as a buzz and not as a push. A constant-force
+/// wheel can only be told one force at a time; a force that changes every few milliseconds
+/// comes out of the motor as a tremble rather than as a movement of the wheel, which is
+/// what the road is. A slow one is felt as nothing at all: the rim goes where it is told and
+/// the hands go with it, so the rate matters more here than the size. And a force that lines
+/// up with itself is felt as something solid being carried while one that does not is felt
+/// as a loose surface, so most of the road is sines and only a little of it is noise.
+///
+/// It keeps a little state of its own: the distance the bus has rolled (the grain is read
+/// along the road, so a bus standing still feels none of it and the same stretch of tarmac
+/// shakes the same way twice) and the engine's angle (so its buzz is at the engine's own
+/// rate whatever gear the bus is in, and a script's rpm that twitches does not reach the
+/// wheel as a rattle).
+#[derive(Debug, Clone, Copy, Default)]
+struct Micro {
+    /// The distance the bus has rolled (m).
+    roll: f32,
+    /// The engine's speed, with the twitches of the script that writes it taken out (rpm).
+    rpm: f32,
+    /// Where each part of the engine's buzz stands (rad). Each is kept on its own because a
+    /// phase reduced on its own rate is exact for that rate, and a phase shared between them
+    /// is not: wrap the crank angle into a single turn, then take half or a quarter of it,
+    /// and you land on a different half turn every time instead of carrying on.
+    crank: f32,
+    firing: f32,
+    mass: f32,
+}
+
+impl Micro {
+    /// How much the wheel trembles this frame, of its full lock (-1..1). `road` and
+    /// `engine` are the settings' strengths (0 = neither); the rest is what the bus is
+    /// doing - `kmh`, the road's `street_cond` (0 dry, 1 wet, 2 snow), the engine's rpm and
+    /// how hard it is working.
+    fn sample(&mut self, dt: f32, kmh: f32, street_cond: f32, rpm: f32, load: f32, road: f32, engine: f32) -> f32 {
+        let dt = dt.clamp(0.0, 0.1);
+        // The grain of the road: nothing at all at a standstill, all of it by 30 km/h, and
+        // a wet or snowy road hums under the tyres more than dry asphalt does.
+        let v = kmh.abs() / 3.6;
+        let drive = (v / 8.5).min(1.0);
+        let rough = 0.6 + 0.25 * street_cond.clamp(0.0, 2.0);
+        self.roll += v * dt;
+// The road, read along the distance: mostly its ride - the shapes the whole bus is
+        // being carried over - and only a seventh its grain. A wheel is told one force at a
+        // time, and the difference the driver feels between a bus that feels heavy and one
+        // whose wheel rattles is whether that force lines up with itself. Noise never does:
+        // read along the road it gives every part of the spectrum a share, and a signal with
+        // no shape to it is felt as a loose surface however fast it is felt. A ride made of
+        // sines whose lengths do not fit together lines up and never repeats over a stretch
+        // of road, and that is what reads as one solid weight being carried. The grain is
+        // left in under it, small, because it is what says the road is made of something and
+        // not polished. The three lengths are six metres, two and a quarter and nine
+        // tenths: the deep ones are the mass, the last is what the tyre feels, and none of
+        // them is so short that it comes back as a beat of its own before a wheel cannot be
+        // told about it (a hundred times a second, so the 0.1 m grain is let go above 40 Hz,
+        // where the 0.9 m one carries the surface on its own).
+        let fine = 1.0 - (v / 0.4 / 40.0).clamp(0.0, 1.0);
+        let shape = ride(self.roll / 6.0) * 0.34 + ride(self.roll / 2.2 + 5.3) * 0.26 + ride(self.roll / 0.9 + 11.9) * 0.4;
+        let surface = grain(self.roll / 0.25) * 0.55 + grain(self.roll / 0.1 + 31.7) * 0.45 * fine;
+        let tarmac = (shape * 0.85 + surface * 0.15) * drive * rough * 0.25 * road;
+        // The engine's buzz, each part on the rate it really runs at: the crankshaft
+        // turning, the firing pulses above it, and a low rumble under both standing for the
+        // mass the frame works against. A wheel is told its force once a frame, so nothing
+        // above about 28 Hz can be carried at all and each part is let go as it reaches for
+        // it; above the revs where that has happened the crank and the pulses are both gone
+        // and what is left is the low rumble.
+        let turn = std::f32::consts::TAU * dt;
+        self.rpm += (rpm.clamp(0.0, 4500.0) - self.rpm) * (dt / 0.08).min(1.0);
+        let spin = |p: &mut f32, per_turn: f32| *p = (*p + self.rpm / per_turn * turn).rem_euclid(std::f32::consts::TAU);
+        // a wheel is told its force once a frame, so nothing above about 28 Hz can be
+        // carried at all and each part is let go over the last stretch before that
+        let room = |f: f32| 1.0 - ((f - 28.0) / 7.0).clamp(0.0, 1.0);
+        spin(&mut self.crank, 60.0);
+        spin(&mut self.firing, 30.0);
+        spin(&mut self.mass, 240.0);
+        let running = ((self.rpm - 150.0) / 400.0).clamp(0.0, 1.0);
+        // an engine working against its mounts twists harder than one idling
+        let mount = 0.7 + 0.6 * load.clamp(0.0, 1.0);
+        let lump = 0.6 + 0.4 * (self.rpm / 2400.0).clamp(0.0, 1.0);
+        let hum = running * mount * lump
+            * (self.crank.sin() * room(self.rpm / 60.0) * 0.03
+                + self.firing.sin() * room(self.rpm / 30.0) * 0.02
+                + self.mass.sin() * (self.rpm / 2400.0).min(1.0) * 0.055)
+            * engine;
+        tarmac + hum
+    }
+}
+
+/// The ride of the road under the wheels: smooth, always moving, and never the same twice.
+///
+/// Where `grain` reads the surface, this reads the shape. It is sines whose lengths do not
+/// fit into one another, so it never repeats itself over a stretch of road and never jumps
+/// either. Its sum is 1 at the very most, so it can be mixed by eye.
+fn ride(x: f32) -> f32 {
+    let t = std::f32::consts::TAU * x;
+    t.sin() * 0.55 + (t * 1.7 + 1.3).sin() * 0.3 + (t * 2.9 + 4.2).sin() * 0.15
+}
+
+/// Value noise along one line, -1..1. The grain of a road surface is not a sine wave, and
+/// a wheel handed the same sine wave every few metres reads it as a whine from the gearbox
+/// rather than as tarmac.
+fn grain(x: f32) -> f32 {
+    let i = x.floor();
+    let f = x - i;
+    let s = f * f * (3.0 - 2.0 * f); // the lattice's points, eased into one another
+    let a = lattice(i as i32);
+    let b = lattice(i as i32 + 1);
+    (a + (b - a) * s) * 2.0 - 1.0
+}
+
+/// One point of the grain's lattice, hashed from its place in whole metres (so a long
+/// drive does not walk the pattern off).
+fn lattice(i: i32) -> f32 {
+    let mut h = (i as u32).wrapping_mul(0x27d4_eb2d) ^ 0x9e37_79b1;
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x85eb_ca6b);
+    h ^= h >> 13;
+    (h >> 8) as f32 / 16_777_216.0
 }
 
 pub struct Controllers {
@@ -595,6 +797,15 @@ pub struct Controllers {
     pub ff_invert: bool,
     /// Force feedback and rumble switched on (Settings: `ff_enabled`).
     pub ff_enabled: bool,
+    /// How strongly the tarmac's grain is felt under the wheels (Settings: `ff_road_vib`,
+    /// 0 = none).
+    pub ff_road: f32,
+    /// How strongly the engine's buzz is felt through the frame (Settings: `ff_engine_vib`,
+    /// 0 = none).
+    pub ff_engine: f32,
+    /// How long (s) a vibration eases away once it stops (Settings: `ff_fade`; 0 = it
+    /// stops where it stands).
+    pub ff_fade: f32,
     /// The wheel's rotation over the rotation that is the bus's full lock (Settings:
     /// `wheel_range` / `wheel_lock`; 1 = the whole wheel is the full lock, as OMSI).
     pub steer_gain: f32,
@@ -611,6 +822,13 @@ pub struct Controllers {
     ff_lateral: f32,
     ff_bump: f32,
     ff_bump_age: f32,
+    /// The trembling of the tarmac and the engine, and the little state it keeps.
+    ff_micro: Micro,
+    /// The scripts' shaking and the state its fade keeps.
+    ff_vib: ScriptVib,
+    /// A rumble motor's share of the trembling, eased over half a second (see
+    /// `rumble_feedback`).
+    ff_rumble: f32,
     ff_source_logged: Option<String>,
     /// The rumble playing (`FF_Vib_Amp` and `FF_Vib_Period` of the bus), rebuilt when
     /// either changes.
@@ -645,7 +863,7 @@ impl Controllers {
         for c in devices.connected() {
             log::info!("game controller: {} ({})", c.name, if cfg.iter().any(|d| names_match(&d.name, &c.name)) { "set up in gamectrler.cfg" } else if c.gamepad { "as a gamepad" } else { "not set up: its X axis steers" });
         }
-        Controllers { settled: Vec::new(), devices, focused: true, cfg, deadzone: 0.0, pedal_throttle: 1.0, pedal_brake: 1.0, disabled: Vec::new(), ff_invert: false, ff_enabled: true, steer_gain: 1.0, enabled: true, actions: Vec::new(), announced: Vec::new(), notice: None, steer: None, ff_t: 0.0, ff_lateral: 0.0, ff_bump: 0.0, ff_bump_age: 0.0, ff_source_logged: None, rumble: None, #[cfg(all(target_os = "linux", target_pointer_width = "64"))] wheel: None, #[cfg(all(target_os = "linux", target_pointer_width = "64"))] wheel_tried: None }
+Controllers { settled: Vec::new(), devices, focused: true, cfg, deadzone: 0.0, pedal_throttle: 1.0, pedal_brake: 1.0, disabled: Vec::new(), ff_invert: false, ff_enabled: true, ff_road: 1.0, ff_engine: 1.0, ff_fade: FF_FADE, steer_gain: 1.0, enabled: true, actions: Vec::new(), announced: Vec::new(), notice: None, steer: None, ff_t: 0.0, ff_lateral: 0.0, ff_bump: 0.0, ff_bump_age: 0.0, ff_micro: Micro::default(), ff_vib: ScriptVib::default(), ff_rumble: 0.0, ff_source_logged: None, rumble: None, #[cfg(all(target_os = "linux", target_pointer_width = "64"))] wheel: None, #[cfg(all(target_os = "linux", target_pointer_width = "64"))] wheel_tried: None }
     }
 
     /// A wheel or joystick steers the bus (then the arrow keys look around, as in OMSI:
@@ -808,8 +1026,9 @@ impl Controllers {
     }
 
     /// On a force-feedback wheel, combine parking resistance, centring, the bus's
-    /// lateral motion, front-wheel bumps and script-driven vibration. Other devices
-    /// get vibration as rumble.
+    /// lateral motion, front-wheel bumps, the trembling of the tarmac and the engine and
+    /// script-driven vibration - every vibration that comes to an end eased away rather
+    /// than cut. Other devices get the vibration as rumble.
     pub fn feedback(&mut self, f: FfInput) {
         let on = self.enabled && f.on && self.ff_enabled && self.focused;
         let mut f = f;
@@ -828,9 +1047,39 @@ impl Controllers {
         } else {
             self.ff_bump_age += f.dt.max(0.0);
         }
-        self.ff_bump = if on { (self.ff_bump - f.dt.max(0.0) * 6.0).max(incoming_bump) } else { 0.0 };
+        // A jolt is held and eased away over the settings' fade instead of being let go the
+        // frame the physics stops reporting it: a force that falls to zero in a single step
+        // is a jolt of its own, felt through the rim and heard in the wheel's motor. The
+        // envelope decays on its own rate rather than through `fade_gain`, because a gain
+        // only starts once the jolt it follows is already spent. With the fade at zero the
+        // jolt stops where it stands, which is how the wheel behaved before.
+        self.ff_bump = if !on {
+            0.0
+        } else if self.ff_fade > 0.01 {
+            let eased = self.ff_bump * (-f.dt.max(0.0) / (self.ff_fade * 0.3)).exp();
+            let held = incoming_bump.max(eased);
+            if held < 0.002 { 0.0 } else { held }
+        } else {
+            incoming_bump
+        };
+        // the trembling of the tarmac and of the engine, which never stops while the bus
+        // runs and needs no fade of its own
+        let micro = if on {
+            self.ff_micro.sample(f.dt, f.kmh, f.street_cond, f.engine_rpm, f.engine_load, self.ff_road, self.ff_engine)
+        } else {
+            0.0
+        };
+        // A script's shaking is not an envelope that can be held in place - the scripts write
+        // it afresh every frame - so `ScriptVib` keeps the last amplitude and period they
+        // asked for and eases those, which is what reaches the wheel. The road and the
+        // engine are not something that begins and ends: they go quiet with the bus and
+        // the engine, smoothly, where they stand.
+        let (vib_amp, vib_period) = self.ff_vib.step(on, f.vib_amp, f.vib_period, self.ff_fade, f.dt);
         f.wheel_bump = self.ff_bump;
         f.wheel_bump_age = self.ff_bump_age;
+        f.vib_amp = vib_amp;
+        f.vib_period = vib_period;
+        f.micro = micro;
         if self.ff_source_logged.as_deref() != self.steer.as_ref().map(|s| s.0.as_str()) {
             self.ff_source_logged = self.steer.as_ref().map(|s| s.0.clone());
             if let Some((name, _, _, effect)) = self.steer.as_ref() {
@@ -883,7 +1132,14 @@ impl Controllers {
             }
         }
         let _ = (&self.steer, &self.ff_t, wheel_force);
-        self.rumble_feedback(if on { f.vib_amp.max(f.wheel_bump * 0.75) } else { 0.0 }, f.vib_period);
+        // A rumble motor cannot show a texture: it can only buzz harder or softer, and
+        // every change of strength is another effect built on the device, which drops the
+        // one it had where it stood. Its share of the trembling is therefore eased over
+        // half a second and moved in steps, so the rumble swells and fades with the road
+        // instead of building an effect on every frame.
+        self.ff_rumble += (micro.abs().min(1.0) - self.ff_rumble) * (f.dt / 0.5).clamp(0.0, 1.0);
+        let tarmac = (self.ff_rumble * 16.0).round() / 16.0;
+        self.rumble_feedback(if on { f.vib_amp.max(f.wheel_bump * 0.75) + tarmac } else { 0.0 }, f.vib_period);
     }
 
     /// The shaking as a rumble (`FF_Vib_Amp`, `FF_Vib_Period`: OMSI hands DirectInput
@@ -980,8 +1236,8 @@ const VIB_SHARE: f32 = 0.25;
 /// The force on a wheel standing at `x` (-1 full left .. 1), `x0` the frame before: -1..1.
 /// Tyre scrub resists turning the wheel at a standstill and falls away once the bus rolls.
 /// Self-aligning torque then returns the wheel to centre, with a softer response near full
-/// lock and feedback from the bus's lateral acceleration. Front-wheel jolts and the
-/// scripts' shaking come on top.
+/// lock and feedback from the bus's lateral acceleration. On top of that come front-wheel
+/// jolts, the scripts' shaking and the tremble of the tarmac and the engine.
 fn wheel_force(f: &FfInput, x: f32, x0: f32, t: &mut f32, k_springs: f32, k_effects: f32) -> f32 {
     let dt = f.dt.max(1e-3);
     let v = f.kmh.abs();
@@ -1026,8 +1282,9 @@ fn wheel_force(f: &FfInput, x: f32, x0: f32, t: &mut f32, k_springs: f32, k_effe
     // Preserve small road details while softening kerb-sized peaks. One short
     // kick and rebound feels less like a continuously shaking wheel mount.
     let bump = f.wheel_bump.clamp(0.0, 1.0).sqrt() * 0.46 * (std::f32::consts::TAU * f.wheel_bump_age * 6.5).cos();
-    let steering = ((spring + road_align) * lock_assist * assist + drag) * moving_steering_gain + damping;
-    (steering * k_springs.clamp(0.0, 2.0) + (shake + bump) * k_effects.clamp(0.0, 2.0)).clamp(-1.0, 1.0)
+let steering = ((spring + road_align) * lock_assist * assist + drag) * moving_steering_gain + damping;
+    let micro = f.micro.clamp(-1.0, 1.0);
+    (steering * k_springs.clamp(0.0, 2.0) + (shake + bump + micro) * k_effects.clamp(0.0, 2.0)).clamp(-1.0, 1.0)
 }
 
 /// A control several set-up devices give: the first one set wins, unless a later one is
@@ -1811,5 +2068,286 @@ mod button_tests {
         let normal = super::wheel_force(&f, 0.4, 0.4, &mut t, 1.0, 0.0);
         assert_eq!(zero, 0.0);
         assert!(normal.abs() > 0.05, "{normal}");
+    }
+
+    /// The largest the trembling of the tarmac and the engine may become (of the wheel's
+    /// full lock) - a wheel's centring spring is several times this, and the scripts' own
+    /// shaking is 0.25, so the tremble stays felt as a buzz and not as a push.
+    const MICRO_MAX: f32 = 0.25;
+
+    /// Ten seconds of the road at `kmh`, as sampled by the game.
+    fn road(kmh: f32) -> Vec<f32> {
+        let mut m = super::Micro::default();
+        (0..600).map(|_| m.sample(1.0 / 60.0, kmh, 0.0, 0.0, 0.0, 1.0, 0.0)).collect()
+    }
+
+    /// The most the signal ever lines up with itself, at any lag up to two seconds. Sines
+    /// line themselves up; noise cannot, so this is what tells a road carrying a weight
+    /// from a road rattling.
+    fn self_similarity(v: &[f32]) -> f32 {
+        let rms = (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt();
+        let mut best = 0.0f32;
+        for lag in 4..120.min(v.len()) {
+            let mut num = 0.0f32;
+            for i in lag..v.len() {
+                num += v[i] * v[i - lag];
+            }
+            best = best.max((num / ((v.len() - lag) as f32) / rms / rms).abs());
+        }
+        best
+    }
+
+    #[test]
+    fn the_road_carries_a_weight_rather_than_a_rattle() {
+        // A wheel is told one force at a time, and a force that repeats itself tells the
+        // driver there is something solid underneath the bus, while one that never does
+        // tells them the surface is broken up into loose pieces - which is what the
+        // complaint was: a road made of nothing but noise reads as random however fast it
+        // is felt. Noise scores about 0.2 here at any speed and the ride about 0.8, so
+        // the grain left under it cannot pull this down where it matters.
+        for kmh in [15.0, 30.0, 50.0, 80.0] {
+            let alike = self_similarity(&road(kmh));
+            assert!(alike > 0.5, "the road at {kmh} km/h carries nothing solid: {alike:.2}");
+        }
+    }
+    #[test]
+    fn the_road_is_under_the_tyres_and_not_merely_slow() {
+        // How often the road changes is what the tyre feels, and it has to outrun the
+        // hands: the rim goes wherever it is told and the hands go with it, so a change a
+        // few times a second is a push to be dragged along by rather than a texture. The
+        // short layer is what keeps this true as the bus speeds up.
+        let rate = |v: &[f32]| {
+            let mut crossings = 0;
+            for i in 1..v.len() {
+                if (v[i] > 0.0) != (v[i - 1] > 0.0) {
+                    crossings += 1;
+                }
+            }
+            crossings as f32 / (v.len() as f32 / 60.0) / 2.0
+        };
+        assert!(rate(&road(30.0)) > 6.0, "the road in town is too slow to feel: {}", rate(&road(30.0)));
+        assert!(rate(&road(50.0)) > 10.0, "the road at 50 is too slow to feel: {}", rate(&road(50.0)));
+        assert!(rate(&road(80.0)) > 13.0, "the road does not quicken with the speed: {}", rate(&road(80.0)));
+    }
+
+
+    #[test]
+    fn the_tremble_stays_silent_at_a_standstill_and_appears_with_the_speed() {
+        // how much is felt is the average of the tremble, not its loudest frame: the
+        // grain is noise, and its peaks fall where the pattern happens to be
+        let felt = |m: &mut super::Micro, kmh: f32| {
+            (0..240).map(|_| m.sample(1.0 / 60.0, kmh, 0.0, 0.0, 0.0, 1.0, 0.0).abs()).sum::<f32>() / 240.0
+        };
+        let mut m = super::Micro::default();
+        assert_eq!(felt(&mut m, 0.0), 0.0, "a bus standing still feels no grain at all");
+        let crawling = felt(&mut m, 5.0);
+        let town = felt(&mut m, 30.0);
+        let road = felt(&mut m, 50.0);
+        let fast = felt(&mut m, 80.0);
+        assert!(crawling > 0.0 && town > crawling * 2.0, "{crawling} {town}");
+        // the finer layer is let go above 40 Hz and the coarser one carries the road
+        // there, so the strength holds from town speed up rather than falling away
+        assert!(road > town * 0.9, "the grain should be at its strongest by 30 km/h: {town} {road}");
+        assert!(fast > road * 0.9, "the grain thins out at speed: {fast} against {road}");
+        assert!(fast < MICRO_MAX, "the grain grows too strong: {fast}");
+    }
+
+    #[test]
+    fn the_tremble_is_read_along_the_road_not_along_the_clock() {
+        let mut m = super::Micro::default();
+        // two seconds at 50 km/h over one stretch of tarmac, then the same stretch again
+        let over = |m: &mut super::Micro| (0..120).map(|_| m.sample(1.0 / 60.0, 50.0, 0.0, 0.0, 0.0, 1.0, 0.0)).collect::<Vec<_>>();
+        let first = over(&mut m);
+        assert!(first.iter().any(|v| v.abs() > 0.001));
+        let start = m.roll;
+        assert!(start > 20.0, "the distance the bus rolled was not kept: {start}");
+        m.roll = 0.0;
+        assert_eq!(over(&mut m), first, "the same stretch of road shook differently");
+        // a long drive does not walk the pattern off into a constant
+        m.roll = 2_000_000.0;
+        assert!(over(&mut m).iter().any(|v| v.abs() > 0.001), "the grain died out after a long drive");
+    }
+
+    #[test]
+    fn a_wet_or_snowy_road_hums_more_than_dry_asphalt() {
+        let felt = |cond: f32| {
+            let mut m = super::Micro::default();
+            (0..120).map(|_| m.sample(1.0 / 60.0, 50.0, cond, 0.0, 0.0, 1.0, 0.0).abs()).sum::<f32>() / 120.0
+        };
+        let (dry, wet, snow) = (felt(0.0), felt(1.0), felt(2.0));
+        assert!(wet > dry && snow > wet, "{dry} {wet} {snow}");
+    }
+
+    #[test]
+    fn the_engine_is_felt_idling_and_grows_with_what_it_is_doing() {
+        let mut m = super::Micro::default();
+        let off = (0..60).map(|_| m.sample(1.0 / 60.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)).fold(0.0f32, f32::max);
+        assert_eq!(off, 0.0, "an engine that is not running is felt through nothing");
+        let peak = |rpm: f32, load: f32| {
+            let mut m = super::Micro::default();
+            // two seconds, so the engine's speed is settled and its angle has turned
+            (0..120).map(|_| m.sample(1.0 / 60.0, 0.0, 0.0, rpm, load, 0.0, 1.0)).fold(0.0f32, f32::max)
+        };
+        let idling = peak(700.0, 0.0);
+        let working = peak(700.0, 1.0);
+        let pulling = peak(2200.0, 1.0);
+        assert!(idling > 0.001, "a running engine at idle is not felt at all: {idling}");
+        assert!(working > idling, "a loaded engine is not felt harder than an idling one: {idling} {working}");
+        assert!(pulling > working, "a fast engine is not felt harder than a slow one: {working} {pulling}");
+        assert!(pulling < MICRO_MAX, "the engine shakes the wheel too hard: {pulling}");
+    }
+
+    #[test]
+    fn the_engine_leads_on_the_crankshaft_and_stays_under_the_aliasing_limit() {
+        // six seconds of an engine at 700 rpm, which is where the buzz is at its most
+        // characteristic; the whole of it is a sum of sines, so projecting the signal on
+        // each frequency that is in it says how the sound is shared out between them
+        let dt = 1.0f32 / 60.0;
+        let mut m = super::Micro::default();
+        let sig: Vec<f32> = (0..360).map(|_| m.sample(dt, 0.0, 0.0, 700.0, 0.5, 0.0, 1.0)).collect();
+        let partial = |f: f32| {
+            let (mut re, mut im) = (0.0f32, 0.0f32);
+            for (i, &x) in sig.iter().enumerate() {
+                let w = std::f32::consts::TAU * f * dt * i as f32;
+                re += x * w.cos();
+                im += x * w.sin();
+            }
+            (re * re + im * im).sqrt() / sig.len() as f32 * 2.0
+        };
+        // at 700 rpm the crankshaft turns at 11.7 Hz and a four-stroke four fires at
+        // 23.3 Hz; the rumble under them is at 2.9 Hz. What leads is the crankshaft.
+        let rumble = partial(700.0 / 240.0);
+        let crank = partial(700.0 / 60.0);
+        let firing = partial(700.0 / 30.0);
+        assert!(crank > rumble, "the buzz leads on the low rumble instead of the engine: {rumble} {crank}");
+        assert!(crank > firing, "the firing pulses lead instead of the engine turning: {crank} {firing}");
+        // a wheel is told its force once a frame, so nothing the engine does may ask for
+        // a frequency the frame cannot carry
+        for f in [700.0 / 240.0, 700.0 / 60.0, 700.0 / 30.0] {
+            assert!(f < 28.0, "the engine asks for {f} Hz, past what a wheel can be told");
+        }
+        // and at the top of the rev range, where the crank and the pulses have both been
+        // let go, what is left is the rumble and not silence
+        let mut m = super::Micro::default();
+        let top: Vec<f32> = (0..360).map(|_| m.sample(dt, 0.0, 0.0, 4500.0, 1.0, 0.0, 1.0)).collect();
+        let mut im = 0.0f32;
+        for (i, &x) in top.iter().enumerate() {
+            im += x * (std::f32::consts::TAU * (4500.0 / 240.0) * dt * i as f32).sin();
+        }
+        let mass = (im / top.len() as f32).abs();
+        assert!(mass > 0.01, "a flat-out engine is felt as nothing: {mass}");
+    }
+
+    #[test]
+    fn the_tremble_is_turned_off_by_its_settings() {
+        let run = |road: f32, engine: f32| {
+            let mut m = super::Micro::default();
+            (0..120).map(|_| m.sample(1.0 / 60.0, 60.0, 0.0, 900.0, 0.5, road, engine)).fold(0.0f32, f32::max)
+        };
+        assert_eq!(run(0.0, 0.0), 0.0);
+        assert!(run(1.0, 0.0) > 0.0 && run(0.0, 1.0) > 0.0);
+        assert!(run(2.0, 2.0) > run(1.0, 1.0), "the settings do not make it stronger");
+        // a bigger engine buzz is not a road that got rougher
+        let mut road_only = super::Micro::default();
+        let mut both = super::Micro::default();
+        for _ in 0..60 {
+            road_only.sample(1.0 / 60.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0);
+            both.sample(1.0 / 60.0, 0.0, 0.0, 900.0, 0.0, 1.0, 1.0);
+        }
+        assert_eq!(road_only.roll, both.roll, "the engine changed how the road is read");
+    }
+
+    #[test]
+    fn the_tremble_comes_out_of_the_wheel_through_the_vibration_strength() {
+        let mut t = 0.0;
+        let f = super::FfInput { on: true, kmh: 50.0, micro: 0.08, dt: 0.016, ..Default::default() };
+        assert_eq!(super::wheel_force(&f, 0.0, 0.0, &mut t, 1.0, 0.0), 0.0, "it shook the wheel with the vibrations switched off");
+        let felt = super::wheel_force(&f, 0.0, 0.0, &mut t, 1.0, 1.0);
+        assert!((felt - 0.08).abs() < 0.0001, "{felt}");
+        assert_eq!(super::wheel_force(&super::FfInput { micro: 0.5, ..f }, 0.0, 0.0, &mut t, 1.0, 1.0), 0.5);
+    }
+
+    #[test]
+    fn a_vibration_eases_away_once_it_stops() {
+        assert_eq!(super::fade_gain(0.0, super::FF_FADE), 1.0);
+        assert_eq!(super::fade_gain(super::FF_FADE * 0.5, super::FF_FADE), 0.5);
+        assert_eq!(super::fade_gain(super::FF_FADE, super::FF_FADE), 0.0);
+        assert_eq!(super::fade_gain(super::FF_FADE * 3.0, super::FF_FADE), 0.0);
+        // it never jumps: no frame hands the wheel a step of its own
+        let mut last = 1.0;
+        for i in 0..40 {
+            let g = super::fade_gain(i as f32 / 40.0 * super::FF_FADE * 1.2, super::FF_FADE);
+            assert!(g <= last && last - g < 0.15, "{g} after {last}");
+            last = g;
+        }
+        // a fade of nothing is the old way: it stops where it stands
+        assert_eq!(super::fade_gain(0.5, 0.0), 1.0);
+    }
+
+    #[test]
+    fn the_settings_fade_is_how_long_a_jolt_takes_to_go() {
+        // The jolt the physics hands over is not faded by a gain applied afterwards: by the
+        // time such a gain would start, the jolt it was following is already spent. So the
+        // jolt is held and eased on the settings' own time, and this is what says whether
+        // the setting reaches the jolt at all.
+        let dt = 1.0f32 / 60.0;
+        let tail = |fade: f32| {
+            let mut held = 0.6f32;
+            let mut frames = 0;
+            for _ in 0..600 {
+                held = held * (-dt / (fade * 0.3)).exp();
+                frames += 1;
+                if held < 0.002 {
+                    break;
+                }
+            }
+            frames
+        };
+        let fast = tail(0.05);
+        let slow = tail(0.6);
+        assert!(fast < slow * 3, "the setting barely changes the jolt: {fast} {slow}");
+        assert!(fast >= 2, "the jolt was cut off in a single frame: {fast}");
+        assert!(slow <= 120, "a long fade never ends: {slow}");
+    }
+
+    #[test]
+    fn a_scripts_shaking_eases_away_instead_of_stopping_dead() {
+        // The scripts write the amplitude afresh every frame, so on the frame they stop it
+        // is already zero and fading that fades nothing: the wheel drops the shake in a
+        // single step, which is the jolt the fade is here to avoid. What the fade needs is
+        // the last amplitude the scripts reached the wheel with, so this is what says
+        // whether it is still there once they have gone quiet.
+        let dt = 1.0f32 / 60.0;
+        let mut vib = super::ScriptVib::default();
+        let (amp, period) = vib.step(true, 0.8, 12.0, super::FF_FADE, dt);
+        assert_eq!(amp, 0.8, "the shake the scripts asked for never reached the wheel");
+        assert_eq!(period, 12.0, "the period the scripts asked for was not passed on");
+        // the frame the scripts stop: kept, not cut off
+        let (mut amp, period) = vib.step(true, 0.0, 0.0, super::FF_FADE, dt);
+        assert!(amp > 0.5, "the shake stopped dead the frame the scripts did: {amp}");
+        assert_eq!(period, 12.0, "the period went with the amplitude instead of being kept");
+        // and it eases away to nothing rather than to a stop
+        let mut frames = 0;
+        while amp > 0.0 && frames < 600 {
+            amp = vib.step(true, 0.0, 0.0, super::FF_FADE, dt).0;
+            frames += 1;
+        }
+        assert_eq!(amp, 0.0, "the shake never finished fading: {amp}");
+        // the setting is what decides how long that takes
+        let mut fast = super::ScriptVib::default();
+        fast.step(true, 0.8, 12.0, 0.05, dt);
+        let mut quick = 0;
+        while fast.step(true, 0.0, 0.0, 0.05, dt).0 > 0.0 && quick < 600 {
+            quick += 1;
+        }
+        assert!(quick < frames, "the setting barely changes the shake: {quick} {frames}");
+        // with the fade at zero it stops where it stands, as it always did
+        let mut none = super::ScriptVib::default();
+        none.step(true, 0.8, 12.0, 0.0, dt);
+        assert_eq!(none.step(true, 0.0, 0.0, 0.0, dt).0, 0.0, "the fade at zero still hangs on");
+        // and a bus whose force feedback is off is not shaking at all
+        let mut off = super::ScriptVib::default();
+        off.step(true, 0.8, 12.0, super::FF_FADE, dt);
+        assert_eq!(off.step(false, 0.0, 0.0, super::FF_FADE, dt).0, 0.0);
     }
 }

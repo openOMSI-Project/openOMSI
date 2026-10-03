@@ -93,6 +93,12 @@ the key is held, whatever the bus), and *Old Steering* is OMSI's wheel that stay
 leave it - turn it back yourself. The clutch key works as in OMSI: the pedal goes down at once
 and comes up slowly (0.7 per second) when the key is released.
 
+On a force-feedback wheel the bus is felt all the time, not only when it hits something: the
+steady road under the tyres and the engine's buzz come up as a tremble that is strongest at
+speed and on a wet or snowy road, and the engine's is there even at a standstill, as a real
+one is. Settings → Driving turns each of them off or up to four times as strong, and sets how
+long a jolt or a scripted shake takes to ease away (off = it stops where it stands, as before).
+
 Left-click a cockpit switch to operate it, hold the button and move the mouse to turn a knob,
 or roll the mouse wheel over it (that is the `<event>_drag` OMSI fires); the name of the switch
 under the cursor is shown in the HUD.
@@ -170,7 +176,22 @@ again only when something changes; drag on it to turn the bus, scroll to zoom. I
   configured for steering. Force feedback needs a driver that supports constant force:
   parking resistance eases as the bus rolls, with centring and
   feedback from the bus's sideways acceleration, short bumps when the front wheels cross
-  an edge, plus the scripts' shaking, `FF_Vib_Amp`. A wheel nobody has set up steers with
+  an edge, plus the scripts' shaking, `FF_Vib_Amp`. Over the top of that the wheel keeps up
+   the road and the engine all the time. Most of it is the road itself, read from how far the
+   bus has driven rather than from the clock, so it is felt as the bus's own weight and not as
+   a rattle: waves a few metres long, under and over each other, arriving in the same order
+   every time the bus covers the same stretch. The rest is the fine grain of the surface, so a
+   wet or a snowy road hums louder than dry asphalt without losing that weight. Alongside it
+   comes the engine's buzz through the frame, which grows with the revs and with how hard the
+   engine is working and stays there at a standstill. It leads on the crankshaft turning (about
+   11.7 Hz at idle) with the firing pulses above it (23.3 Hz), which is the band a frame carries
+   and a driver hears; above the revs where the frame can no longer carry either, what is left
+   is the low rumble of the mass the frame works against. A jolt or a scripted shake eases away
+   over the fade time rather than stopping dead, so the wheel never clunks when it lets go.
+   Settings → Driving → *Road texture vibration*, *Engine vibration* and *Vibration fade-out*
+   set how strong the tremble is (off, normal, or up to 400 %) and how long the fade lasts
+   (off, or up to 1.5 s; 0 stops where it stands, as it always did). Both go to 400 % because
+   how much of this a wheel can show depends on its motor. A wheel nobody has set up steers with
   its X axis. A wheel that a community controller mapping also makes a gamepad (a
   Logitech G29) is listed once, and *Use this device* switches any device off
   (it is then neither read nor listed as steering). Select a device to adjust *Steering force*

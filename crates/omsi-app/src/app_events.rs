@@ -673,6 +673,9 @@ impl ApplicationHandler for App {
                 ctl.pedal_brake = self.settings.pedal_brake;
                 ctl.ff_invert = self.settings.ff_invert;
                 ctl.ff_enabled = self.settings.ff_enabled;
+                ctl.ff_road = self.settings.ff_road_vib;
+                ctl.ff_engine = self.settings.ff_engine_vib;
+                ctl.ff_fade = self.settings.ff_fade;
                 ctl.steer_gain = if self.settings.wheel_lock >= 45.0 { (self.settings.wheel_range / self.settings.wheel_lock).clamp(0.1, 20.0) } else { 1.0 };
                 if ctl.disabled.is_empty() && !self.settings.ctrl_off.is_empty() {
                     ctl.disabled = self.settings.ctrl_off.split('|').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
@@ -720,6 +723,12 @@ impl ApplicationHandler for App {
                     wheel_bump_age: 0.0,
                     vib_amp: driving.and_then(|p| p.vehicle.var("FF_Vib_Amp")).unwrap_or(0.0),
                     vib_period: driving.and_then(|p| p.vehicle.var("FF_Vib_Period")).unwrap_or(0.0),
+                    // what the bus is standing on and running on: the road's own grain
+                    // (`StreetCond`: 0 dry, 1 wet, 2 snow) and the engine
+                    street_cond: driving.map(|p| p.vehicle.host.street_cond).unwrap_or(0.0),
+                    engine_rpm: driving.and_then(|p| omsi_sim::startup::engine_rpm(&p.vehicle)).unwrap_or(0.0),
+                    engine_load: driving.map(|p| p.vehicle.physics.controls.throttle.clamp(0.0, 1.0)).unwrap_or(0.0),
+                    micro: 0.0,
                     dt,
                 });
                 // OMSI's mouse control: the cursor's place across steers, above the middle

@@ -364,7 +364,7 @@ pub fn power_on(v: &VehicleInstance) -> bool {
 }
 
 /// The engine speed the scripts keep, when they keep one.
-fn engine_rpm(v: &VehicleInstance) -> Option<f32> {
+pub fn engine_rpm(v: &VehicleInstance) -> Option<f32> {
     ["engine_n", "engine_rpm", "motor_n", "motor_rpm"].into_iter().find_map(|n| v.var(n))
 }
 
