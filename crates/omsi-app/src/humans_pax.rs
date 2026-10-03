@@ -21,8 +21,9 @@
 //! * `WalkingInBusToPlace` (4): along the paths to the validator (stamping for a second,
 //!   `ev_Stamper`) or the cash desk (the ticket sale with the player) and on to the place
 //!   reserved. In any bus but the player's they are at their place at once.
-//! * `SittingInBus` (7): until the bus's next stop (the stop it is listed at) is theirs,
-//!   or it passed their alternative stop and drove on a random part of the way, or - with
+//! * `SittingInBus` (7): requests their next stop at a random point between departure
+//!   and the approach, independently of the 60 m boarding range. Otherwise, until
+//!   it passed their alternative stop and drove on a random part of the way, or - with
 //!   no destination - it drove 1..20 km; a bus at its terminus empties.
 //! * `WalkingInBusToExit` (5): stop request (`int_haltewunsch`), to the nearest exit, 0.7
 //!   m short of it while it is shut (`PAX_Exit<n>_Req`), out when it is open and the bus
@@ -114,6 +115,10 @@ pub(super) struct Pax {
     pub alt_m: f32,
     pub ride_km: f32,
     pub km_start: f64,
+    /// Drawn once per passenger: where between departure and the approach they ask
+    /// to get off. The stop and its request distance are settled when that leg begins.
+    pub stop_request_random: f64,
+    pub stop_request_at: Option<(i64, f64)>,
     /// The place reserved in the bus (+0x610).
     pub seat: Option<usize>,
     /// +0x61c, the ticket (1-based, +0x61d) and its price (+0x620), what was paid (+0x624),
@@ -169,7 +174,7 @@ pub(super) struct Pax {
 }
 
 impl Pax {
-    pub(super) fn new(walk_speed: f32) -> Pax {
+    pub(super) fn new(walk_speed: f32, stop_request_random: f64) -> Pax {
         Pax {
             task: Task::Nothing,
             st: 0,
@@ -196,6 +201,8 @@ impl Pax {
             alt_m: 0.0,
             ride_km: 0.0,
             km_start: 0.0,
+            stop_request_random,
+            stop_request_at: None,
             seat: None,
             ticket: TICKET_NONE,
             ticket_id: 0,
@@ -229,6 +236,40 @@ impl Pax {
             bad_at: [0.0; 3],
             moved: 0.0,
         }
+    }
+
+    fn wants_stop_at(&mut self, stop: &RequestStop, bus_pos: DVec3, departing: bool) -> bool {
+        if !self.dest.as_ref().is_some_and(|dest| stop.is_named(dest)) {
+            return false;
+        }
+        let distance = (bus_pos - stop.pos).length();
+        if self.stop_request_at.is_none_or(|(id, _)| id != stop.id) {
+            if !departing {
+                return false;
+            }
+            // Keep a nonzero random interval even when the stops are close together.
+            let late = (distance * 0.5).min(100.0);
+            let request_m = late + (distance - late) * self.stop_request_random;
+            self.stop_request_at = Some((stop.id, request_m));
+        }
+        distance <= self.stop_request_at.unwrap().1
+    }
+}
+
+/// The next stop of the route, independently of the local boarding range. A planned
+/// stop can be known before its tile and its waiting passengers have been loaded.
+#[derive(Debug, Clone)]
+pub(super) struct RequestStop {
+    pub id: i64,
+    pub name: String,
+    pub alias: String,
+    pub pos: DVec3,
+}
+
+impl RequestStop {
+    fn is_named(&self, name: &str) -> bool {
+        let name = name.trim();
+        name == self.name.trim() || (!self.alias.is_empty() && name == self.alias.trim())
     }
 }
 
@@ -385,6 +426,7 @@ pub(super) fn bad_ride_complaint(x: f32, said: u8, at: [f32; 3]) -> Option<u8> {
 #[derive(Debug, Clone, Default)]
 pub(super) struct BusAtStops {
     pub next: Option<i64>,
+    pub request_next: Option<RequestStop>,
     pub near: Vec<i64>,
     pub all_exit: bool,
 }
@@ -570,16 +612,27 @@ impl Humans {
             let km = self.odometer.entry(bn.id).or_insert(0.0);
             *km += bn.speed.abs() * dt as f64 / 1000.0;
             let mut reg = BusAtStops::default();
+            let mut request_distance = 500.0;
             for id in &ids {
                 let s = &self.stops[id];
                 let d = bn.pos - s.pos;
                 let dist = d.length();
-                if !(dist < 60.0) {
-                    continue;
-                }
                 let sh = s.heading.to_radians();
                 let (s_fwd, s_right) = (DVec2::new(sh.sin(), sh.cos()), DVec2::new(sh.cos(), -sh.sin()));
                 let same_way = bn.fwd().dot(s_fwd) > 0.0;
+                // Without a route, use the nearest stop ahead, not the one just left.
+                if same_way && d.truncate().dot(s_fwd) <= 25.0 && dist < request_distance {
+                    request_distance = dist;
+                    reg.request_next = Some(RequestStop {
+                        id: *id,
+                        name: s.name.clone(),
+                        alias: s.alias.clone(),
+                        pos: s.pos,
+                    });
+                }
+                if !(dist < 60.0) {
+                    continue;
+                }
                 reg.near.push(*id);
                 if same_way {
                     reg.next = Some(*id);
@@ -1497,6 +1550,30 @@ impl Humans {
                 let Some(b) = p.inside else { return };
                 let reg = at_stops.get(&b).cloned().unwrap_or_default();
                 let km = self.odometer.get(&b).copied().unwrap_or(0.0);
+                if let Some(bn) = bn {
+                    if let Some(stop) = bn.next_stop.as_ref().or(reg.request_next.as_ref()) {
+                        let force_exit = reg.all_exit
+                            && !bn.terminus.as_ref().is_some_and(|name| stop.is_named(name));
+                        if !force_exit && p.dest.as_ref().is_some_and(|dest| stop.is_named(dest)) {
+                            let departing = bn.speed.abs() > 0.1
+                                && !bn.entry_open.iter().chain(&bn.exit_open).any(|open| *open);
+                            let arrived = reg.next == Some(stop.id)
+                                && bn.speed.abs() < 1.0
+                                && bn.exit_open.iter().any(|open| *open);
+                            if arrived
+                                || self
+                                    .pax_mut(i)
+                                    .unwrap()
+                                    .wants_stop_at(stop, bn.pos, departing)
+                            {
+                                self.set_task(i, Task::InBusToExit, buses, bus_ix, world);
+                            }
+                            // The boarding range must not override a later random point
+                            // on short legs, including those ending at the terminus.
+                            return;
+                        }
+                    }
+                }
                 if reg.all_exit {
                     self.set_task(i, Task::InBusToExit, buses, bus_ix, world);
                     return;
@@ -2094,7 +2171,7 @@ mod tests {
     #[test]
     fn who_keeps_a_timetable_bus_at_its_stop() {
         let bus = BusId::Ai(7);
-        let mut x = Pax::new(1.1);
+        let mut x = Pax::new(1.1, 0.5);
         x.bus = Some(bus);
         x.stop = Some(42);
         x.task = Task::ToBus;
@@ -2169,9 +2246,8 @@ mod tests {
         assert!((x - 0.271).abs() < 1e-3);
     }
 
-    #[test]
-    fn a_stop_answers_to_its_label_and_its_timetable_name() {
-        let stop = |alias: &str| PaxStop {
+    fn stop(alias: &str) -> PaxStop {
+        PaxStop {
             name: "Königsrath, Bf. Ausstieg".into(),
             alias: alias.into(),
             pos: DVec3::ZERO,
@@ -2191,7 +2267,11 @@ mod tests {
             buses: Vec::new(),
             dests: Vec::new(),
             lines: Vec::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn a_stop_answers_to_its_label_and_its_timetable_name() {
         let s = stop("Koenigsrath Bf Ausstieg");
         assert!(s.is_named("Königsrath, Bf. Ausstieg "));
         assert!(s.is_named("Koenigsrath Bf Ausstieg"), "the timetable's spelling");
@@ -2199,6 +2279,127 @@ mod tests {
         // a stop the timetable does not know: its id, as the riders' destinations then are
         assert!(stop("4711").is_named("4711"));
         assert!(!stop("").is_named(""), "no timetable name: no empty match");
+    }
+
+    fn request_stop() -> RequestStop {
+        let stop = stop("Koenigsrath Bf Ausstieg");
+        RequestStop {
+            id: 42,
+            name: stop.name,
+            alias: stop.alias,
+            pos: stop.pos,
+        }
+    }
+
+    #[test]
+    fn passengers_request_between_departure_and_the_approach() {
+        let stop = request_stop();
+        let mut early = Pax::new(1.1, 1.0);
+        let mut middle = Pax::new(1.1, 0.5);
+        let mut late = Pax::new(1.1, 0.0);
+        early.dest = Some(stop.name.clone());
+        middle.dest = early.dest.clone();
+        late.dest = early.dest.clone();
+
+        // A rider can ask just after pulling away, while another waits until the approach.
+        assert!(!early.wants_stop_at(&stop, DVec3::Y * 1000.0, false));
+        assert_eq!(early.stop_request_at, None);
+        assert!(early.wants_stop_at(&stop, DVec3::Y * 1000.0, true));
+        assert!(!middle.wants_stop_at(&stop, DVec3::Y * 1000.0, true));
+        assert!(!late.wants_stop_at(&stop, DVec3::Y * 1000.0, true));
+        // Repeated frames do not draw a new point or shorten the leg used to choose it.
+        for _ in 0..120 {
+            assert!(!middle.wants_stop_at(&stop, DVec3::Y * 600.0, true));
+            assert_eq!(middle.stop_request_at, Some((42, 550.0)));
+        }
+        assert!(middle.wants_stop_at(&stop, DVec3::Y * 550.0, true));
+        assert!(!late.wants_stop_at(&stop, DVec3::Y * 100.01, true));
+        assert!(late.wants_stop_at(&stop, DVec3::Y * 100.0, true));
+        assert!(late.wants_stop_at(&stop, stop.pos, false));
+    }
+
+    #[test]
+    fn short_legs_keep_random_requests_after_departure() {
+        let stop = request_stop();
+        for length in [20.0, 60.0, 80.0, 100.0, 150.0] {
+            let mut early = Pax::new(1.1, 0.8);
+            let mut late = Pax::new(1.1, 0.2);
+            early.dest = Some(stop.name.clone());
+            late.dest = early.dest.clone();
+            assert!(!early.wants_stop_at(&stop, DVec3::Y * length, false));
+            assert!(!early.wants_stop_at(&stop, DVec3::Y * length, true));
+            assert!(!late.wants_stop_at(&stop, DVec3::Y * length, true));
+            let early_point = early.stop_request_at.unwrap().1;
+            let late_point = late.stop_request_at.unwrap().1;
+            assert!(0.0 < late_point && late_point < early_point && early_point < length);
+            let between = (early_point + late_point) / 2.0;
+            for _ in 0..120 {
+                assert!(early.wants_stop_at(&stop, DVec3::Y * between, true));
+                assert!(!late.wants_stop_at(&stop, DVec3::Y * between, true));
+                assert_eq!(late.stop_request_at, Some((stop.id, late_point)));
+            }
+            assert!(late.wants_stop_at(&stop, DVec3::Y * late_point, true));
+        }
+    }
+
+    #[test]
+    fn stop_requests_match_the_destination_and_its_timetable_alias() {
+        let stop = request_stop();
+        let mut passenger = Pax::new(1.1, 0.5);
+        assert!(!passenger.wants_stop_at(&stop, stop.pos, true));
+        passenger.dest = Some("Königsrath, Bf. Pause".into());
+        assert!(!passenger.wants_stop_at(&stop, stop.pos, true));
+        assert_eq!(passenger.stop_request_at, None);
+        passenger.dest = Some(stop.alias.clone());
+        assert!(passenger.wants_stop_at(&stop, stop.pos, true));
+        passenger.dest = Some(stop.name.clone());
+        assert!(passenger.wants_stop_at(&stop, stop.pos, true));
+    }
+
+    #[test]
+    fn stop_request_distances_vary_and_repeat_with_the_passenger_seed() {
+        let mut first = Humans::new(Path::new("/nonexistent"));
+        let mut second = Humans::new(Path::new("/nonexistent"));
+        first.set_lan_seed(42);
+        second.set_lan_seed(42);
+        let stop = request_stop();
+        let mut distances = Vec::new();
+        for _ in 0..100 {
+            let mut passenger = Pax::new(1.1, first.rand_f());
+            let mut repeated = Pax::new(1.1, second.rand_f());
+            passenger.dest = Some(stop.name.clone());
+            repeated.dest = passenger.dest.clone();
+            passenger.wants_stop_at(&stop, DVec3::Y * 1000.0, true);
+            repeated.wants_stop_at(&stop, DVec3::Y * 1000.0, true);
+            assert_eq!(passenger.stop_request_at, repeated.stop_request_at);
+            let distance = passenger.stop_request_at.unwrap().1;
+            assert!((100.0..=1000.0).contains(&distance));
+            distances.push(distance);
+        }
+        assert!(distances.iter().any(|distance| *distance < 300.0));
+        assert!(distances.iter().any(|distance| *distance > 800.0));
+    }
+
+    #[test]
+    fn a_timetable_stop_can_be_requested_before_its_tile_loads() {
+        let mut humans = Humans::new(Path::new("/nonexistent"));
+        let planned = crate::schedule::PlannedStop {
+            object_id: 42,
+            name: "Next stop".into(),
+            position: Some(DVec3::Y * 1000.0),
+            arr: 0.0,
+            dep: 0.0,
+            dir: Default::default(),
+            stops: true,
+        };
+        humans.set_player_next_stop(Some(&planned));
+        assert!(humans.stops.is_empty());
+        let target = humans.player_next_stop.as_ref().unwrap();
+        let mut passenger = Pax::new(1.1, 1.0);
+        passenger.dest = Some(planned.name);
+        assert!(passenger.wants_stop_at(target, DVec3::ZERO, true));
+        humans.set_player_next_stop(None);
+        assert!(humans.player_next_stop.is_none());
     }
 
     #[test]

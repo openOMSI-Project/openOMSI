@@ -1246,6 +1246,11 @@ impl ApplicationHandler for App {
                     h.set_remote_buses(self.remotes.remotes.iter().map(|(id, r)| (*id, r.vehicle())));
                     // (and the vehicles the player placed and left, with their riders)
                     h.set_placed_buses(self.placed.iter().map(|q| (q.uid, &q.vehicle)));
+                    h.set_player_next_stop(
+                        self.duty
+                            .as_ref()
+                            .and_then(|d| d.trip().stops.get(d.next_stop)),
+                    );
                     let took = h.tick(
                         if self.paused { 0.0 } else { dt },
                         w,
