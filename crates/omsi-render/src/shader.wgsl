@@ -1087,16 +1087,16 @@ struct RainGlass {
 
 // One drop of radius `r` (metres) centred `d` (metres, across / down the glass) away:
 // its cover of the pixel (`px`: the pixel's size on the glass) and the slope of its dome
-// (the normal's part along the glass). A drop wets the glass at about 70°: the dome is a
-// spherical cap whose normal tilts by up to sin 70° at the rim.
+// (the normal's part along the glass). A shallow cap suits water spreading on glass;
+// steep caps make every rim internally reflect and look like thick glass beads.
 fn rain_dome(d: vec2<f32>, r: f32, px: f32) -> vec3<f32> {
     let rr = length(d) / max(r, 1e-5);
     let aa = max(px / max(r, 1e-5), 0.02);
     // (a drop smaller than a pixel fades away rather than flicker: the mist stands in)
     let seen = smoothstep(0.3, 0.9, r / max(px, 1e-6));
     let cover = (1.0 - smoothstep(1.0 - aa, 1.0 + aa, rr)) * seen;
-    let slope = d / max(r, 1e-5) * 0.94;
-    let s = select(slope, slope / max(length(slope), 1e-5) * 0.94, length(slope) > 0.94);
+    let slope = d / max(r, 1e-5) * 0.6;
+    let s = select(slope, slope / max(length(slope), 1e-5) * 0.6, length(slope) > 0.6);
     return vec3<f32>(s, cover);
 }
 
@@ -1249,8 +1249,8 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         let y0 = (seg + 0.1 + 0.3 * h3.x) * seg_h;
         let x0 = (lane + 0.35 + 0.3 * h3.y) * lane_w;
         let drift = (h2.y - 0.5) * 0.07;
-        let rh = (0.003 + 0.0035 * h1.y * h1.y) * mix(0.65, 1.0, smoothstep(0.0, sit, tau));
-        let bend = 0.0025 * sin(travel * (30.0 + 25.0 * h3.y) + h2.x * 6.283185);
+        let rh = (0.0014 + 0.0016 * h1.y * h1.y) * mix(0.65, 1.0, smoothstep(0.0, sit, tau));
+        let bend = 0.0015 * sin(travel * (30.0 + 25.0 * h3.y) + h2.x * 6.283185);
         var head_d = vec2<f32>(qr.x - (x0 + drift * travel + bend), qr.y - (y0 + travel));
         head_d.y *= select(0.65, 1.0, head_d.y > 0.0);
         let head = rain_dome(head_d, rh, px);
@@ -1261,7 +1261,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         // the track it cleared, and a few beads left in it
         let along = qr.y - y0;
         if (along > 0.0 && along < travel - rh) {
-            let path_bend = 0.0025 * sin(along * (30.0 + 25.0 * h3.y) + h2.x * 6.283185);
+            let path_bend = 0.0015 * sin(along * (30.0 + 25.0 * h3.y) + h2.x * 6.283185);
             let dxp = qr.x - (x0 + drift * along + path_bend);
             let hw = rh * 0.7;
             track = max(track, (1.0 - smoothstep(hw * 0.6, hw, abs(dxp))) * vis);
@@ -1269,7 +1269,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
             // tail breaks up as the head moves on; lighter runners leave only beads.
             let tail_len = min(travel, (0.025 + 0.13 * h1.y) * wet);
             let tail = smoothstep(travel - tail_len, travel, along);
-            let width = rh * (0.12 + 0.4 * tail) * (0.8 + 0.2 * sin(along * 170.0 + h3.x * 6.283185));
+            let width = rh * (0.12 + 0.35 * tail) * (0.8 + 0.2 * sin(along * 170.0 + h3.x * 6.283185));
             let filament = rain_dome(vec2<f32>(dxp, 0.0), width, px);
             let filament_cover = filament.z * tail * vis;
             if (filament_cover > best) {
@@ -1299,7 +1299,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
     // --- the drops that sit: fine beads, medium drops and larger merged drops.
     for (var layer = 0; layer < 3; layer = layer + 1) {
         let fl = f32(layer);
-        let cellsz = select(select(0.022, 0.007, layer == 1), 0.012, layer == 2);
+        let cellsz = select(select(0.014, 0.0045, layer == 1), 0.009, layer == 2);
         let turn = 0.61 + fl * 1.37;
         let g2 = rain_turn(scattered, turn) / cellsz + vec2<f32>(fl * 17.3, fl * 5.1);
         let c = floor(g2);
@@ -1314,7 +1314,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         if (present <= 0.0) {
             continue;
         }
-        let r = (0.1 + 0.34 * h.y * h.y) * mix(0.75, 1.0, smoothstep(0.0, 0.5, ph)) * mix(0.8, 1.1, wet);
+        let r = (0.1 + 0.3 * h.y * h.y) * mix(0.75, 1.0, smoothstep(0.0, 0.5, ph)) * mix(0.8, 1.1, wet);
         // (anywhere in the cell it still fits in)
         let room = min(r * 1.12, 0.48);
         let centre = c + vec2<f32>(room) + rain_hash(c + 9.1) * (1.0 - 2.0 * room);
