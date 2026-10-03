@@ -253,7 +253,7 @@ fn led_lod(uv: vec2<f32>, texels: vec2<f32>) -> f32 {
 // surface normal `n`, with the tangent frame taken from how the position and the uv change
 // across the pixel (no tangents in OMSI's meshes). `tn.y` down the texture, as Direct3D's
 // normal maps have it.
-fn perturb_normal(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>, tn: vec3<f32>) -> vec3<f32> {
+fn perturb_normal(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>, tn: vec3<f32>, physical: bool) -> vec3<f32> {
     let dp1 = dpdx(p);
     let dp2 = dpdy(p);
     let duv1 = dpdx(uv);
@@ -265,6 +265,21 @@ fn perturb_normal(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>, tn: vec3<f32>) -> v
     let m = max(dot(t, t), dot(b, b));
     if (m < 1e-20) {
         return n;
+    }
+    if (physical) {
+        // Height-derived slopes are already measured per metre in both axes. A shared
+        // scale would attenuate the longer axis of a rectangular physical UV repeat.
+        let tt = dot(t, t);
+        let bb = dot(b, b);
+        let det = duv1.x * duv2.y - duv1.y * duv2.x;
+        let orientation = dot(cross(dp1, dp2), n);
+        if (min(tt, bb) < 1e-20 || det == 0.0 || orientation == 0.0) {
+            return n;
+        }
+        // The cofactors also carry the screen-space surface orientation. Remove that
+        // sign, not the UV determinant's: mirrored UVs must retain their own direction.
+        let direction = sign(orientation);
+        return safe_normal(t * (direction * inverseSqrt(tt)) * tn.x + b * (direction * inverseSqrt(bb)) * tn.y + n * max(tn.z, 0.05));
     }
     let k = inverseSqrt(m);
     return safe_normal(t * k * tn.x + b * k * tn.y + n * max(tn.z, 0.05));
@@ -522,19 +537,21 @@ fn shade_enhanced(in: FsIn, puddle_weight: ptr<function, vec2<f32>>, capture: bo
         rough = 0.06;
         metal = 0.0;
     }
-    // --- a PBR set beside the diffuse texture (`foo_n.png`, `foo_r` / `_m` / `_ao` or
+    // --- a PBR set beside the diffuse texture (`foo_normal.png`, `foo_roughness` / `_metallic` / `_ao` or
     // `foo_orm`: see omsi_texture::pbr): the normal map bends the normal, the packed map
     // gives the occlusion, roughness and metalness in place of the guesses above
     var pbr_ao = 1.0;
-    if (material.pbr.x > 0.5 && !terrain) {
+    // Terrain uses the same repeated diffuse UV, while its brush/cutout mask keeps the
+    // independent tile UV above. Shading relief must never shift the painted coverage.
+    if (material.pbr.x > 0.5) {
         var tn = textureSample(t_pbr_normal, s_diffuse, duv).xyz * 2.0 - vec3<f32>(1.0);
         // (an OpenGL-style map, green up: `_gl` in its name)
-        if (material.pbr.x > 1.5) {
+        if (material.pbr.x > 1.5 && material.pbr.x < 2.5) {
             tn.y = -tn.y;
         }
-        n = perturb_normal(n, in.world, duv, tn);
+        n = perturb_normal(n, in.world, duv, tn, material.pbr.x > 2.5);
     }
-    if (material.pbr.y + material.pbr.z + material.pbr.w > 0.5 && !terrain) {
+    if (material.pbr.y + material.pbr.z + material.pbr.w > 0.5) {
         let orm = textureSample(t_pbr_orm, s_diffuse, duv).rgb;
         if (material.pbr.y > 0.5) {
             pbr_ao = orm.r;
@@ -613,7 +630,7 @@ fn shade_enhanced(in: FsIn, puddle_weight: ptr<function, vec2<f32>>, capture: bo
     // specular antialiasing: where the normal turns quickly across a pixel (a low-poly
     // bonnet close up, a curved body far away) the surface cannot reflect sharper than that
     // spread, or the interpolated normals show as bands in a mirror-like finish
-    if (reflective_env && !glass) {
+    if ((reflective_env || material.pbr.x > 0.5) && !glass) {
         let dndx = dpdx(n);
         let dndy = dpdy(n);
         let spread = min((dot(dndx, dndx) + dot(dndy, dndy)) * 2.0, 0.4);
@@ -751,7 +768,7 @@ fn shade_enhanced(in: FsIn, puddle_weight: ptr<function, vec2<f32>>, capture: bo
     // what the SSAO darkens, it also keeps reflections out of
     let spec_occ = clamp(pow(nv + ao, exp2(-16.0 * rough - 1.0)) - 1.0 + ao, 0.0, 1.0);
     // (a PBR set's roughness or metalness map says how it reflects: the probe, as for an envmap)
-    let pbr_reflects = (material.pbr.z > 0.5 || material.pbr.w > 0.5) && !terrain;
+    let pbr_reflects = material.pbr.z > 0.5 || material.pbr.w > 0.5;
     // (a wet road mirrors the sky probe as well; and what reflects nothing keeps the light
     // the Fresnel term took off its ambient above - at a grazing angle that term is near 1,
     // and the far road and ground went dark with no reflection in its place, #374)

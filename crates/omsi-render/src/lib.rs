@@ -10930,6 +10930,9 @@ fn snap_rect(r: [f32; 4]) -> [f32; 4] {
 }
 
 #[cfg(test)]
+mod pbr_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
