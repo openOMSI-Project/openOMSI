@@ -73,16 +73,7 @@ impl WindowWipers {
                 }) {
                     continue;
                 }
-                // The narrow, straight blade dominates the long axis. Remove the arm's
-                // vertices away from it before finding the contact endpoints.
-                let axis = (ends[1] - ends[0]).normalize();
-                let contact: Vec<_> = data
-                    .positions
-                    .iter()
-                    .copied()
-                    .filter(|p| (*p - ends[0]).cross(axis).length_squared() < 0.03 * 0.03)
-                    .collect();
-                let Some(ends) = blade_ends(&contact) else {
+                let Some(ends) = combined_blade_ends(&data.positions) else {
                     continue;
                 };
                 ends
@@ -281,6 +272,39 @@ impl WindowWipers {
     }
 }
 
+/// An arm biases the principal axis of a combined mesh away from the rubber. Find
+/// its dominant long, narrow strip first, using a bounded set of candidate lines.
+/// This runs once on loading; both density and length favour the blade over its joints.
+fn combined_blade_ends(points: &[Vec3]) -> Option<[Vec3; 2]> {
+    if points.len() < 2 { return None; }
+    let mut best = None;
+    let mut score = 0.0;
+    for i in 0..64 {
+        let a = points[i * points.len() / 64];
+        // A coprime stride samples across exporter vertex groups without a runtime RNG.
+        let b = points[(i * 811 + points.len() / 2) % points.len()];
+        if a.distance_squared(b) < 0.09 { continue; }
+        let axis = (b - a).normalize();
+        let mut count = 0;
+        let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+        for &p in points {
+            let d = p - a;
+            if d.cross(axis).length_squared() < 0.015 * 0.015 {
+                count += 1;
+                let t = d.dot(axis);
+                lo = lo.min(t); hi = hi.max(t);
+            }
+        }
+        let candidate = count as f32 * (hi - lo).powi(2);
+        if candidate > score { score = candidate; best = Some((a, axis)); }
+    }
+    let (a, axis) = best?;
+    let contact: Vec<_> = points.iter().copied().filter(|p| {
+        (*p - a).cross(axis).length_squared() < 0.015 * 0.015
+    }).collect();
+    blade_ends(&contact)
+}
+
 /// Principal axis of the narrow blade mesh; box diagonals include its thickness and
 /// give the wrong contact line on a blade exported at an angle.
 fn blade_ends(points: &[Vec3]) -> Option<[Vec3; 2]> {
@@ -445,6 +469,20 @@ impl SweepTriangle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn combined_mesh_contact_follows_the_blade_instead_of_the_arm() {
+        let mut points = Vec::new();
+        for i in 0..120 {
+            let t = i as f32 / 119.0;
+            points.push(Vec3::new(t, 0.0, 0.5));
+            points.push(Vec3::new(t, 0.01, 0.5));
+            points.push(Vec3::new(0.5 + t * 0.5, 0.02, 0.5 - t * 0.4));
+        }
+        let ends = combined_blade_ends(&points).unwrap();
+        assert!(ends[0].distance(ends[1]) > 0.98);
+        assert!(ends.iter().all(|p| (p.z - 0.5).abs() < 0.01));
+    }
 
     #[test]
     fn only_the_blades_traversed_strip_is_cleared_in_both_directions() {
