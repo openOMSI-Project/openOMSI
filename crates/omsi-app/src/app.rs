@@ -121,8 +121,10 @@ pub(crate) struct App {
     pub(crate) hover_hand: bool,
     /// `OMSI_INPUT` script: (seconds after start, command), in order.
     pub(crate) input_script: Vec<(f32, String)>,
-    /// `shot <file>` of the input script: the next frame is also rendered into this PNG.
-    pub(crate) shot: Option<PathBuf>,
+    /// A pending screenshot: its output path and whether touch controls are composited over it.
+    /// Scripted `shot <file>` captures keep the controls for visual tests; player screenshots
+    /// leave them out so the camera button produces a clean image.
+    pub(crate) shot: Option<(PathBuf, bool)>,
     /// The simulation stands still (OMSI's `sim_pause`, P, or the menu): nothing moves,
     /// the clock stops, the picture and the camera go on.
     pub(crate) paused: bool,

@@ -1689,7 +1689,7 @@ impl App {
                 }
                 // `shot <file>`: the window's own view into a PNG, drawn from the scene the
                 // window is showing (the only way to see what the window path renders)
-                "shot" => self.shot = Some(PathBuf::from(arg)),
+                "shot" => self.shot = Some((PathBuf::from(arg), true)),
                 // `dumptex <folder>`: the player's display pictures as the window has them
                 "dumptex" => {
                     if let Some(p) = self.player.as_ref() {
@@ -3791,7 +3791,7 @@ impl App {
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let path = dir.join(format!("omsi_{secs}.png"));
         self.service_msg = Some((format!("Screenshot: {}", path.display()), 4.0));
-        self.shot = Some(path);
+        self.shot = Some((path, false));
     }
 
     /// On foot, the own bus is within reach: inside it, or standing by it (a hand's reach

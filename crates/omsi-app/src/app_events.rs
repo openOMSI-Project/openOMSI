@@ -2299,7 +2299,7 @@ impl ApplicationHandler for App {
                     // from its camera and lighting, into a PNG - the only way to look at
                     // what an automated window run draws (also when the window is hidden,
                     // so it does not depend on a frame being acquired)
-                    if let Some(path) = shot {
+                    if let Some((path, include_touch)) = shot {
                         match r.render_to_image(
                             scene,
                             s.config.width,
@@ -2309,8 +2309,10 @@ impl ApplicationHandler for App {
                         ) {
                             Ok(mut px) => match {
                                 // (with the on-screen controls, when there are)
-                                if let Some(over) = self.touch.picture(r, s.config.width, s.config.height) {
-                                    crate::touch::composite(&mut px, &over);
+                                if include_touch {
+                                    if let Some(over) = self.touch.picture(r, s.config.width, s.config.height) {
+                                        crate::touch::composite(&mut px, &over);
+                                    }
                                 }
                                 image::save_buffer(
                                     &path,
