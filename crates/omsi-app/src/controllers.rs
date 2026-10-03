@@ -76,6 +76,65 @@ pub(crate) struct DeviceCfg {
     /// `[openOMSI.Latching]`: the buttons (from 0) that are latching switches - a turn signal
     /// lever, a lit hazard button - and switch back when they come out.
     pub(crate) latching: Vec<usize>,
+    pub(crate) calibration: [Option<AxisCal>; 8],
+    pub(crate) deadzone: Option<f32>,
+}
+
+impl DeviceCfg {
+    pub(crate) fn calibrated(&self, k: usize, v: f32) -> f32 {
+        self.calibration.get(k).copied().flatten().map_or(v, |c| c.apply(v))
+    }
+
+    pub(crate) fn deadzone(&self, k: usize, global: f32) -> f32 {
+        self.calibration.get(k).copied().flatten().and_then(|c| c.deadzone).or(self.deadzone).unwrap_or(global).clamp(0.0, 0.3)
+    }
+}
+
+/// A `centre` near either end (a pedal at rest) is ignored, so a pedal maps linearly.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct AxisCal {
+    pub(crate) min: f32,
+    pub(crate) centre: Option<f32>,
+    pub(crate) max: f32,
+    pub(crate) deadzone: Option<f32>,
+}
+
+impl AxisCal {
+    /// Less travel than this means the axis wasn't moved during calibration.
+    pub(crate) const MIN_SPAN: f32 = 0.2;
+
+    pub(crate) fn apply(&self, v: f32) -> f32 {
+        let (lo, hi) = (self.min.min(self.max), self.min.max(self.max));
+        if hi - lo < Self::MIN_SPAN {
+            return v;
+        }
+        let out = match self.centre.filter(|c| *c > lo + (hi - lo) * 0.1 && *c < hi - (hi - lo) * 0.1) {
+            Some(c) if v < c => (v - c) / (c - lo),
+            Some(c) => (v - c) / (hi - c),
+            None => (v - lo) / (hi - lo) * 2.0 - 1.0,
+        };
+        out.clamp(-1.0, 1.0)
+    }
+
+    fn line(&self) -> String {
+        let opt = |v: Option<f32>| v.map_or("-".to_string(), |v| format!("{v:.4}"));
+        format!("{:.4} {} {:.4} {}", self.min, opt(self.centre), self.max, opt(self.deadzone))
+    }
+
+    fn parse(line: &str) -> Option<AxisCal> {
+        let mut it = line.split_whitespace();
+        let num = |s: Option<&str>| -> Option<Option<f32>> {
+            match s? {
+                "-" => Some(None),
+                s => s.parse::<f32>().ok().filter(|v| v.is_finite()).map(|v| Some(v.clamp(-1.0, 1.0))),
+            }
+        };
+        let min = num(it.next())??;
+        let centre = num(it.next())?;
+        let max = num(it.next())??;
+        let deadzone = num(it.next()).flatten().map(|d| d.clamp(0.0, 0.3));
+        Some(AxisCal { min, centre, max, deadzone })
+    }
 }
 
 /// The `gamectrler.cfg` in use: the content folder's (written by the launcher) before
@@ -154,6 +213,21 @@ pub(crate) fn parse_cfg(text: &str) -> Vec<DeviceCfg> {
                 }
                 i += 2;
             }
+            // OMSI skips sections it doesn't know.
+            "[openOMSI.Deadzone]" => {
+                if let Some(d) = out.last_mut() {
+                    d.deadzone = lines.get(i + 1).and_then(|v| v.parse::<f32>().ok()).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 0.3));
+                }
+                i += 2;
+            }
+            "[openOMSI.Calibration]" => {
+                if let Some(d) = out.last_mut() {
+                    for a in 0..8 {
+                        d.calibration[a] = lines.get(i + 1 + a).and_then(|l| AxisCal::parse(l));
+                    }
+                }
+                i += 9;
+            }
             _ => i += 1,
         }
     }
@@ -185,6 +259,17 @@ pub(crate) fn cfg_text(devices: &[DeviceCfg]) -> String {
             let numbers: Vec<String> = d.latching.iter().map(|b| (b + 1).to_string()).collect();
             t.push_str(&format!("[openOMSI.Latching]\r\n{}\r\n\r\n", numbers.join(" ")));
         }
+        if let Some(dz) = d.deadzone {
+            t.push_str(&format!("[openOMSI.Deadzone]\r\n{dz:.3}\r\n\r\n"));
+        }
+        if d.calibration.iter().any(Option::is_some) {
+            t.push_str("[openOMSI.Calibration]\r\n");
+            for c in &d.calibration {
+                t.push_str(&c.map_or("-".to_string(), |c| c.line()));
+                t.push_str("\r\n");
+            }
+            t.push_str("\r\n");
+        }
     }
     t
 }
@@ -213,12 +298,76 @@ pub(crate) fn look_axis(v: f32) -> f32 {
 /// as the wheel's place, the smallest movement turned the wheel a long way and a push to
 /// the side was the full lock at any speed. As the bus games take it: a gentler curve
 /// (squared), and less of the lock the faster the bus goes (the whole of it standing, a
-/// third of it at 50 km/h, a fifth at 90 km/h).
-pub fn gamepad_steering(x: f32, kmh: f32) -> f32 {
+/// third of it at 50 km/h, a fifth at 90 km/h). Full deflection stays full lock at every
+/// `sens`, so parking still works.
+pub fn gamepad_steering(x: f32, kmh: f32, sens: f32) -> f32 {
     let x = x.clamp(-1.0, 1.0);
-    let curve = x * x.abs();
+    let curve = x.signum() * x.abs().powf(2.0 - sens.clamp(0.1, 2.0).log2());
     let reach = 1.0 / (1.0 + (kmh.abs() - 10.0).max(0.0) / 20.0);
     curve * reach
+}
+
+pub fn gamepad_steering_time(sens: f32) -> f32 {
+    1.2 / sens.clamp(0.1, 2.0).sqrt()
+}
+
+pub(crate) const CENTRE_SNAP: f32 = 0.03;
+
+pub(crate) const ASSIGNABLE: [(&str, &str); 4] = [("steering", "Steering"), ("throttle", "Throttle"), ("brake", "Brake"), ("clutch", "Clutch")];
+
+pub(crate) fn parse_assign(text: &str) -> [Option<String>; 4] {
+    let mut out: [Option<String>; 4] = Default::default();
+    for part in text.split('|') {
+        let Some((k, v)) = part.split_once('=') else { continue };
+        if let Some(i) = ASSIGNABLE.iter().position(|(key, _)| key.eq_ignore_ascii_case(k.trim())) {
+            out[i] = Some(v.trim().to_string()).filter(|v| !v.is_empty());
+        }
+    }
+    out
+}
+
+pub(crate) fn assign_text(sources: &[Option<String>; 4]) -> String {
+    ASSIGNABLE.iter().zip(sources).filter_map(|((k, _), v)| v.as_ref().map(|v| format!("{k}={v}"))).collect::<Vec<_>>().join("|")
+}
+
+fn may_give(sources: &[Option<String>; 4], present: &[String], i: usize, name: &str) -> bool {
+    match &sources[i] {
+        // "Controller" is also contained in "Controller (Xbox One)".
+        Some(s) if present.iter().any(|p| names_match(s, p)) => {
+            let exact = |n: &str| normalized_device_name(n) == normalized_device_name(s);
+            if present.iter().any(|p| exact(p)) { exact(name) } else { names_match(s, name) }
+        }
+        _ => true,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PadDefaults {
+    steering: bool,
+    throttle: bool,
+    brake: bool,
+    look: bool,
+}
+
+impl PadDefaults {
+    fn of(cfg: Option<&DeviceCfg>) -> PadDefaults {
+        let Some(d) = cfg else { return PadDefaults { steering: true, throttle: true, brake: true, look: true } };
+        let has = |f: &[Func]| d.axes.iter().flatten().any(|(g, _)| f.contains(g));
+        let free = |k: usize| d.axes[k].is_none();
+        PadDefaults {
+            steering: !has(&[Func::Steering]) && free(0),
+            throttle: !has(&[Func::Throttle, Func::ThrottleBrake]) && free(5),
+            brake: !has(&[Func::Brake, Func::ThrottleBrake]) && free(2),
+            look: !has(&[Func::LookX, Func::LookY]) && free(3) && free(4),
+        }
+    }
+}
+
+fn stick_steers(current: Option<f32>, set_up: bool, x: f32) -> bool {
+    match current {
+        None => true,
+        Some(s) => !set_up && (x.abs() > s.abs() || s.abs() < CENTRE_SNAP),
+    }
 }
 
 /// Bus steering follows its characteristic, dead zone and range; feedback follows the physical
@@ -498,7 +647,8 @@ impl Devices {
                 let buttons = declared_button_count(pad.name());
                 #[cfg(not(target_os = "linux"))]
                 let buttons = 0;
-                v.push(Connected { name: pad.name().to_string(), hardware_id: id, axes: di_slots(&axes), gamepad, ff: pad.is_ff_supported(), ff_capable: pad.is_ff_supported(), buttons });
+                let axes = if gamepad { gamepad_axes(&pad) } else { di_slots(&axes) };
+                v.push(Connected { name: pad.name().to_string(), hardware_id: id, axes, gamepad, ff: pad.is_ff_supported(), ff_capable: pad.is_ff_supported(), buttons });
             }
         }
         // (and a wheel gilrs does not list at all: one whose only axes are the simulation
@@ -591,6 +741,8 @@ pub struct Controllers {
     pub pedal_brake: f32,
     /// Devices switched off (Settings: `ctrl_off`): not read at all.
     pub disabled: Vec<String>,
+    pub sources: [Option<String>; 4],
+    pub centre: bool,
     /// Force feedback the other way round (Settings: `ff_invert`).
     pub ff_invert: bool,
     /// Force feedback and rumble switched on (Settings: `ff_enabled`).
@@ -645,7 +797,7 @@ impl Controllers {
         for c in devices.connected() {
             log::info!("game controller: {} ({})", c.name, if cfg.iter().any(|d| names_match(&d.name, &c.name)) { "set up in gamectrler.cfg" } else if c.gamepad { "as a gamepad" } else { "not set up: its X axis steers" });
         }
-        Controllers { settled: Vec::new(), devices, focused: true, cfg, deadzone: 0.0, pedal_throttle: 1.0, pedal_brake: 1.0, disabled: Vec::new(), ff_invert: false, ff_enabled: true, steer_gain: 1.0, enabled: true, actions: Vec::new(), announced: Vec::new(), notice: None, steer: None, ff_t: 0.0, ff_lateral: 0.0, ff_bump: 0.0, ff_bump_age: 0.0, ff_source_logged: None, rumble: None, #[cfg(all(target_os = "linux", target_pointer_width = "64"))] wheel: None, #[cfg(all(target_os = "linux", target_pointer_width = "64"))] wheel_tried: None }
+        Controllers { settled: Vec::new(), devices, focused: true, cfg, deadzone: 0.0, pedal_throttle: 1.0, pedal_brake: 1.0, disabled: Vec::new(), sources: Default::default(), centre: true, ff_invert: false, ff_enabled: true, steer_gain: 1.0, enabled: true, actions: Vec::new(), announced: Vec::new(), notice: None, steer: None, ff_t: 0.0, ff_lateral: 0.0, ff_bump: 0.0, ff_bump_age: 0.0, ff_source_logged: None, rumble: None, #[cfg(all(target_os = "linux", target_pointer_width = "64"))] wheel: None, #[cfg(all(target_os = "linux", target_pointer_width = "64"))] wheel_tried: None }
     }
 
     /// A wheel or joystick steers the bus (then the arrow keys look around, as in OMSI:
@@ -683,7 +835,11 @@ impl Controllers {
         let off = self.disabled.clone();
         let mut pads: Vec<(Option<&DeviceCfg>, Connected)> = self.devices.connected().into_iter().filter(|c| !off.iter().any(|d| names_match(d, &c.name))).map(|c| (find_device_cfg(&self.cfg, &c.name), c)).collect();
         pads.sort_by_key(|(cfg, _)| cfg.is_none());
+        let present: Vec<String> = pads.iter().map(|(_, c)| c.name.clone()).collect();
+        let sources = self.sources.clone();
+        let gives = |i: usize, name: &str| may_give(&sources, &present, i, name);
         let mut steer: Option<(String, f32, bool)> = None;
+        let mut steering_set_up = false;
         let dz = self.deadzone.clamp(0.0, 0.3);
         for (cfg, c) in pads {
             if let Some((k, v)) = c.axes.iter().find(|(_, v)| v.abs() > 0.5) {
@@ -697,8 +853,27 @@ impl Controllers {
                 Some(d) => {
                     for (k, v) in c.axes.iter().copied() {
                         let Some((f, inverted)) = d.axes[k] else { continue };
+                        let v = d.calibrated(k, v);
+                        let dz = d.deadzone(k, dz);
                         if matches!(f, Func::Steering) {
+                            if !gives(0, &c.name) {
+                                continue;
+                            }
+                            steering_set_up = true;
+                            if c.gamepad {
+                                // a pad's stick set up to steer is still a stick (#200)
+                                let x = if inverted { -v } else { v };
+                                let x = x.signum() * ((x.abs() - dz.max(0.08)).max(0.0) / (1.0 - dz.max(0.08)));
+                                if out.steering.map_or(true, |s| s.abs() < x.abs()) {
+                                    out.steering = Some(x);
+                                    out.stick = true;
+                                }
+                                continue;
+                            }
                             let (steering, position) = wheel_steering(v, inverted, d.axis_flags[k], dz, self.steer_gain);
+                            if out.steering.map_or(true, |s| s.abs() < steering.abs()) {
+                                out.stick = false;
+                            }
                             set(&mut out.steering, steering);
                             if steer.is_none() {
                                 steer = Some((c.name.clone(), position, c.ff));
@@ -724,15 +899,20 @@ impl Controllers {
                         let pedal = crate::settings::pedal_ends(((v + 1.0) * 0.5).clamp(0.0, 1.0));
                         match f {
                             Func::Steering | Func::LookX | Func::LookY => unreachable!("steering and looking handled before pedal mapping"),
-                            Func::Throttle => set(&mut out.throttle, crate::settings::pedal_curve(pedal, self.pedal_throttle)),
-                            Func::Brake => set(&mut out.brake, crate::settings::pedal_curve(pedal, self.pedal_brake)),
-                            Func::Clutch => set(&mut out.clutch, pedal),
+                            Func::Throttle if gives(1, &c.name) => set(&mut out.throttle, crate::settings::pedal_curve(pedal, self.pedal_throttle)),
+                            Func::Brake if gives(2, &c.name) => set(&mut out.brake, crate::settings::pedal_curve(pedal, self.pedal_brake)),
+                            Func::Clutch if gives(3, &c.name) => set(&mut out.clutch, pedal),
                             Func::ThrottleBrake => {
                                 // Omsi.exe: throttle = 2v-1 and brake = 1-2v (v = 0..1), so the
                                 // raw-maximum half is the throttle
-                                set(&mut out.throttle, crate::settings::pedal_curve(v.max(0.0), self.pedal_throttle));
-                                set(&mut out.brake, crate::settings::pedal_curve((-v).max(0.0), self.pedal_brake));
+                                if gives(1, &c.name) {
+                                    set(&mut out.throttle, crate::settings::pedal_curve(v.max(0.0), self.pedal_throttle));
+                                }
+                                if gives(2, &c.name) {
+                                    set(&mut out.brake, crate::settings::pedal_curve((-v).max(0.0), self.pedal_brake));
+                                }
                             }
+                            Func::Throttle | Func::Brake | Func::Clutch => {}
                         }
                     }
                 }
@@ -746,7 +926,7 @@ impl Controllers {
                         log::info!("game controller {} is not set up: its X axis steers", c.name);
                         self.notice = Some(format!("{} is not set up: it steers; set up its pedals and buttons in the launcher (Controls → Game controllers)", c.name));
                     }
-                    if let Some((_, v)) = c.axes.iter().find(|(k, _)| *k == 0) {
+                    if let Some((_, v)) = c.axes.iter().find(|(k, _)| *k == 0).filter(|_| gives(0, &c.name)) {
                         // (a joystick's centre is slack, so it gets a little dead zone; a
                         // force-feedback wheel's is not: 2 % of it held a 1080° wheel's
                         // picture 11° behind the rim, #866)
@@ -765,12 +945,10 @@ impl Controllers {
         let off = self.disabled.clone();
         if let Some(g) = self.devices.gilrs.as_ref() {
             for (_, pad) in g.gamepads() {
-                // (a pad OMSI's gamectrler.cfg names is driven by that file through DirectInput
-                // - except an Xbox-type pad on Windows, whose DirectInput twin is left out
-                // for the system's own layout: with the file naming it, nobody read it, and
-                // its triggers were no pedals, #171)
+                // An Xbox-type pad's DirectInput twin is left out on Windows, so the pad is
+                // read here even when gamectrler.cfg names it (#171).
                 let xinput = cfg!(windows) && xinput_name(pad.name());
-                if pad.mapping_source() == gilrs::MappingSource::None || (!xinput && self.cfg.iter().any(|d| names_match(&d.name, pad.name()))) {
+                if pad.mapping_source() == gilrs::MappingSource::None {
                     continue;
                 }
                 #[cfg(target_os = "macos")]
@@ -780,27 +958,37 @@ impl Controllers {
                 if (di && !xinput) || off.iter().any(|d| names_match(d, pad.name())) {
                     continue;
                 }
+                let free = PadDefaults::of(find_device_cfg(&self.cfg, pad.name()));
                 let x = pad.value(Axis::LeftStickX);
-                let dead = |v: f32| if v.abs() < 0.08 { 0.0 } else { v };
+                let x = if x.abs() < 0.08 { 0.0 } else { x };
+                // A pad set up without a steering axis would otherwise not steer at all.
+                let steers = free.steering && gives(0, pad.name()) && stick_steers(out.steering, steering_set_up, x);
                 // (said once per pad: the stick moved, and whether it steers - a report of
                 // "the sticks do nothing" then says which way the pad came in)
                 if x.abs() > 0.5 && !self.announced.iter().any(|n| n == &format!("stick:{}", pad.name())) {
                     self.announced.push(format!("stick:{}", pad.name()));
-                    log::info!("game controller {}: left stick {x:.2}, steers: {} (layout {:?})", pad.name(), out.steering.is_none(), pad.mapping_source());
+                    log::info!("game controller {}: left stick {x:.2}, steers: {steers} (layout {:?})", pad.name(), pad.mapping_source());
                 }
                 let rt = pad.button_data(gilrs::Button::RightTrigger2).map(|d| d.value()).unwrap_or(0.0);
                 let lt = pad.button_data(gilrs::Button::LeftTrigger2).map(|d| d.value()).unwrap_or(0.0);
-                if out.steering.is_none() {
-                    out.steering = Some(dead(x));
+                if steers {
+                    out.steering = Some(x);
                     out.stick = true;
                 }
-                out.throttle.get_or_insert(crate::settings::pedal_curve(rt, self.pedal_throttle));
-                out.brake.get_or_insert(crate::settings::pedal_curve(lt, self.pedal_brake));
+                if free.throttle && gives(1, pad.name()) {
+                    out.throttle.get_or_insert(crate::settings::pedal_curve(rt, self.pedal_throttle));
+                }
+                if free.brake && gives(2, pad.name()) {
+                    out.brake.get_or_insert(crate::settings::pedal_curve(lt, self.pedal_brake));
+                }
                 // the right stick looks round, as the truck games have it (#454)
-                if out.look == [0.0, 0.0] {
+                if free.look && out.look == [0.0, 0.0] {
                     out.look = [look_axis(pad.value(Axis::RightStickX)), look_axis(-pad.value(Axis::RightStickY))];
                 }
             }
+        }
+        if self.centre && out.steering.is_some_and(|s| s.abs() < CENTRE_SNAP) {
+            out.steering = Some(0.0);
         }
         let before = self.steer.as_ref().filter(|s| steer.as_ref().is_some_and(|n| n.0 == s.0)).map(|s| s.1);
         self.steer = steer.map(|(name, v, ff)| (name, v, before.unwrap_or(v), ff));
@@ -1097,6 +1285,21 @@ pub(crate) fn di_slots(axes: &[(u32, f32)]) -> Vec<(usize, f32)> {
     out
 }
 
+pub(crate) const GAMEPAD_AXES: [&str; 6] = ["Left stick X", "Left stick Y", "Left trigger", "Right stick X", "Right stick Y", "Right trigger"];
+
+/// Triggers run -1 released to 1 pressed, like a pedal.
+fn gamepad_axes(pad: &gilrs::Gamepad) -> Vec<(usize, f32)> {
+    let trigger = |b: gilrs::Button| pad.button_data(b).map(|d| d.value()).unwrap_or(0.0) * 2.0 - 1.0;
+    vec![
+        (0, pad.value(Axis::LeftStickX)),
+        (1, pad.value(Axis::LeftStickY)),
+        (2, trigger(gilrs::Button::LeftTrigger2)),
+        (3, pad.value(Axis::RightStickX)),
+        (4, pad.value(Axis::RightStickY)),
+        (5, trigger(gilrs::Button::RightTrigger2)),
+    ]
+}
+
 /// OMSI stores DirectInput's product name; the system's may differ in spacing and case.
 fn normalized_device_name(s: &str) -> String {
     s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
@@ -1291,6 +1494,107 @@ mod tests {
         assert_eq!(again[0].latching, vec![0]);
         assert_eq!(again[0].buttons, devices[0].buttons);
         assert!(super::cfg_text(&devices).contains("[openOMSI.Latching]\r\n1\r\n"));
+    }
+
+    #[test]
+    fn an_idle_device_nobody_set_up_does_not_hold_the_sticks_steering() {
+        assert!(super::stick_steers(None, false, 0.0));
+        assert!(super::stick_steers(Some(0.0), false, -0.6));
+        assert!(super::stick_steers(Some(0.0), false, 0.0));
+        assert!(super::stick_steers(Some(0.02), false, 0.0));
+        assert!(!super::stick_steers(Some(0.8), false, 0.3));
+        assert!(!super::stick_steers(Some(0.0), true, 1.0));
+    }
+
+    #[test]
+    fn a_gentler_stick_turns_less_for_a_small_push_but_still_reaches_full_lock() {
+        use super::{gamepad_steering, gamepad_steering_time};
+        assert!((gamepad_steering(0.5, 0.0, 1.0) - 0.25).abs() < 1e-6);
+        let half = gamepad_steering(0.5, 0.0, 0.25);
+        assert!((half - 0.0625).abs() < 1e-6, "{half}");
+        assert_eq!(gamepad_steering(-0.5, 0.0, 0.25), -half);
+        for sens in [0.1, 0.25, 0.7, 1.0, 2.0] {
+            assert!((gamepad_steering(1.0, 0.0, sens) - 1.0).abs() < 1e-6);
+            assert!((gamepad_steering(-1.0, 0.0, sens) + 1.0).abs() < 1e-6);
+        }
+        assert!((gamepad_steering_time(1.0) - 1.2).abs() < 1e-6);
+        assert!((gamepad_steering_time(0.25) - 2.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn calibration_stretches_the_travel_and_finds_the_middle() {
+        use super::AxisCal;
+        let pedal = AxisCal { min: -0.9, centre: Some(-0.9), max: 0.8, deadzone: None };
+        assert_eq!(pedal.apply(-0.9), -1.0);
+        assert_eq!(pedal.apply(0.8), 1.0);
+        assert!((pedal.apply(-0.05) - 0.0).abs() < 1e-6);
+        assert_eq!(pedal.apply(-1.0), -1.0);
+        let wheel = AxisCal { min: -0.95, centre: Some(0.1), max: 1.0, deadzone: None };
+        assert_eq!(wheel.apply(0.1), 0.0);
+        assert!((wheel.apply(0.55) - 0.5).abs() < 1e-6);
+        assert!((wheel.apply(-0.425) + 0.5).abs() < 1e-6);
+        let still = AxisCal { min: 0.1, centre: None, max: 0.15, deadzone: None };
+        assert_eq!(still.apply(0.3), 0.3);
+    }
+
+    #[test]
+    fn calibration_and_dead_zone_go_through_the_file() {
+        let mut d = super::DeviceCfg { name: "Wheel".into(), second: "0".into(), ..Default::default() };
+        d.axes[0] = Some((super::Func::Steering, false));
+        d.calibration[0] = Some(super::AxisCal { min: -0.95, centre: Some(0.02), max: 0.97, deadzone: Some(0.05) });
+        d.calibration[5] = Some(super::AxisCal { min: -1.0, centre: None, max: 0.6, deadzone: None });
+        let back = super::parse_cfg(&super::cfg_text(std::slice::from_ref(&d)));
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].calibration[0], d.calibration[0]);
+        assert_eq!(back[0].calibration[5], d.calibration[5]);
+        assert_eq!(back[0].calibration[1], None);
+        assert_eq!(back[0].deadzone(0, 0.2), 0.05);
+        assert_eq!(back[0].deadzone(1, 0.2), 0.2);
+        let mut own = d.clone();
+        own.deadzone = Some(0.08);
+        let own = super::parse_cfg(&super::cfg_text(std::slice::from_ref(&own))).remove(0);
+        assert_eq!(own.deadzone, Some(0.08));
+        assert_eq!(own.deadzone(0, 0.2), 0.05);
+        assert_eq!(own.deadzone(1, 0.2), 0.08);
+        let mut plain = d.clone();
+        plain.calibration = Default::default();
+        let text = super::cfg_text(std::slice::from_ref(&plain));
+        assert!(!text.contains("Calibration"));
+        assert_eq!(super::parse_cfg(&text)[0].calibrated(0, 0.3), 0.3);
+    }
+
+    #[test]
+    fn a_device_chosen_for_a_control_gives_it_alone_while_it_is_connected() {
+        let sources = super::parse_assign("steering=G29 Driving Force Racing Wheel|brake=Heusinkveld Sprint|nonsense=x");
+        assert_eq!(sources[0].as_deref(), Some("G29 Driving Force Racing Wheel"));
+        assert_eq!(sources[1], None);
+        assert_eq!(sources[2].as_deref(), Some("Heusinkveld Sprint"));
+        assert_eq!(super::parse_assign(&super::assign_text(&sources)), sources);
+        let present = vec!["G29 Driving Force Racing Wheel".to_string(), "Controller (Xbox One For Windows)".to_string()];
+        assert!(super::may_give(&sources, &present, 0, "G29 Driving Force Racing Wheel"));
+        assert!(!super::may_give(&sources, &present, 0, "Controller (Xbox One For Windows)"));
+        assert!(super::may_give(&sources, &present, 1, "Controller (Xbox One For Windows)"));
+        assert!(super::may_give(&sources, &present, 2, "G29 Driving Force Racing Wheel"));
+        let pads = vec!["Controller".to_string(), "Controller (Xbox One For Windows)".to_string()];
+        let only = super::parse_assign("steering=Controller");
+        assert!(super::may_give(&only, &pads, 0, "Controller"));
+        assert!(!super::may_give(&only, &pads, 0, "Controller (Xbox One For Windows)"));
+    }
+
+    #[test]
+    fn a_set_up_pad_keeps_the_defaults_its_file_leaves_free() {
+        use super::{DeviceCfg, Func, PadDefaults};
+        assert_eq!(PadDefaults::of(None), PadDefaults { steering: true, throttle: true, brake: true, look: true });
+        let mut d = DeviceCfg::default();
+        d.axes[5] = Some((Func::Throttle, false));
+        d.axes[2] = Some((Func::Brake, false));
+        assert_eq!(PadDefaults::of(Some(&d)), PadDefaults { steering: true, throttle: false, brake: false, look: true });
+        d.axes[0] = Some((Func::LookX, false));
+        let free = PadDefaults::of(Some(&d));
+        assert!(!free.steering && !free.look);
+        let mut e = DeviceCfg::default();
+        e.axes[3] = Some((Func::Steering, false));
+        assert!(!PadDefaults::of(Some(&e)).steering);
     }
 
     #[test]

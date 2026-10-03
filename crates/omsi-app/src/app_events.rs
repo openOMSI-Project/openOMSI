@@ -673,6 +673,7 @@ impl ApplicationHandler for App {
                 let ctl = self.controllers.get_or_insert_with(|| crate::controllers::Controllers::new(&self.args.root, hwnd));
                 ctl.set_focus(self.window_focused);
                 ctl.deadzone = self.settings.ctrl_deadzone;
+                ctl.centre = self.settings.steer_center;
                 ctl.pedal_throttle = self.settings.pedal_throttle;
                 ctl.pedal_brake = self.settings.pedal_brake;
                 ctl.ff_invert = self.settings.ff_invert;
@@ -680,6 +681,9 @@ impl ApplicationHandler for App {
                 ctl.steer_gain = if self.settings.wheel_lock >= 45.0 { (self.settings.wheel_range / self.settings.wheel_lock).clamp(0.1, 20.0) } else { 1.0 };
                 if ctl.disabled.is_empty() && !self.settings.ctrl_off.is_empty() {
                     ctl.disabled = self.settings.ctrl_off.split('|').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                }
+                if ctl.sources.iter().all(Option::is_none) && !self.settings.ctrl_assign.is_empty() {
+                    ctl.sources = crate::controllers::parse_assign(&self.settings.ctrl_assign);
                 }
                 let analog = ctl.poll();
                 let actions = std::mem::take(&mut ctl.actions);
@@ -742,12 +746,13 @@ impl ApplicationHandler for App {
                     self.look_by(analog.look[0] * k, analog.look[1] * k);
                 }
                 // a gamepad's stick: a target the wheel turns towards at a hand's pace (the
-                // whole lock in 1.2 s), not the wheel's place itself (#200)
+                // whole lock in 1.2 s at 100 % sensitivity), not the wheel's place itself (#200)
                 if analog.stick {
                     if let (Some(x), Some(p)) = (analog.steering, self.player.as_ref()) {
-                        let target = crate::controllers::gamepad_steering(x, p.vehicle.physics.velocity_kmh() as f32);
+                        let sens = self.settings.stick_sens;
+                        let target = crate::controllers::gamepad_steering(x, p.vehicle.physics.velocity_kmh() as f32, sens);
                         let now = p.vehicle.physics.controls.steering;
-                        let step = dt / 1.2;
+                        let step = dt / crate::controllers::gamepad_steering_time(sens);
                         analog.steering = Some(now + (target - now).clamp(-step, step));
                     }
                 }

@@ -812,6 +812,8 @@ fn steps_of(verb: &str) -> Option<Vec<f32>> {
         "steer_look_response" => (1..=20).map(|v| v as f32 * 0.05).collect(),
         "pedal_t" | "pedal_b" => PEDAL.to_vec(),
         "mouse_sens" => (10..=300).map(|v| v as f32 / 100.0).collect(),
+        "stick_sens" => (2..=40).map(|v| v as f32 * 0.05).collect(),
+        "ctrl_deadzone" => (0..=30).map(|v| v as f32 / 100.0).collect(),
         "look_sens" => (2..=40).map(|v| v as f32 * 0.05).collect(),
         "seat" => (-50..=50).map(|v| v as f32 / 100.0).collect(),
         "hour" => (0..24).map(|v| v as f32).collect(),
@@ -936,6 +938,8 @@ fn option_now(app: &App, verb: &str, arg: &str) -> Option<f32> {
         "pedal_t" => s.pedal_throttle,
         "pedal_b" => s.pedal_brake,
         "mouse_sens" => s.mouse_sens,
+        "stick_sens" => s.stick_sens,
+        "ctrl_deadzone" => s.ctrl_deadzone,
         "look_sens" => s.look_sens,
         "ui_scale" => s.ui_scale,
         "ui_opacity" => s.ui_opacity,
@@ -1025,6 +1029,14 @@ fn option_set(app: &mut App, verb: &str, arg: &str, v: f32) -> Option<(&'static 
         "mouse_sens" => {
             app.settings.mouse_sens = (v * 100.0).round() / 100.0;
             Some(("mouse_sens", app.settings.mouse_sens.to_string()))
+        }
+        "stick_sens" => {
+            app.settings.stick_sens = (v * 100.0).round() / 100.0;
+            Some(("stick_sens", app.settings.stick_sens.to_string()))
+        }
+        "ctrl_deadzone" => {
+            app.settings.ctrl_deadzone = (v * 100.0).round() / 100.0;
+            Some(("ctrl_deadzone", app.settings.ctrl_deadzone.to_string()))
         }
         "ui_scale" => {
             app.settings.ui_scale = (v * 100.0).round() / 100.0;
@@ -1168,6 +1180,7 @@ fn toggle_now(app: &App, id: &str) -> Option<bool> {
         "mouse" => app.mouse_drive,
         "mouse_right" => s.mouse_right_off,
         "blinker_cancel" => s.blinker_cancel,
+        "steer_center" => s.steer_center,
         "fps" => s.show_fps,
         "get_up" => s.get_up,
         "time_sync" => s.time_sync,
@@ -1269,6 +1282,10 @@ fn toggle_set(app: &mut App, id: &str, on: bool) -> Option<(&'static str, String
             // stayed behind and the bus rolled away - #517, #760)
             app.set_mouse_drive(on);
             None
+        }
+        "steer_center" => {
+            app.settings.steer_center = on;
+            Some(("steer_center", bit))
         }
         "blinker_cancel" => {
             app.settings.blinker_cancel = on;
@@ -2036,6 +2053,9 @@ fn options_pages(app: &App) -> Vec<Page> {
         switch_row(app, "mouse", "Steering with the mouse", "Steer and control the pedals using the mouse"),
         switch_row(app, "mouse_right", "A right click ends the mouse steering", "As in OMSI; off: the right button only looks round"),
         slider_row(app, "mouse_sens", "Mouse steering sensitivity", "Adjust how much the steering wheel turns based on mouse movement", &pct),
+        slider_row(app, "stick_sens", "Gamepad steering sensitivity", "How much a small push of the stick turns the wheel, and how fast (pushed all the way it is still the full lock)", &pct),
+        switch_row(app, "steer_center", "Wheel returns to the middle", "A controller a hair off the middle steers straight: the wheel does not stay a little left or right when let go"),
+        slider_row(app, "ctrl_deadzone", "Default controller dead zone", "How far round the middle of an axis does nothing, for controllers without a dead zone of their own (set per controller in the launcher)", &pct),
         switch_row(app, "steering_linear", "Steering linearity (keys at OMSI's steady pace)", "Keyboard steering at OMSI's steady pace"),
         switch_row(app, "old_steering", "Old Steering (the wheel stays, turn it back yourself)", "The wheel stays where the keys left it"),
         switch_row(app, "red_steer_spd", "Dynamic steering (slower keys at speed, OMSI's redSteerSpd)", "The steering keys act slower at speed"),
