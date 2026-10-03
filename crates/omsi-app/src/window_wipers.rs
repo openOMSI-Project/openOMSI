@@ -32,6 +32,7 @@ pub(crate) struct WindowWipers {
     blades: Vec<Blade>,
     films: Vec<Film>,
     time: f64,
+    runoff: Vec<f32>,
 }
 
 impl WindowWipers {
@@ -184,6 +185,7 @@ impl WindowWipers {
             blades,
             films,
             time: vehicle.host.clock.run_time,
+            runoff: vec![0.0; SIZE * SIZE],
         }
     }
 
@@ -227,10 +229,28 @@ impl WindowWipers {
             if dt > 0.0 {
                 film.unwiped = (film.unwiped + deposit).clamp(0.0, 1.0);
                 for wet in &mut film.wet {
-                    // Water piled up by a blade drains back into beads; ordinary rain
-                    // fills the cleared film without instantly erasing that moving ridge.
-                    let ridge = (*wet - 1.0).max(0.0) * (1.0 - dt * 3.0).max(0.0);
+                    let ridge = (*wet - 1.0).max(0.0);
                     *wet = ((*wet).min(1.0) + deposit).clamp(0.0, 1.0) + ridge;
+                }
+                // Gravity follows the pane's actual inclination. Relative airflow can
+                // carry mobile water sideways/upwards; small pinned beads stay put.
+                let inverse_world = scene.instances[instances[film.mesh]].transform.inverse();
+                let mut air = inverse_world.transform_vector3(
+                    vehicle.host.wind - crate::lights::vehicle_velocity(vehicle),
+                );
+                air.z += air.y.abs() * 0.6;
+                air.y = 0.0;
+                let force = inverse_world.transform_vector3(-Vec3::Z)
+                    + air.normalize_or_zero() * (air.length_squared() / 130.0).min(3.0);
+                if vehicle.host.precip_type != 2.0 || vehicle.host.temperature > 0.0 {
+                    drain_water(
+                        &mut film.wet,
+                        &film.points,
+                        film.bounds,
+                        force * 0.12,
+                        dt,
+                        &mut self.runoff,
+                    );
                 }
                 let inverse = vehicle.mesh_transforms[film.mesh].inverse();
                 for blade in &self.blades {
@@ -508,6 +528,64 @@ fn push_water(
     }
 }
 
+/// Conservative forward transport of mobile water. The grid stores pinned beads
+/// below one; only the surplus moves. Water falling off the pane leaves the system.
+fn drain_water(
+    wet: &mut [f32],
+    points: &[Vec3],
+    bounds: [f32; 4],
+    velocity: Vec3,
+    dt: f32,
+    scratch: &mut [f32],
+) {
+    let step = (Vec2::new(velocity.x * bounds[2], velocity.z * bounds[3]) * (SIZE as f32 * dt))
+        .clamp(Vec2::splat(-0.95), Vec2::splat(0.95));
+    if step.length_squared() < 1e-8 {
+        return;
+    }
+    for (dst, &src) in scratch.iter_mut().zip(wet.iter()) {
+        *dst = src.min(1.0);
+    }
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let i = y * SIZE + x;
+            let water = (wet[i] - 1.0).max(0.0);
+            if water == 0.0 || !points[i].is_finite() {
+                continue;
+            }
+            let destination = Vec2::new(x as f32, y as f32) + step;
+            let cell = destination.floor();
+            let fraction = destination - cell;
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    let (nx, ny) = (cell.x as i32 + dx, cell.y as i32 + dy);
+                    if nx < 0 || ny < 0 || nx >= SIZE as i32 || ny >= SIZE as i32 {
+                        continue;
+                    }
+                    let j = ny as usize * SIZE + nx as usize;
+                    if !points[j].is_finite() || (points[j].y - points[i].y).abs() > 0.1 {
+                        continue;
+                    }
+                    let wx = if dx == 0 {
+                        1.0 - fraction.x
+                    } else {
+                        fraction.x
+                    };
+                    let wy = if dy == 0 {
+                        1.0 - fraction.y
+                    } else {
+                        fraction.y
+                    };
+                    scratch[j] += water * wx * wy;
+                }
+            }
+        }
+    }
+    for (dst, &src) in wet.iter_mut().zip(scratch.iter()) {
+        *dst = src.min(2.0);
+    }
+}
+
 struct SweepTriangle {
     origin: Vec3,
     normal: Vec3,
@@ -542,6 +620,59 @@ impl SweepTriangle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collected_water_moves_down_or_with_airflow_without_moving_pinned_beads() {
+        let points: Vec<_> = (0..SIZE * SIZE)
+            .map(|i| {
+                Vec3::new(
+                    (i % SIZE) as f32 / SIZE as f32,
+                    0.0,
+                    (i / SIZE) as f32 / SIZE as f32,
+                )
+            })
+            .collect();
+        let source = SIZE * 64 + 64;
+        let mut scratch = vec![0.0; SIZE * SIZE];
+        for (velocity, neighbour) in [(-Vec3::Z, source - SIZE), (Vec3::X, source + 1)] {
+            let mut wet = vec![0.5; SIZE * SIZE];
+            wet[source] = 1.6;
+            let before = wet.iter().sum::<f32>();
+            drain_water(
+                &mut wet,
+                &points,
+                [0.0, 0.0, 1.0, 1.0],
+                velocity,
+                0.5 / SIZE as f32,
+                &mut scratch,
+            );
+            assert!((wet[source] - 1.3).abs() < 1e-5);
+            assert!((wet[neighbour] - 0.8).abs() < 1e-5);
+            assert!((wet.iter().sum::<f32>() - before).abs() < 0.01);
+        }
+        let mut wet = vec![0.5; SIZE * SIZE];
+        drain_water(
+            &mut wet,
+            &points,
+            [0.0, 0.0, 1.0, 1.0],
+            -Vec3::Z,
+            10.0,
+            &mut scratch,
+        );
+        assert!(wet.iter().all(|w| *w == 0.5));
+        wet[0] = 1.6;
+        let before = wet.iter().sum::<f32>();
+        drain_water(
+            &mut wet,
+            &points,
+            [0.0, 0.0, 1.0, 1.0],
+            -Vec3::Z,
+            10.0,
+            &mut scratch,
+        );
+        assert!(wet.iter().sum::<f32>() < before);
+        assert!(wet.iter().all(|w| w.is_finite() && *w >= 0.0 && *w <= 2.0));
+    }
 
     #[test]
     fn combined_mesh_contact_follows_the_blade_instead_of_the_arm() {
