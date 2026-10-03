@@ -1177,6 +1177,9 @@ struct PassPipelines {
 /// Texture memory (MB) the adapter is taken to have room for (0 = no adapter yet), see
 /// `Renderer::new`.
 pub static ADAPTER_TEXTURE_MB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// The discrete card's own memory (MB) where the system tells it (0 = not known, or not a
+/// discrete card), see `Renderer::new`.
+pub static ADAPTER_VRAM_MB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The device runs on OpenGL (set in `Renderer::new`).
 static GL_BACKEND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1385,7 +1388,8 @@ fn gl_worker_turn() -> Option<std::sync::MutexGuard<'static, ()>> {
 }
 
 /// The card's own memory in MB where the system tells it: Windows, through DXGI, for
-/// whichever backend draws (wgpu does not say).
+/// whichever backend draws; Linux, through the DRM driver's sysfs (amdgpu; not
+/// NVIDIA's own driver) - wgpu does not say.
 fn dedicated_vram_mb(info: &wgpu::AdapterInfo) -> Option<u64> {
     #[cfg(windows)]
     unsafe {
@@ -1401,7 +1405,33 @@ fn dedicated_vram_mb(info: &wgpu::AdapterInfo) -> Option<u64> {
         }
         None
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        let hex = |p: std::path::PathBuf| {
+            let t = std::fs::read_to_string(p).ok()?;
+            u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok()
+        };
+        for e in std::fs::read_dir("/sys/class/drm").ok()?.flatten() {
+            // (card0, card1, ...; not their connectors, card1-DP-1)
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("card") || name.contains('-') {
+                continue;
+            }
+            let dev = e.path().join("device");
+            if hex(dev.join("vendor")) != Some(info.vendor) || hex(dev.join("device")) != Some(info.device) {
+                continue;
+            }
+            let bytes = std::fs::read_to_string(dev.join("mem_info_vram_total"))
+                .ok()
+                .and_then(|t| t.trim().parse::<u64>().ok());
+            if let Some(b) = bytes.filter(|b| *b > 0) {
+                return Some(b >> 20);
+            }
+        }
+        None
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = info;
         None
@@ -1817,6 +1847,8 @@ impl Renderer {
             _ => 800,
         };
         ADAPTER_TEXTURE_MB.store(guess_mb, std::sync::atomic::Ordering::Relaxed);
+        let discrete_vram = vram.filter(|_| info.device_type == wgpu::DeviceType::DiscreteGpu).unwrap_or(0);
+        ADAPTER_VRAM_MB.store(discrete_vram, std::sync::atomic::Ordering::Relaxed);
         log::info!("graphics adapter: {} ({:?}, {:?}{}), texture memory taken for it: {guess_mb} MB", info.name, info.device_type, info.backend, vram.map(|v| format!(", {v} MB of its own")).unwrap_or_default());
         // The legacy Intel Windows Vulkan branch has repeatedly crashed inside igvk64.dll
         // while compiling the larger multisampled/SSAO pipeline set. This is a driver access

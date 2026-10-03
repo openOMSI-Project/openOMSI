@@ -64,9 +64,12 @@ pub(crate) fn texture_budget(settings: &settings::Settings) -> u64 {
         // settings offer up to 6 GB, and a 2 GB card lost its device at the first frames,
         // #323)
         let card = omsi_render::ADAPTER_TEXTURE_MB.load(std::sync::atomic::Ordering::Relaxed);
-        if card > 0 && mb > card * 5 / 4 {
-            log::warn!("texture memory {mb} MB is more than the graphics card holds: {} MB", card * 5 / 4);
-            return card * 5 / 4 * 1_000_000;
+        // (a bigger card may take up to half of its own memory when it is set)
+        let vram = omsi_render::ADAPTER_VRAM_MB.load(std::sync::atomic::Ordering::Relaxed);
+        let limit = if vram > 2560 { card.max(vram / 2) } else { card };
+        if limit > 0 && mb > limit * 5 / 4 {
+            log::warn!("texture memory {mb} MB is more than the graphics card holds: {} MB", limit * 5 / 4);
+            return limit * 5 / 4 * 1_000_000;
         }
         return mb * 1_000_000;
     }
