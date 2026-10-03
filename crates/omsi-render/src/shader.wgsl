@@ -1066,7 +1066,7 @@ fn rain_hash(p: vec2<f32>) -> vec2<f32> {
 
 // The rain on a window pane at one pixel: the water's surface and how much of the pixel it
 // covers. Three kinds of water, as on a bus window in the rain:
-// * a mist of droplets too small to make out one by one, which greys the glass a little;
+// * fine droplets and connected water film, which soften and bend the view;
 // * drops that sit on the glass in three sizes (they land, grow and dry up again, each at
 //   its own pace; more and bigger ones the wetter the pane), each a little dome flattened
 //   by its weight;
@@ -1084,7 +1084,7 @@ struct RainGlass {
     cover: f32,
     // the pane's normal on the side the rain is on (outside the bus)
     out: vec3<f32>,
-    // the fine mist of droplets (0..1)
+    // coverage of fine droplets and irregular water film (0..1)
     mist: f32,
 };
 
@@ -1333,7 +1333,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
     for (var layer = 0; layer < 3; layer = layer + 1) {
         if (tracked && layer == 0) { continue; }
         let fl = f32(layer);
-        let cellsz = select(select(0.018, 0.0075, layer == 1), 0.012, layer == 2);
+        let cellsz = select(select(0.018, 0.005, layer == 1), 0.0085, layer == 2);
         let turn = 0.61 + fl * 1.37;
         let g2 = rain_turn(scattered, turn) / cellsz + vec2<f32>(fl * 17.3, fl * 5.1);
         let c = floor(g2);
@@ -1404,7 +1404,11 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
     }
     // (seen from further than a millimetre a pixel: their average)
     let mist = mix(wet * wetter * 0.35 * 0.12, grain, smoothstep(0.0015, 0.0006, px));
-    g.mist = (0.28 * wet * wet + mist * (1.0 - track)) * clamp(wet * 1.4, 0.0, 1.0);
+    // Connected water bends the view between visible beads, rather than greying
+    // otherwise sharp glass. Runoff clears this film along with the fine drops.
+    let film = smoothstep(0.2, 1.0, wet) * (0.55 + 0.3 * patches.x) * (1.0 - track);
+    g.mist = clamp(film + mist * (1.0 - track), 0.0, 1.0);
+    slope = slope + (patches - vec2<f32>(0.5)) * film * 0.09 * (1.0 - best);
 
     // The CPU map stores slopes along the mesh projection; recover those two
     // directions from the screen derivatives, including a rotated side window.
@@ -1463,9 +1467,9 @@ fn rain_behind(world: vec3<f32>, through: vec3<f32>, fallback: vec3<f32>, scale:
     let ndc = c.xy / c.w;
     let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     let inside = smoothstep(0.0, 0.06, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
-    // A wet film scatters the view. Filter the existing scene history locally:
+    // A wet film scatters the view. Filter the existing clean scene picture locally:
     // clear glass has a sub-texel footprint, heavy water softens several pixels.
-    let offset = vec2<f32>(1.0, 0.6) * scatter * 12.0 / vec2<f32>(textureDimensions(t_env));
+    let offset = vec2<f32>(1.0, 0.6) * scatter * 8.0 / vec2<f32>(textureDimensions(t_env));
     let a = textureSampleLevel(t_env, s_diffuse, clamp(uv - offset, vec2<f32>(0.001), vec2<f32>(0.999)), 0.0).rgb;
     let b = textureSampleLevel(t_env, s_diffuse, clamp(uv + offset, vec2<f32>(0.001), vec2<f32>(0.999)), 0.0).rgb;
     let seen = finite_or((a + b) * (0.5 * scale), fallback);
@@ -1494,9 +1498,9 @@ fn rain_light(g: RainGlass, v: vec3<f32>, d_thru: vec3<f32>, refl: vec3<f32>, th
         c = c + sun * pow(max(dot(normalize(d_thru), s), 0.0), 60.0) * 1.5;
     }
     let a_drop = g.cover * 0.94;
-    let a_mist = g.mist * 0.6 * (1.0 - a_drop);
+    let a_mist = g.mist * (1.0 - a_drop);
     let a = a_drop + a_mist;
-    let col = (c * a_drop + mix(mist_col, thru, 0.85) * a_mist) / max(a, 1e-4);
+    let col = (c * a_drop + mix(mist_col, thru, 0.98) * a_mist) / max(a, 1e-4);
     return vec4<f32>(col, a);
 }
 
