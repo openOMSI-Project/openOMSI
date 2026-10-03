@@ -12,6 +12,10 @@
 
 use crate::VehicleInstance;
 
+#[cfg(test)]
+#[path = "startup/tests.rs"]
+mod regressions;
+
 /// Names tried first, as the stock scripts and `Inputs/keyboard.cfg` spell them.
 const POWER_NAMES: &[&str] = &[
     "cp_batterietrennschalter_toggle",
@@ -356,6 +360,9 @@ fn starter_engaged(v: &VehicleInstance) -> bool {
     any_flag(v, STARTER_VARIABLES.iter().copied())
         .or_else(|| any_flag(v, custom_state_names(v, "starter")))
         .unwrap_or(false)
+        // Some buses request a delayed start without exposing a starter flag. This is
+        // an enum (1=start, 2=stop, 3=off), not an electrical on/off flag.
+        || v.var("engine_ignition") == Some(1.0)
 }
 
 /// The electrics are on: the main switch, or the busbar where a bus has no switch variable.
@@ -375,15 +382,15 @@ fn engine_caught(v: &VehicleInstance) -> bool {
     engine_running(v) && engine_rpm(v).map(|n| n > 300.0).unwrap_or(true)
 }
 
-/// The engine runs.
+/// The engine runs. Script flags are authoritative; RPM is a fallback for scripts without
+/// one. A starter can turn the engine above 350 rpm before combustion begins.
 pub fn engine_running(v: &VehicleInstance) -> bool {
     any_flag(v, ["engine_on", "engine_running", "motor_on", "motor_running"])
         .or_else(|| any_flag(v, custom_state_names(v, "engine")))
-        .unwrap_or(false)
-        || ["engine_n", "engine_rpm", "motor_n", "motor_rpm"]
+        .unwrap_or_else(|| ["engine_n", "engine_rpm", "motor_n", "motor_rpm"]
             .into_iter()
             .filter_map(|n| v.var(n))
-            .any(|n| n > 350.0)
+            .any(|n| n > 350.0))
 }
 
 /// The engine has come to rest: by its speed where the bus has one (the flags of some
@@ -716,8 +723,16 @@ impl StartUp {
                 }
             }
             Step::Crank => {
+                // A script may engage the starter several frames after the press. Check
+                // before press_loop can release it, and include the pending start delay.
+                if self.cranking.is_none()
+                    && self.pressed.as_ref().is_some_and(|(_, released)| !released)
+                    && starter_engaged(v)
+                {
+                    self.cranking = Some(self.t);
+                }
                 if let Some(held) = self.cranking.as_mut() {
-                    *held += dt;
+                    *held = self.t;
                     let held = *held;
                     // An unknown electrical-state variable is not evidence that the power
                     // went away.  Releasing immediately here was the reason a custom bus
@@ -757,11 +772,11 @@ impl StartUp {
                     self.step = Step::Displays;
                 } else {
                     self.press_loop(v, bound, Step::Done, "starter");
-                    // a press that engaged the starter is held
-                    if let Some((_, false)) = &self.pressed {
-                        if self.t < dt * 1.5 && starter_engaged(v) {
-                            self.cranking = Some(0.0);
-                        }
+                    // Also observe an immediate start request from a newly pressed key.
+                    if self.pressed.as_ref().is_some_and(|(_, released)| !released)
+                        && starter_engaged(v)
+                    {
+                        self.cranking = Some(self.t);
                     }
                 }
             }
