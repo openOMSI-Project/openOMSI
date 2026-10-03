@@ -390,7 +390,7 @@ fn shade_enhanced(in: FsIn, puddle_weight: ptr<function, vec2<f32>>, capture: bo
     if (mode < 0.5) {
         alpha = 1.0;
     }
-    alpha = alpha * min(window_wetness(in), 1.0);
+    alpha = alpha * clamp(window_wetness(in), 0.0, 1.0);
     let pre = enh.exposure.x;
     let to_cam = eye - in.world;
     let dist = length(to_cam);

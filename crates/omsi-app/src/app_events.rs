@@ -2273,6 +2273,7 @@ impl ApplicationHandler for App {
                 lighting.detail = self.settings.detail_textures;
                 lighting.glass_wind = self.player.as_ref().map(|p| crate::lights::vehicle_velocity(&p.vehicle)).unwrap_or_default();
                 lighting.glass_wind -= self.weather.as_ref().map(crate::rain::weather_wind).unwrap_or_default();
+                lighting.animation_time = Some(self.clock.run_time as f32);
                 // an LED panel's dots burn this much above their own colour (16 levels,
                 // see `Settings::led_glow`); the panel's picture and its mask are held at
                 // this mip level at most (`Settings::led_mips`)

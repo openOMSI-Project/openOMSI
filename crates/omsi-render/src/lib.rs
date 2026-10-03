@@ -581,6 +581,8 @@ pub struct Lighting {
     /// The player's vehicle's velocity (m/s, world): at speed the airstream drives the drops
     /// on its glass up the windscreen and back along the side windows.
     pub glass_wind: Vec3,
+    /// Simulation seconds for scene animation; standalone views use elapsed real time.
+    pub animation_time: Option<f32>,
 }
 
 impl Lighting {
@@ -630,6 +632,7 @@ impl Default for Lighting {
             led_glow: 1.5,
             led_mips: 1.3,
             glass_wind: Vec3::ZERO,
+            animation_time: None,
         }
     }
 }
@@ -7987,7 +7990,7 @@ impl Renderer {
         let cu = CameraUniform {
             post: [
                 if enhanced { 1.0 } else { 0.0 },
-                self.started.elapsed().as_secs_f32(),
+                lighting.animation_time.unwrap_or_else(|| self.started.elapsed().as_secs_f32()),
                 sun_ndc.x,
                 // (the sun's height on the screen is read by no shader any more: the close
                 // shadow map's share of its half of the atlas)

@@ -7,6 +7,27 @@ use omsi_render::{MaterialId, Renderer, Scene, TextureId};
 use omsi_sim::VehicleInstance;
 
 const SIZE: usize = 128;
+const WIPED_FILM: f32 = -0.04;
+
+// Eight codes below zero identify a short-lived residual film, without another texture.
+fn encode_wetness(wet: f32) -> u8 {
+    (wet * (247.0 / 2.0) + 8.0).round() as u8
+}
+
+fn advance_wetness(wet: f32, rate: f32, dt: f32) -> f32 {
+    let ridge = (wet - 1.0).max(0.0);
+    let mut base = wet.min(1.0);
+    let mut remaining = dt;
+    if base < 0.0 {
+        let drying = -base / 0.08;
+        if dt < drying {
+            return base + dt * 0.08;
+        }
+        base = 0.0;
+        remaining -= drying;
+    }
+    (base + rate * remaining).clamp(0.0, 1.0) + ridge
+}
 
 struct Blade {
     mesh: usize,
@@ -21,7 +42,7 @@ struct Film {
     material: MaterialId,
     texture: TextureId,
     points: Vec<Vec3>,
-    // 0..1 is droplet wetness; 1..2 holds the water ridge pushed by a blade.
+    // Negative is a recent wipe's residual film; 0..1 droplets; 1..2 the pushed ridge.
     wet: Vec<f32>,
     unwiped: f32,
     image: omsi_texture::Image,
@@ -156,7 +177,7 @@ impl WindowWipers {
                         pixel[0] = (depth >> 8) as u8;
                         pixel[1] = depth as u8;
                         pixel[2] = (wetness * 255.0).round() as u8;
-                        pixel[3] = (wetness * 127.5).round() as u8;
+                        pixel[3] = encode_wetness(wetness);
                     }
                     let texture = renderer.add_data_texture(scene, &image);
                     let material = renderer
@@ -213,12 +234,11 @@ impl WindowWipers {
         let washer = vehicle.var("wiper_wash").unwrap_or(0.0).clamp(0.0, 1.0);
         // Do not read Front/Wiped wetness: the script resets those for the whole pane.
         // Keep rainfall local and let a dry pane evaporate gradually after the shower.
-        let deposit = if vehicle.host.precip_rate > 0.0 || washer > 0.0 {
-            (vehicle.host.precip_rate * 0.45 * (1.0 + vehicle.physics.speed.abs() * 0.025)
-                + washer * 0.8)
-                * dt
+        let rate = if vehicle.host.precip_rate > 0.0 || washer > 0.0 {
+            vehicle.host.precip_rate * 0.10 * (1.0 + vehicle.physics.speed.abs() * 0.015)
+                + washer * 0.8
         } else {
-            -0.025 * dt
+            -0.025
         };
         for blade in &mut self.blades {
             blade.current = blade
@@ -227,10 +247,9 @@ impl WindowWipers {
         }
         for film in &mut self.films {
             if dt > 0.0 {
-                film.unwiped = (film.unwiped + deposit).clamp(0.0, 1.0);
+                film.unwiped = (film.unwiped + rate * dt).clamp(0.0, 1.0);
                 for wet in &mut film.wet {
-                    let ridge = (*wet - 1.0).max(0.0);
-                    *wet = ((*wet).min(1.0) + deposit).clamp(0.0, 1.0) + ridge;
+                    *wet = advance_wetness(*wet, rate, dt);
                 }
                 // Gravity follows the pane's actual inclination. Relative airflow can
                 // carry mobile water sideways/upwards; small pinned beads stay put.
@@ -264,12 +283,11 @@ impl WindowWipers {
             }
             let mut changed = false;
             for (i, (&point, wet)) in film.points.iter().zip(&mut film.wet).enumerate() {
-                let alpha = (if point.is_finite() {
+                let alpha = encode_wetness(if point.is_finite() {
                     *wet
                 } else {
                     film.unwiped
-                } * 127.5)
-                    .round() as u8;
+                });
                 let unwiped = (film.unwiped * 255.0).round() as u8;
                 let pixel = &mut film.image.rgba[i * 4..i * 4 + 4];
                 changed |= pixel[3] != alpha || pixel[2] != unwiped;
@@ -467,7 +485,9 @@ fn wipe(
             let i = y * SIZE + x;
             if points[i].is_finite() && triangles.iter().flatten().any(|t| t.contains(points[i])) {
                 water += (wet[i] - 0.004).max(0.0);
-                wet[i] = wet[i].min(0.004); // a clean blade leaves a very thin residual film
+                if wet[i] > 0.004 {
+                    wet[i] = WIPED_FILM; // a wet blade leaves a brief, thin residual film
+                }
             }
         }
     }
@@ -620,6 +640,23 @@ impl SweepTriangle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wipe_leaves_brief_sheen_then_rewets_gradually_without_a_frame_rate_dependency() {
+        assert!(advance_wetness(WIPED_FILM, 0.1, 0.1) < 0.0);
+        let after_two_seconds = advance_wetness(WIPED_FILM, 0.1, 2.0);
+        assert!(after_two_seconds > 0.1 && after_two_seconds < 0.2);
+        let mut stepped = WIPED_FILM;
+        for _ in 0..120 {
+            stepped = advance_wetness(stepped, 0.1, 1.0 / 60.0);
+        }
+        assert!((stepped - after_two_seconds).abs() < 1e-5);
+        assert_eq!(advance_wetness(0.0, -0.025, 2.0), 0.0);
+        assert_eq!(advance_wetness(WIPED_FILM, -0.025, 2.0), 0.0);
+        assert_eq!(encode_wetness(0.0), 8);
+        assert!(encode_wetness(WIPED_FILM) < 8);
+        assert_eq!(encode_wetness(2.0), 255);
+    }
 
     #[test]
     fn collected_water_moves_down_or_with_airflow_without_moving_pinned_beads() {
