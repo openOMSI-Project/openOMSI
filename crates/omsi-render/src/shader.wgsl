@@ -1103,7 +1103,7 @@ fn rain_dome(d: vec2<f32>, r: f32, px: f32) -> vec3<f32> {
     return vec3<f32>(s, cover);
 }
 
-// Smooth noise over the glass (0..1): the rain gathers in patches, not evenly.
+// Smooth noise for water-film refraction and residual wiper streaks (0..1).
 fn rain_patches(q: vec2<f32>) -> vec2<f32> {
     let c = floor(q);
     let f = q - c;
@@ -1321,13 +1321,10 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         }
     }
 
-    // where the glass is wetter and where drier, in patches a hand across
+    // Rainfall has the same chance across an equally wet pane. Random arrivals
+    // scatter individual drops; only runoff and wiping leave cleared regions.
     track = max(track, max(collectors.b, collectors.a));
     let patches = rain_patches(q * 12.0 + 3.1);
-    let wetter = 0.2 + 1.6 * patches.x * patches.x;
-    // Distort the shared sampling domain, rather than constraining all large
-    // drops to equally spaced cell centres. The field stays attached to the glass.
-    let scattered = q + (patches - vec2<f32>(0.5)) * 0.035;
 
     // --- the drops that sit: fine beads, medium drops and larger merged drops.
     for (var layer = 0; layer < 3; layer = layer + 1) {
@@ -1335,7 +1332,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         let fl = f32(layer);
         let cellsz = select(select(0.018, 0.005, layer == 1), 0.0085, layer == 2);
         let turn = 0.61 + fl * 1.37;
-        let g2 = rain_turn(scattered, turn) / cellsz + vec2<f32>(fl * 17.3, fl * 5.1);
+        let g2 = rain_turn(q, turn) / cellsz + vec2<f32>(fl * 17.3, fl * 5.1);
         let c = floor(g2);
         let timing = rain_hash(c + 3.7);
         let life = 4.0 + timing.y * 7.0;
@@ -1346,7 +1343,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         let h2 = rain_hash(arrival + 3.7);
         // landed, grown, drying: a drop comes and goes; more of them the wetter the pane,
         // and the big ones only on a wet pane
-        let dens = density * wetter * select(0.62, 0.48 * smoothstep(0.15, 0.6, wet), layer == 0);
+        let dens = density * 0.7 * select(0.62, 0.48 * smoothstep(0.15, 0.6, wet), layer == 0);
         let present = step(h.x, dens) * smoothstep(0.0, 0.12, ph) * (1.0 - smoothstep(0.7, 1.0, ph)) * (1.0 - track);
         if (present <= 0.0) {
             continue;
@@ -1392,21 +1389,21 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         }
     }
 
-    // --- the mist: droplets of a millimetre or less in the same irregular patches
+    // --- the mist: independently scattered droplets of a millimetre or less
     var grain = 0.0;
     {
-        let mg = rain_turn(scattered, 0.33) / 0.0028;
+        let mg = rain_turn(q, 0.33) / 0.0028;
         let mc = floor(mg);
         let mh = rain_hash(mc + 71.0);
         let mr = 0.1 + 0.16 * mh.y;
         let at = mc + vec2<f32>(mr) + rain_hash(mc + 5.3) * (1.0 - 2.0 * mr);
-        grain = max(grain, step(mh.x, wet * wetter * 0.35) * (1.0 - smoothstep(mr * 0.6, mr, length(mg - at))));
+        grain = max(grain, step(mh.x, wet * 0.25) * (1.0 - smoothstep(mr * 0.6, mr, length(mg - at))));
     }
     // (seen from further than a millimetre a pixel: their average)
-    let mist = mix(wet * wetter * 0.35 * 0.12, grain, smoothstep(0.0015, 0.0006, px));
+    let mist = mix(wet * 0.25 * 0.12, grain, smoothstep(0.0015, 0.0006, px));
     // Connected water bends the view between visible beads, rather than greying
     // otherwise sharp glass. Runoff clears this film along with the fine drops.
-    let film = smoothstep(0.2, 1.0, wet) * (0.55 + 0.3 * patches.x) * (1.0 - track);
+    let film = smoothstep(0.2, 1.0, wet) * 0.7 * (1.0 - track);
     g.mist = clamp(film + mist * (1.0 - track), 0.0, 1.0);
     slope = slope + (patches - vec2<f32>(0.5)) * film * 0.09 * (1.0 - best);
 
