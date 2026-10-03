@@ -2421,6 +2421,7 @@ impl ApplicationHandler for App {
                         // few milliseconds of the frame).
                         if let (Some(p), Some(w)) = (self.player.as_ref(), self.world.as_ref()) {
                             self.mirror_hud.set_aspects(w.mirror_aspect.lock().clone());
+                            self.mirror_hud.set_glass(w.mirror_glass.lock().clone());
                             self.mirror_hud.sync(p, self.settings.mirror_hud);
                         }
                         if self.settings.mirror_size == 0 {

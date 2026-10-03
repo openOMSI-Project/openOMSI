@@ -14,7 +14,8 @@
 //!   the game without them.
 
 use crate::player::Player;
-use crate::scene::World;
+use crate::scene::{MirrorGlass, World};
+use glam::Vec3;
 use omsi_render::{Renderer, Scene, TextureId};
 use winit::keyboard::KeyCode;
 
@@ -29,6 +30,46 @@ const MAX_H: f32 = 0.70;
 const MIN_ASPECT: f32 = 0.25;
 const MAX_ASPECT: f32 = 4.0;
 const MARGIN: f32 = 0.012;
+
+/// How a panel lays its picture out: the render texture is drawn for the mirror's glass, and
+/// the glass's mesh puts it on with its own turn (the usual side mirror shows it left to right
+/// over, one in a roof housing may have it on its side).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Turn {
+    /// The picture's u runs up or down the panel (and its v across).
+    pub transposed: bool,
+    /// The rectangle is drawn from its right edge / its bottom edge: what runs across it
+    /// runs to the left, what runs down it runs up.
+    pub x_reversed: bool,
+    pub y_reversed: bool,
+}
+
+impl Default for Turn {
+    /// The usual side mirror: u runs to the left, v down.
+    fn default() -> Self {
+        Turn { transposed: false, x_reversed: true, y_reversed: false }
+    }
+}
+
+impl Turn {
+    /// How the picture lies on a glass as seen from `eye`: the glass's `centre` and the way its
+    /// position moves with u (`du`) and v (`dv`), all in the bus's frame (x right, y forward,
+    /// z up). The viewer's up is the bus's up across the line of sight.
+    fn of(eye: Vec3, centre: Vec3, du: Vec3, dv: Vec3) -> Turn {
+        let Some(sight) = (centre - eye).try_normalize() else { return Turn::default() };
+        let Some(up) = (Vec3::Z - sight * sight.z).try_normalize() else { return Turn::default() };
+        let right = sight.cross(up);
+        let (du, dv) = (du.try_normalize().unwrap_or(Vec3::ZERO), dv.try_normalize().unwrap_or(Vec3::ZERO));
+        let (ur, uu, vr, vu) = (du.dot(right), du.dot(up), dv.dot(right), dv.dot(up));
+        if ur.abs() >= uu.abs() {
+            // u across, v down the picture (the top row is v 0)
+            Turn { transposed: false, x_reversed: ur < 0.0, y_reversed: vu > 0.0 }
+        } else {
+            // u up or down, v across
+            Turn { transposed: true, x_reversed: vr < 0.0, y_reversed: uu > 0.0 }
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Panel {
@@ -56,6 +97,10 @@ pub(crate) struct MirrorHud {
     frame: Option<TextureId>,
     /// Width / height of each mirror's glass (0: unknown), from the model.
     aspects: Vec<f32>,
+    /// Where each mirror's glass is and how the picture lies on it, see `World::mirror_glass`.
+    glass: Vec<Option<MirrorGlass>>,
+    /// How each panel lays its mirror's picture out to match its glass (see `Turn`).
+    turns: Vec<Turn>,
     /// The keys held in the editor that aim and shift the mirror: left, right, up, down,
     /// Page Up (the mirror forward), Page Down (back), minus (a narrower field of view), plus
     /// (a wider one).
@@ -71,6 +116,11 @@ impl MirrorHud {
     /// The glass shapes the world has found in the bus's model.
     pub fn set_aspects(&mut self, a: Vec<f32>) {
         self.aspects = a;
+    }
+
+    /// The glasses the world has found in the bus's model.
+    pub fn set_glass(&mut self, g: Vec<Option<MirrorGlass>>) {
+        self.glass = g;
     }
 
     /// Width / height a mirror's panel starts with, and whether it sits on the right.
@@ -125,6 +175,11 @@ impl MirrorHud {
     /// Load this bus's layout (once per bus); `setting` is the `mirror_hud` setting, which
     /// gives a bus with nothing saved its first panels.
     pub fn sync(&mut self, p: &Player, setting: u8) {
+        if !self.glass.is_empty() {
+            let rot = p.vehicle.body_rotation().inverse();
+            let eye = rot.transform_vector3((crate::camera_util::driver_eye(p) - p.vehicle.position).as_vec3());
+            self.turns = self.glass.iter().map(|g| g.map(|g| Turn::of(eye, g.centre, g.du, g.dv)).unwrap_or_default()).collect();
+        }
         let path = p.vehicle.ty.def.path.to_string_lossy().to_string();
         let key = path.to_ascii_lowercase();
         if self.key == key {
@@ -369,9 +424,17 @@ impl MirrorHud {
                 let t = if under == Some(i) || self.drag.is_some_and(|d| d.0 == i) { 5.0 } else { 2.0 };
                 scene.overlays.push((f, [r[0] - t, r[1] - t, r[2] + t, r[3] + t]));
             }
-            // (turned over left to right: the glass shows the street the right way round,
-            // the picture on the render texture is laid out for the glass's mesh)
-            scene.overlays.push((tex, [r[2], r[1], r[0], r[3]]));
+            // (laid out the way the glass's mesh lays the picture on it - over left to right
+            // for the usual side mirror - so that the panel shows what the glass shows)
+            let t = self.turns.get(q.cam).copied().unwrap_or_default();
+            let (x0, x1) = if t.x_reversed { (r[2], r[0]) } else { (r[0], r[2]) };
+            let (y0, y1) = if t.y_reversed { (r[3], r[1]) } else { (r[1], r[3]) };
+            if t.transposed {
+                scene.transposed.insert(tex);
+            } else {
+                scene.transposed.remove(&tex);
+            }
+            scene.overlays.push((tex, [x0, y0, x1, y1]));
         }
     }
 }
@@ -528,5 +591,20 @@ mod tests {
         ]);
         assert!(m.press(true, (150.0, 150.0), (1000.0, 1000.0)));
         assert_eq!(m.panels.last().map(|q| q.cam), Some(0));
+    }
+
+    #[test]
+    fn a_picture_is_laid_out_as_its_glass_shows_it_to_the_driver() {
+        let (eye, centre) = (Vec3::ZERO, Vec3::new(0.0, 5.0, 0.0));
+        let turn = |du, dv| Turn::of(eye, centre, du, dv);
+        // seen from the front: right is +x, up is +z
+        assert_eq!(turn(Vec3::X, -Vec3::Z), Turn { transposed: false, x_reversed: false, y_reversed: false });
+        // the usual side mirror: the picture runs to the left
+        assert_eq!(turn(-Vec3::X, -Vec3::Z), Turn::default());
+        // v up the glass: the picture upside down
+        assert_eq!(turn(Vec3::X, Vec3::Z), Turn { transposed: false, x_reversed: false, y_reversed: true });
+        // on its side: u up the glass, v across it
+        assert_eq!(turn(Vec3::Z, Vec3::X), Turn { transposed: true, x_reversed: false, y_reversed: true });
+        assert_eq!(turn(-Vec3::Z, -Vec3::X), Turn { transposed: true, x_reversed: true, y_reversed: false });
     }
 }

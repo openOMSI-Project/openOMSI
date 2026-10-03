@@ -1055,6 +1055,9 @@ pub struct Scene {
     /// Overlay textures that hold premultiplied alpha (drawn by `omsi-ui`, e.g. the
     /// navigator) rather than straight alpha.
     pub premultiplied: std::collections::HashSet<TextureId>,
+    /// Overlay textures drawn on their side (their u down the rectangle, v across it): the
+    /// mirror panels of a glass whose mesh lays the picture so.
+    pub transposed: std::collections::HashSet<TextureId>,
     /// Per overlay: the texture its bind group was made for, its rect buffer and the group
     /// (kept between frames; only the rect is rewritten).
     overlay_res: Vec<(TextureId, wgpu::Buffer, wgpu::BindGroup, [f32; 8])>,
@@ -4244,6 +4247,7 @@ impl Renderer {
             sky_bind_group: None,
             overlays: Vec::new(),
             premultiplied: Default::default(),
+            transposed: Default::default(),
             overlay_res: Vec::new(),
             dirty: true,
             changed: Vec::new(),
@@ -7608,7 +7612,7 @@ impl Renderer {
                 r[2] / full_w as f32 * 2.0 - 1.0,
                 1.0 - r[3] / full_h as f32 * 2.0,
                 scene.premultiplied.contains(&tex) as u8 as f32,
-                0.0,
+                scene.transposed.contains(&tex) as u8 as f32,
                 0.0,
                 0.0,
             ];

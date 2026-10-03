@@ -459,7 +459,9 @@ timetable are not part of it.
 Copies of the bus's mirrors can be laid over the picture, so that the street behind is in
 view without looking at the glass. In the cab **Ctrl+M** shows or hides them (the first time a
 panel appears for each bus); **Ctrl+Shift+M** starts and ends their editor. The panels are only
-pictures until the editor is on, so the mouse and the keys work as always. In the editor each
+pictures until the editor is on, so the mouse and the keys work as always. A panel shows its
+mirror as the glass in the bus's model does, however that glass lays the picture on (turned over,
+or on its side). In the editor each
 panel has a yellow frame, and:
 
 * the left button drags a panel, the wheel over it resizes it and **Shift+wheel** makes it wider

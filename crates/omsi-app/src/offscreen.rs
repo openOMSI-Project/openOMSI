@@ -2852,6 +2852,7 @@ pub(crate) fn run_offscreen(
         let mode = omsi_cfg::env::var("OMSI_MIRROR_HUD").ok().and_then(|v| v.parse::<u8>().ok()).unwrap_or(settings.mirror_hud);
         let mut panels = crate::mirror_hud::MirrorHud::default();
         panels.set_aspects(world.mirror_aspect.lock().clone());
+        panels.set_glass(world.mirror_glass.lock().clone());
         panels.sync(p, mode);
         if mode != 0 {
             panels.enabled = true;
