@@ -10371,6 +10371,7 @@ fn slot_overlays_another(mesh: &MeshData, slot: usize) -> bool {
 
 /// GPU-side representation of a vehicle instance: one render instance per mesh.
 pub struct VehicleRender {
+    pub window_wipers: Option<crate::window_wipers::WindowWipers>,
     pub instances: Vec<usize>,
     /// Materials made for this vehicle alone (its text and script texture slots).
     pub own_materials: Vec<MaterialId>,
@@ -11226,6 +11227,10 @@ impl World {
                 .copied()
                 .collect();
             let mut own_materials = render.own_materials;
+            if let Some(wipers) = &render.window_wipers {
+                own_textures.extend(wipers.textures());
+                own_materials.extend(wipers.materials());
+            }
             for v in &render.variants {
                 if let Some(l) = &v.lights {
                     for (b, it) in l.cache.values() {
@@ -11819,6 +11824,7 @@ impl World {
             renderer.set_object_culling(scene, *inst, radius, vt.model.detail_factor, any_distance);
         }
         VehicleRender {
+            window_wipers: None,
             instances,
             text_textures,
             script_textures,

@@ -395,6 +395,8 @@ struct MaterialUniform {
     /// rgb: the D3D material's ambient colour, which takes the ambient light (C); w: 1 for
     /// a texture that is a season's snow picture (no snow laid over it), 2 the map's water
     ambient: [f32; 4],
+    /// Window mask: mesh X/Z origin and inverse size; zero disables it.
+    wipe_bounds: [f32; 4],
 }
 
 /// The maps of a PBR set found beside a diffuse texture (`foo_n.png` and the rest, see
@@ -698,7 +700,7 @@ impl GpuTexture {
 struct BindKey {
     textures: [(usize, u64); 7],
     address: TexAddressing,
-    uniform: [u32; 40],
+    uniform: [u32; 44],
 }
 
 /// Bytes of a texture of `format` with `levels` mip levels.
@@ -4899,6 +4901,29 @@ impl Renderer {
         base: MaterialId,
         texture: Option<TextureId>,
     ) -> Option<MaterialId> {
+        self.copy_material(scene, base, texture, None)
+    }
+
+    /// A vehicle's precipitation layer with its own wetness map, in mesh X/Z coordinates.
+    /// Reuses the transmap binding without changing the layer's authored texture alpha.
+    pub fn add_window_wetness_material(
+        &self,
+        scene: &mut Scene,
+        base: MaterialId,
+        mask: TextureId,
+        bounds: [f32; 4],
+    ) -> Option<MaterialId> {
+        let texture = scene.materials.get(base)?.texture;
+        self.copy_material(scene, base, texture, Some((mask, bounds)))
+    }
+
+    fn copy_material(
+        &self,
+        scene: &mut Scene,
+        base: MaterialId,
+        texture: Option<TextureId>,
+        wetness: Option<(TextureId, [f32; 4])>,
+    ) -> Option<MaterialId> {
         let (
             alpha,
             color,
@@ -4913,7 +4938,7 @@ impl Renderer {
             env_mask,
             bump,
             emissive,
-            transmap,
+            mut transmap,
             address,
             mut uniform,
         ) = {
@@ -4937,6 +4962,11 @@ impl Renderer {
                 src.uniform,
             )
         };
+        if let Some((mask, bounds)) = wetness {
+            transmap = Some((mask, true));
+            uniform.wipe_bounds = bounds;
+            uniform.params[2] = 0.0;
+        }
         uniform.pbr = texture
             .and_then(|id| scene.pbr_maps.get(&id))
             .map(|maps| maps.flags)
@@ -5185,6 +5215,7 @@ impl Renderer {
                 .and_then(|t| scene.textures.get(t))
                 .is_some_and(|t| t.texture.usage().contains(wgpu::TextureUsages::RENDER_ATTACHMENT));
         let uniform = MaterialUniform {
+            wipe_bounds: [0.0; 4],
             color,
             params: [
                 mode,

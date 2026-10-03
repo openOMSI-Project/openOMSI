@@ -300,6 +300,8 @@ struct MaterialParams {
     flags: vec4<f32>,
     // rgb: the D3D material's ambient colour, which takes the ambient light (C)
     ambient: vec4<f32>,
+    // Window wetness mask in mesh X/Z: origin, inverse size; zero disables it.
+    wipe_bounds: vec4<f32>,
 };
 @group(1) @binding(2) var<uniform> material: MaterialParams;
 @group(1) @binding(3) var t_trans: texture_2d<f32>;
@@ -414,6 +416,7 @@ struct VsOut {
     // it: from the sun (light A) and from the light above (light B)
     @location(5) spec_sun: vec3<f32>,
     @location(6) spec_sky: vec3<f32>,
+    @location(7) wipe_uv: vec3<f32>,
 };
 // What the fragment shaders take: VsOut without the invariant on the position. The
 // invariant belongs to the vertex output; on a fragment input naga's GLSL writer turns it
@@ -427,6 +430,7 @@ struct FsIn {
     @location(4) params2: vec4<f32>,
     @location(5) spec_sun: vec3<f32>,
     @location(6) spec_sky: vec3<f32>,
+    @location(7) wipe_uv: vec3<f32>,
 };
 
 // Direct3D's specular term at a vertex (Omsi.exe switches it on in FormActivate, 0x8254e0):
@@ -488,6 +492,7 @@ fn vs_main(in: VsIn) -> VsOut {
     out.uv = in.uv + pr.zw;
     out.params = pr;
     out.params2 = inst_params[e * 2u + 1u];
+    out.wipe_uv = vec3<f32>((in.pos.xz - material.wipe_bounds.xy) * material.wipe_bounds.zw, in.pos.y);
     if (pr.y < 0.5) {
         // invisible: collapse the triangle
         out.clip = vec4<f32>(0.0, 0.0, 2.0, 1.0);
@@ -1032,6 +1037,15 @@ fn finite_or(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
     return select(fallback, v, all_finite(v));
 }
 
+fn window_wetness(in: FsIn) -> f32 {
+    if (material.wipe_bounds.z > 0.0) {
+        let mask = textureSample(t_trans, s_tile, in.wipe_uv.xy);
+        let depth = dot(mask.rg, vec2<f32>(256.0, 1.0)) * (64.0 / 257.0) - 32.0;
+        return select(mask.b, mask.a, abs(depth - in.wipe_uv.z) <= 0.1);
+    }
+    return in.params.x;
+}
+
 fn rain_hash(p: vec2<f32>) -> vec2<f32> {
     // Integer mixing keeps neighbouring cells independent without the precision loss and
     // repeated sine evaluations of a floating-point hash.
@@ -1264,7 +1278,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, wet: f32, t: f32, o
         let ph = fract(t / life + h2.x);
         // landed, grown, drying: a drop comes and goes; more of them the wetter the pane,
         // and the big ones only on a wet pane
-        let dens = wet * wetter * select(select(select(0.45, 0.36, layer == 2), 0.42 * smoothstep(0.15, 0.6, wet), layer == 0), 0.1 * smoothstep(0.3, 0.8, wet), layer == 3);
+        let dens = wet * wetter * select(select(select(0.60, 0.48, layer == 2), 0.50 * smoothstep(0.15, 0.6, wet), layer == 0), 0.12 * smoothstep(0.3, 0.8, wet), layer == 3);
         let present = step(h.x, dens) * smoothstep(0.0, 0.04, ph) * (1.0 - smoothstep(0.85, 1.0, ph)) * (1.0 - track);
         if (present <= 0.0) {
             continue;
@@ -1440,7 +1454,7 @@ fn shade_vanilla(in: FsIn, puddle_weight: ptr<function, f32>, eye: vec3<f32>) ->
         // a pane's film of water: drops, not the sliding texture
         let v = normalize(camera.cam_pos.xyz - in.world);
         let in_cab = inside_vehicle(camera.cam_pos.xyz) * near_player_vehicle(in.world) > 0.5;
-        let g = rain_glass(in.world, in.uv - in.params.zw, in.normal, in.params.x, camera.post.y, in_cab);
+        let g = rain_glass(in.world, in.uv - in.params.zw, in.normal, window_wetness(in), camera.post.y, in_cab);
         let through = rain_through(g, v);
         let seen = select(rain_behind(in.world, through, rain_env_vanilla(normalize(through)), 1.0), vec3<f32>(0.0), dot(through, through) < 1e-4);
         let d = rain_light(g, v, through, rain_env_vanilla(reflect(-v, g.n)), seen, rain_env_vanilla(vec3<f32>(0.0, 0.0, 0.5)) * 0.9, camera.sun_color.rgb * camera.sun_dir.w);
@@ -1747,6 +1761,6 @@ fn shade_vanilla(in: FsIn, puddle_weight: ptr<function, f32>, eye: vec3<f32>) ->
     if (mode < 0.5) {
         a = 1.0;
     }
-    a = a * in.params.x;
+    a = a * window_wetness(in);
     return vec4<f32>(rgb, a);
 }

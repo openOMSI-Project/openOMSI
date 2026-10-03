@@ -52,6 +52,7 @@ mod radio;
 mod puddles;
 mod quit;
 mod rain;
+mod window_wipers;
 mod scene;
 mod schedule;
 mod schedule_paper;

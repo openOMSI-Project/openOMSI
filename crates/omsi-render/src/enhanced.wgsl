@@ -314,7 +314,7 @@ fn shade_enhanced(in: FsIn, puddle_weight: ptr<function, vec2<f32>>, capture: bo
         let v = camera.cam_pos.xyz - in.world;
         let vn = normalize(v);
         let in_cab = inside_vehicle(camera.cam_pos.xyz) * near_player_vehicle(in.world) > 0.5;
-        let g = rain_glass(in.world, in.uv - in.params.zw, in.normal, in.params.x, camera.post.y, in_cab);
+        let g = rain_glass(in.world, in.uv - in.params.zw, in.normal, window_wetness(in), camera.post.y, in_cab);
         let through = rain_through(g, vn);
         let valid = dot(through, through) > 1e-4;
         // (the picture behind is as the HDR pass drew it: exposed already)
@@ -389,7 +389,7 @@ fn shade_enhanced(in: FsIn, puddle_weight: ptr<function, vec2<f32>>, capture: bo
     if (mode < 0.5) {
         alpha = 1.0;
     }
-    alpha = alpha * in.params.x;
+    alpha = alpha * window_wetness(in);
     let pre = enh.exposure.x;
     let to_cam = eye - in.world;
     let dist = length(to_cam);

@@ -5,11 +5,14 @@
 use glam::{DVec3, Vec3};
 use omsi_render::{Corona, Scene};
 
+const HALF_WIDTH: f32 = 16.0;
+
 pub struct Rain {
     particles: Vec<Vec3>,
     kind: i32,
     rate: f32,
     rng: u64,
+    camera: Option<DVec3>,
 }
 
 /// The boxes a vehicle keeps the weather out of, as `Rain::tick` takes them: its own
@@ -32,6 +35,7 @@ impl Rain {
             kind: 0,
             rate: 0.0,
             rng: 0xABCDEF12345,
+            camera: None,
         }
     }
 
@@ -46,20 +50,34 @@ impl Rain {
     pub fn set(&mut self, kind: i32, rate: f32) {
         self.kind = kind;
         self.rate = rate.clamp(0.0, 1.0);
-        let n = if kind == 0 {
+        let n = if kind == 0 || self.rate == 0.0 {
             0
         } else {
             (400.0 + 2600.0 * self.rate) as usize
         };
         while self.particles.len() < n {
             let p = Vec3::new(
-                self.rand() * 40.0 - 20.0,
-                self.rand() * 40.0 - 20.0,
+                self.rand() * (HALF_WIDTH * 2.0) - HALF_WIDTH,
+                self.rand() * (HALF_WIDTH * 2.0) - HALF_WIDTH,
                 self.rand() * 20.0,
             );
             self.particles.push(p);
         }
         self.particles.truncate(n);
+    }
+
+    fn advance(&mut self, dt: f32, camera: DVec3, wind: Vec3) -> Vec3 {
+        // Keep drops in the world as the camera moves through them. Recentring the box
+        // used to carry every drop along with the bus, even at motorway speed.
+        let movement = self.camera.replace(camera).map_or(Vec3::ZERO, |old| (camera - old).as_vec3());
+        let velocity = wind - Vec3::Z * if self.kind == 2 { 1.5 } else { 9.0 };
+        for p in &mut self.particles {
+            *p += velocity * dt - movement;
+            p.x = (p.x + HALF_WIDTH).rem_euclid(HALF_WIDTH * 2.0) - HALF_WIDTH;
+            p.y = (p.y + HALF_WIDTH).rem_euclid(HALF_WIDTH * 2.0) - HALF_WIDTH;
+            p.z = (p.z + 2.0).rem_euclid(22.0) - 2.0;
+        }
+        (velocity - movement / dt.max(0.001)).normalize_or_zero()
     }
 
     /// Move the particles (camera-relative box) and push them as sprites.
@@ -76,8 +94,10 @@ impl Rain {
         inside: &[(DVec3, f64, [f32; 6])],
     ) {
         if self.particles.is_empty() {
+            self.camera = Some(camera);
             return;
         }
+        let streak = self.advance(dt, camera, wind);
         let buses: Vec<(DVec3, f64, [f32; 6])> = inside.iter().filter(|b| (b.0 - camera).length() < 40.0).map(|&(o, h, bb)| (o, h.to_radians(), bb)).collect();
         let in_one = |p: DVec3, (o, h, bb): (DVec3, f64, [f32; 6])| -> bool {
             let d = p - o;
@@ -94,27 +114,6 @@ impl Rain {
                 && (z - bb[5] as f64).abs() < bb[2] as f64 * 0.5 + 0.6
         };
         let in_bus = |p: DVec3| buses.iter().any(|b| in_one(p, *b));
-        let fall = if self.kind == 2 { 1.5 } else { 9.0 };
-        for p in self.particles.iter_mut() {
-            p.z -= fall * dt;
-            p.x += wind.x * dt;
-            p.y += wind.y * dt;
-            if p.z < -2.0 {
-                p.z += 22.0;
-            }
-            if p.x < -20.0 {
-                p.x += 40.0;
-            }
-            if p.x > 20.0 {
-                p.x -= 40.0;
-            }
-            if p.y < -20.0 {
-                p.y += 40.0;
-            }
-            if p.y > 20.0 {
-                p.y -= 40.0;
-            }
-        }
         let (size, color, brightness) = if self.kind == 2 {
             (0.06, [1.0, 1.0, 1.0], 0.9)
         } else {
@@ -132,7 +131,7 @@ impl Rain {
                 size,
                 color,
                 brightness,
-                direction: Vec3::ZERO,
+                direction: if self.kind == 2 { Vec3::ZERO } else { streak },
                 cone_cos: if self.kind == 2 { -1.0 } else { -2.0 },
                 ..Default::default()
             });
@@ -224,6 +223,36 @@ pub fn snow_on_glass(root: &std::path::Path) -> omsi_texture::Image {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn rain_stays_in_the_world_and_streaks_follow_relative_velocity() {
+        let mut rain = Rain::new();
+        rain.set(1, 1.0);
+        rain.particles = vec![Vec3::new(0.0, 0.0, 10.0)];
+        rain.camera = Some(DVec3::ZERO);
+        let camera = DVec3::new(0.0, 2.0, 0.0);
+        let direction = rain.advance(0.1, camera, Vec3::X * 3.0);
+        let world = camera + rain.particles[0].as_dvec3();
+        assert!((world - DVec3::new(0.3, 0.0, 9.1)).length() < 1e-5);
+        assert!(direction.abs_diff_eq(Vec3::new(3.0, -20.0, -9.0).normalize(), 1e-5));
+        rain.advance(0.0, DVec3::splat(10000.0), Vec3::ZERO);
+        let p = rain.particles[0];
+        assert!(p.is_finite() && p.x.abs() <= HALF_WIDTH && p.y.abs() <= HALF_WIDTH && p.z >= -2.0 && p.z < 20.0);
+    }
+
+    #[test]
+    fn dry_weather_has_no_particles_and_heavy_rain_keeps_the_budget() {
+        let mut rain = Rain::new();
+        rain.set(1, 1.0);
+        assert_eq!(rain.particles.len(), 3000);
+        rain.set(1, 0.0);
+        assert!(rain.particles.is_empty());
+        rain.set(2, 1.0);
+        rain.set(0, 1.0);
+        assert!(rain.particles.is_empty());
+    }
+
     #[test]
     fn snow_on_glass_is_mostly_clear_and_thickest_at_the_rim() {
         // no content root here: the procedural specks

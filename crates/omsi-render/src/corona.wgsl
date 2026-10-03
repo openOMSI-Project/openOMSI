@@ -176,14 +176,20 @@ fn vs_main(in: CoronaIn) -> CoronaOut {
         }
     }
     // coronas keep a minimum on-screen size in the distance like the original;
-    // precipitation particles (cone < -1.5) are thin vertical streaks.
+    // precipitation particles (cone < -1.5) follow their motion relative to the eye.
     // A sprite's radius, from the light's size (its diameter) and that distance floor. The
     // 0.9 is measured against Omsi.exe: at the size the game files ask for, every glow reads
     // a shade too wide beside the original, which draws the sprite a little inside the
     // diameter its `size` names. (Streaks keep their size: they are rain, not a light.)
     let size = select(max(in.size * grow, dist * 0.002) * 0.9, in.size, streak);
     let stretch = select(vec2<f32>(1.0, 1.0), vec2<f32>(0.06, 4.0), streak);
-    let upv = select(up, vec3<f32>(0.0, 0.0, 1.0), streak);
+    var upv = up;
+    if (streak) {
+        upv = vec3<f32>(0.0, 0.0, 1.0);
+        if (length(in.dir.xyz) > 0.5) { upv = normalize(in.dir.xyz); }
+        let across = cross(upv, view_dir);
+        if (length(across) > 0.001) { right = normalize(across); }
+    }
     // the spot moved towards the viewer by its z offset, so that a lamp inside its housing
     // shows (without one: half its size, at most half a metre)
     let pull = select(min(size * 0.5, 0.5), in.extra.y, in.extra.y >= 0.0);
