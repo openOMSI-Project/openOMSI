@@ -28,6 +28,7 @@ use omsi_ui::{Color, Draw, Gpu, Layer, Painter, Rect, Vertex};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
+use std::time::Instant;
 
 // The map is drawn with the game's own city map palette and order (see `navigator`): every
 // road's dark casing first, then every road's surface over every casing, then the chosen
@@ -54,6 +55,10 @@ const BACKDROP: wgpu::Color = wgpu::Color { r: 0.0056, g: 0.0056, b: 0.0056, a: 
 const MPP_MIN: f64 = 0.15;
 /// A press that travelled less than this many pixels is a click on what stands under it.
 const CLICK_SLOP: f32 = 5.0;
+/// How long the wheel has to be still before the plan is built again for the new zoom (see
+/// `plan_is_stale`): a zoom that keeps moving, a pinch or a rolled wheel, would otherwise ask
+/// for the whole map to be thinned again on every notch.
+const ZOOM_SETTLE: std::time::Duration = std::time::Duration::from_millis(140);
 
 /// What the map should show. Changing `map` reads the tiles again; changing `trip` only walks
 /// the timetable; changing `entry` only moves the ring.
@@ -164,6 +169,9 @@ pub struct MapView {
     /// The world point the middle of the window looks at, and what one pixel of it holds.
     center: DVec2,
     mpp: f64,
+    /// When the wheel last moved the map: while it keeps moving, the plan is not built again
+    /// for the new zoom (see `plan_is_stale`).
+    wheeled: Option<Instant>,
     /// The plan must be fitted into the window again (another map, another trip, a window
     /// that changed while nothing was moved by hand).
     fit: bool,
@@ -206,6 +214,7 @@ impl MapView {
             loading: None,
             center: DVec2::ZERO,
             mpp: 4.0,
+            wheeled: None,
             fit: true,
             manual: false,
             travelled: 0.0,
@@ -361,6 +370,7 @@ impl MapView {
             self.mpp = (self.mpp * (1.0 - p.wheel * 0.12) as f64).clamp(MPP_MIN, self.max_mpp());
             self.center += before - self.world_at(p.at);
             self.manual = true;
+            self.wheeled = Some(Instant::now());
         }
         if p.pressed {
             self.travelled = 0.0;
@@ -529,10 +539,14 @@ impl MapView {
     }
 
     /// How far the drawn lines may leave the map's own shape: half a pixel is all the eye
-    /// gets, and rounding it to a power of two keeps a slow zoom from building the plan
-    /// again on every wheel notch. In metres.
+    /// gets, and it is rounded to a power of two because the plan is built again whenever this
+    /// changes. A wheel notch moves the metres a pixel by 12 %, so unrounded there was a plan
+    /// built per notch - and the plan is the whole map in one vertex list, thirty thousand
+    /// roads' worth of it, over a hundred megabytes through the queue each time. Rounded, only
+    /// a crossing between bands builds one, and a half pixel stands for at most 0.71 of one.
     fn tolerance(&self) -> f32 {
-        (self.mpp * 0.5).clamp(0.05, 24.0) as f32
+        let half_a_pixel = (self.mpp * 0.5) as f32;
+        (2f32.powf(half_a_pixel.max(f32::MIN_POSITIVE).log2().round())).clamp(0.05, 24.0)
     }
 
     /// The device it was drawn on is gone: the picture, the plan's buffers and the drawing
@@ -567,7 +581,7 @@ impl MapView {
         let roads = self.roads.clone()?;
         let tolerance = self.tolerance();
         let key = Key { global: self.shown.as_ref().map(|s| s.global.clone()).unwrap_or_default(), trip: self.trip_name(), tolerance: tolerance.to_bits() };
-        if self.plan.as_ref().map(|p| p.key != key).unwrap_or(true) {
+        if self.plan_is_stale(&key) {
             let (verts, points) = self.build(&roads, tolerance);
             let count = verts.len() as u32;
             log::info!("map: the plan rebuilt - {points} points of {} roads in its {count} vertices, {:.1} m per pixel", roads.roads.len(), self.mpp);
@@ -603,6 +617,29 @@ impl MapView {
     /// The name of the trip whose route is drawn (the plan is built again when it changes).
     fn trip_name(&self) -> String {
         self.shown.as_ref().map(|s| s.trip.clone()).unwrap_or_default()
+    }
+
+    /// Whether the plan has to be built again: another map, another trip, or another band of
+    /// thinning than the one it was built for - and the wheel has stopped.
+    ///
+    /// A zoom in progress is not a reason to build one: the plan holds the whole map and the
+    /// camera only moves a matrix over it, so what is on the screen is the same lines, thinned
+    /// for the zoom the wheel was last at. Building waits for the wheel to stop (`ZOOM_SETTLE`),
+    /// which is what makes a big map's zoom smooth - a plan of thirty thousand roads is over a
+    /// hundred megabytes to build and to send, and a wheel that keeps moving would ask for one
+    /// per notch.
+    fn plan_is_stale(&self, key: &Key) -> bool {
+        match self.plan.as_ref() {
+            // nothing at all to draw: a map being read shows nothing until one is built
+            None => true,
+            Some(p) if &p.key == key => false,
+            Some(_) => self.wheel_settled(),
+        }
+    }
+
+    /// The wheel has been still for `ZOOM_SETTLE`: the plan may be built again.
+    fn wheel_settled(&self) -> bool {
+        self.wheeled.map(|t| t.elapsed() >= ZOOM_SETTLE).unwrap_or(true)
     }
 
     /// The camera as a matrix: `center` lands at the middle of the visible window. `roads`'
@@ -887,5 +924,54 @@ mod tests {
         // automatic, and anything out of the list
         assert_eq!(m.shown_of(-1), None);
         assert_eq!(m.shown_of(9), None);
+    }
+
+    /// The thinning a plan is built at is rounded to a power of two, so a wheel that keeps
+    /// turning asks for the whole map to be built again only when it crosses into another band.
+    #[test]
+    fn a_zoom_builds_the_plan_again_only_across_a_band() {
+        let mut m = MapView::new();
+        m.mpp = 4.0;
+        let band = m.tolerance();
+        assert_eq!(band, 2.0, "half of four metres a pixel, which is a power of two");
+        // a band is a factor of two wide: a wheel notch moves the metres a pixel by 12 %, and
+        // six or seven of them, a whole gesture, stay inside the one the plan was built for
+        for factor in [1.12, 1.25, 1.12 * 1.12, 0.88, 0.8, 0.88 * 0.88] {
+            m.mpp = 4.0 * factor;
+            assert_eq!(m.tolerance(), band, "at {factor} of four metres a pixel");
+        }
+        // twice as close, and twice as far out, are other bands
+        m.mpp = 2.0;
+        assert_eq!(m.tolerance(), 1.0);
+        m.mpp = 8.0;
+        assert_eq!(m.tolerance(), 4.0);
+        // and the far out view is held where the clamp always held it
+        m.mpp = 800.0;
+        assert_eq!(m.tolerance(), 24.0);
+        m.mpp = 100_000.0;
+        assert_eq!(m.tolerance(), 24.0);
+    }
+
+    /// A zoom that keeps moving does not build the plan again: what stands on the screen is the
+    /// same map, thinned for the zoom before it, and the camera is a matrix over it either way.
+    #[test]
+    fn a_zoom_in_progress_keeps_the_plan_it_has() {
+        let mut m = map();
+        let built = Key { global: PathBuf::from("maps/Grundorf/global.cfg"), trip: String::new(), tolerance: 2.0f32.to_bits() };
+        let finer = Key { tolerance: 1.0f32.to_bits(), ..built.clone() };
+        let plan = || Some(Plan { key: built.clone(), verts: Vec::new(), count: 0, uploaded: true });
+        m.plan = plan();
+        // (whatever the zoom now asks for, while the wheel is still turning)
+        m.wheeled = Some(Instant::now());
+        assert!(!m.plan_is_stale(&finer));
+        assert!(!m.plan_is_stale(&built));
+        // (and a map that has no plan at all is always built one: it shows nothing until then)
+        m.plan = None;
+        assert!(m.plan_is_stale(&finer));
+        // the wheel has stopped: the band it stopped in is built
+        m.plan = plan();
+        m.wheeled = Some(Instant::now() - std::time::Duration::from_secs(1));
+        assert!(m.plan_is_stale(&finer));
+        assert!(!m.plan_is_stale(&built));
     }
 }

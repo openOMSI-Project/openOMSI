@@ -11,7 +11,7 @@ use super::theme::*;
 use super::ui::{id_of, ButtonKind};
 use super::Launcher;
 use glam::{DVec2, Vec2};
-use omsi_launcher_lib::{display_bus_name, vehicle_type_label};
+use omsi_launcher_lib::{display_bus_name, vehicle_type_label, WeatherInfo};
 use omsi_ui::paint::Align;
 use omsi_ui::{Color, Rect, Weight};
 
@@ -35,8 +35,11 @@ struct BusManufacturer {
 
 #[derive(Default)]
 pub struct DriveView {
-    /// The tab: 0 the vehicle and the environment, 1 the map and the duty.
+    /// The step: 0 the bus, 1 the day and the weather, 2 the map and the duty (see `STEPS`).
     pub tab: usize,
+    /// The page's own left column is folded away: the map takes the whole page, which is all a
+    /// player who only wants to look at it asks of the column (see `sidebar_fold`).
+    pub sidebar_shut: bool,
     pub bus_filter: String,
     /// The original OMSI manufacturer/type hierarchy, cached between content updates.
     bus_manufacturers: std::sync::Arc<Vec<BusManufacturer>>,
@@ -94,8 +97,10 @@ const GO_H: f32 = 44.0;
 
 /// The page's boxes, worked out once a frame: the column on the left (the steps above its
 /// panel), the stage on the right (the bus or the map, its foot under it) and, on the map's
-/// step, the roadbook beside the map. Nothing is drawn over anything else, so nothing shows
-/// through a panel and no label runs under one.
+/// step, the roadbook as a window in the map's own top right. Nothing is drawn over anything
+/// else but that window, which is a note lying on the map rather than a column of its own: the
+/// map keeps the whole stage either way, because seeing more of the map is what the roadbook and
+/// the fold of the column are both for.
 struct Layout {
     steps: Rect,
     panel: Rect,
@@ -107,32 +112,38 @@ struct Layout {
     foot: Rect,
 }
 
+/// The width the page's left column asks for, whether or not it is standing.
+fn column_w(area: Rect) -> f32 {
+    (area.w * 0.32).clamp(340.0, 440.0)
+}
+
 fn layout(l: &Launcher, area: Rect) -> Layout {
-    let col_w = (area.w * 0.32).clamp(340.0, 440.0);
+    // (folding the column is the map's own, so the stage of the bus is never measured differently
+    // from one frame to the next)
+    let col_w = if l.drive.sidebar_shut { 0.0 } else { column_w(area) };
     let steps = Rect::new(area.x, area.y, col_w, HEAD_H);
     let panel = Rect::new(area.x, area.y + HEAD_H + 12.0, col_w, (area.h - HEAD_H - 12.0).max(200.0));
-    let stage = Rect::new(area.x + col_w + GAP, area.y, (area.w - col_w - GAP).max(260.0), area.h);
+    let stage = Rect::new(area.x + col_w + GAP, area.y, (area.right() - area.x - col_w - GAP).max(260.0), area.h);
     let foot = Rect::new(stage.x, stage.bottom() - FOOT_H, stage.w, FOOT_H);
     let view = Rect::new(stage.x, stage.y, stage.w, (stage.h - FOOT_H - 12.0).max(140.0));
     if l.drive.tab != 2 || !l.drive.book_open {
         return Layout { steps, panel, view, clear: view, book: None, foot };
     }
-    let book_w = (view.w * 0.36).clamp(290.0, 380.0);
-    let book = Rect::new(view.right() - book_w, view.y, book_w, view.h);
-    if view.w - book_w - 12.0 >= 360.0 {
-        // room for both: the map beside the roadbook
-        let map = Rect::new(view.x, view.y, view.w - book_w - 12.0, view.h);
-        Layout { steps, panel, view: map, clear: map, book: Some(book), foot }
-    } else {
-        // a narrow window: the roadbook lies over the map's right side, the route is framed
-        // in what it leaves
-        let clear = Rect::new(view.x, view.y, (book.x - view.x - 8.0).max(120.0), view.h);
-        Layout { steps, panel, view, clear, book: Some(book), foot }
-    }
+    // the roadbook: a window of its own in the map's top right corner, a little inside it, tall
+    // enough for a tour's trips and never so tall it is the map's twin
+    let book_w = (view.w * 0.38).clamp(300.0, 400.0).min((view.w - 160.0).max(200.0));
+    let book_h = (view.h * 0.66).clamp(240.0, 440.0).min((view.h - 24.0).max(180.0));
+    let book = Rect::new(view.right() - book_w - 12.0, view.y + 12.0, book_w, book_h);
+    Layout { steps, panel, view, clear: view, book: Some(book), foot }
 }
 
 pub fn draw(l: &mut Launcher, area: Rect) {
     l.drive.tab = l.drive.tab.min(STEPS.len() - 1);
+    // the fold belongs to the map: the bus and the day keep their column - there is nothing to
+    // fold them away for, and it is what keeps the bus's stage where the player left it
+    if l.drive.tab != 2 {
+        l.drive.sidebar_shut = false;
+    }
     let tab = l.drive.tab;
     // a duty chosen already (the last one, read back): its roadbook is open from the start,
     // unless the player put it away
@@ -152,34 +163,164 @@ pub fn draw(l: &mut Launcher, area: Rect) {
     }
     l.ui.p().rounded_border(lay.view, RADIUS, 1.0, EDGE);
 
-    steps(l, lay.steps);
-    l.ui.panel(lay.panel);
-    let inner = Rect::new(lay.panel.x + 18.0, lay.panel.y + 16.0, lay.panel.w - 36.0, lay.panel.h - 32.0);
-    match tab {
-        0 => step_bus(l, inner),
-        1 => step_time(l, inner),
-        _ => duty_panel(l, inner),
+    if !l.drive.sidebar_shut {
+        steps(l, lay.steps);
+        l.ui.panel(lay.panel);
+        let inner = Rect::new(lay.panel.x + 18.0, lay.panel.y + 16.0, lay.panel.w - 36.0, lay.panel.h - 32.0);
+        match tab {
+            0 => step_bus(l, inner),
+            1 => step_time(l, inner),
+            _ => duty_panel(l, inner),
+        }
     }
-
     if tab == 2 {
         let legend_r = legend(l, lay.clear);
-        let handle = match lay.book {
-            Some(b) => {
-                book_panel(l, b);
-                None
-            }
-            None => Some(book_handle(l, lay.clear)),
-        };
-        // (the names and times the map's pixels cannot say, kept off the legend and the
-        // roadbook's button, and inside the map)
-        let avoid: Vec<Rect> = [legend_r, handle].into_iter().flatten().collect();
+        let controls = map_controls(l, lay.view);
+        let handle = lay.book.is_none().then(|| book_handle_rect(lay.clear));
+        // (the names and times the map's pixels cannot say, kept off everything that stands on
+        // the map - the legend, the map's own controls, the roadbook's window or its button -
+        // and drawn before the roadbook, so what the window covers is covered)
+        let avoid: Vec<Rect> = [legend_r, handle, lay.book].into_iter().flatten().chain(controls).collect();
         map_labels(l, lay.clear, &avoid);
+        match lay.book {
+            Some(b) => book_panel(l, b),
+            None => {
+                book_handle(l, lay.clear);
+            }
+        }
     }
     foot(l, lay.foot, tab);
     if tab == 2 {
         l.map_interact(lay.view, lay.clear);
     } else {
         l.showroom_pointer(lay.view);
+    }
+}
+
+/// The map's own controls, at the map's left edge and halfway down it: the button that folds the
+/// page's column away, and - once the column is away, taking the steps and their words with it -
+/// what the first two steps decided, a chip each: the bus, and the clock, the weather and the day
+/// one under another. A chip goes back to the step it speaks for, so the bus or the day is one
+/// click away without bringing the column back first - and the numbers the steps are, which say
+/// nothing about what was chosen, are what the chips say instead. Folding the column is the map's
+/// own: the other two steps keep theirs. Returns the boxes it used (the map's labels keep off
+/// them).
+fn map_controls(l: &mut Launcher, view: Rect) -> Vec<Rect> {
+    const BTN: f32 = 30.0;
+    const GAP: f32 = 6.0;
+    let shut = l.drive.sidebar_shut;
+    let x = view.x + 10.0;
+    let mut out = Vec::new();
+    // (the chips measured before any of them is drawn: the stack is centred as one)
+    let bus = shut.then(|| vec![l.state.bus().map(|b| display_bus_name(&b.name)).unwrap_or_else(|| "No bus chosen".into())]);
+    let when = shut.then(|| when_lines(l));
+    let tall = |lines: &Option<Vec<String>>| lines.as_ref().map(|t| chip_h(t.len()) + GAP).unwrap_or(0.0);
+    let mut y = view.center().y - (tall(&bus) + tall(&when) + BTN) * 0.5;
+    if let (Some(bus), Some(when)) = (bus, when) {
+        let (r, clicked) = map_chip(l, "map-chip-bus", Vec2::new(x, y), "directions_bus", &bus, "The bus: back to the first step");
+        out.push(r);
+        if clicked {
+            l.drive.tab = 0;
+        }
+        y += chip_h(bus.len()) + GAP;
+        let (r, clicked) = map_chip(l, "map-chip-day", Vec2::new(x, y), weather_icon(l), &when, "The day and the weather: back to the second step");
+        out.push(r);
+        if clicked {
+            l.drive.tab = 1;
+        }
+        y += chip_h(when.len()) + GAP;
+    }
+    let r = Rect::new(x, y, BTN, BTN);
+    out.push(r);
+    l.ui.solid(r);
+    let (h, _, clicked) = l.ui.interact(id_of("map-fold"), r);
+    l.ui.p().rounded(r, BTN * 0.5, Color::rgba(14, 14, 14, if h { 0.94 } else { 0.82 }));
+    l.ui.icon(if shut { "chevron_right" } else { "chevron_left" }, r.center(), 17.0, if h { ACCENT } else { TEXT_DIM });
+    l.ui.tooltip(r, if shut { "The sidebar: the bus, the day and the map" } else { "Put the sidebar away: the map takes the whole page" });
+    if clicked {
+        l.drive.sidebar_shut = !shut;
+    }
+    out
+}
+
+/// How a chip's lines are written: the first is the word itself (the bus, the clock), what is
+/// under it what it says (the weather, then the day).
+const CHIP_LINES: [(f32, Weight, Color); 3] = [(12.5, Weight::Medium, TEXT), (11.5, Weight::Regular, TEXT_DIM), (10.5, Weight::Regular, TEXT_FAINT)];
+
+/// How tall a chip of `n` lines comes out: its lines one under another, a little leading between
+/// them, and the room the icon takes above and below.
+fn chip_h(n: usize) -> f32 {
+    CHIP_LINES.iter().take(n).map(|(px, _, _)| px * 1.32).sum::<f32>() + 14.0
+}
+
+/// One of the map's own chips: an icon, then its lines at the map's edge, the card of a step the
+/// map has taken the words of. A click goes back to that step. Returns the box it took and
+/// whether it was clicked.
+fn map_chip(l: &mut Launcher, id: &str, at: Vec2, icon: &str, lines: &[String], tip: &str) -> (Rect, bool) {
+    // (the words as the interface writes them: the box is measured for what is drawn in it)
+    let lines: Vec<String> = lines.iter().map(|t| omsi_ui::tr(t).into_owned()).collect();
+    let w = CHIP_LINES.iter().zip(&lines).map(|((px, weight, _), t)| l.ui.width(t, *px, *weight)).fold(0.0, f32::max);
+    let r = Rect::new(at.x, at.y, (w + 50.0).max(96.0), chip_h(lines.len()));
+    l.ui.solid(r);
+    let (h, _, clicked) = l.ui.interact(id_of(id), r);
+    l.ui.p().rounded(r, RADIUS, Color::rgba(14, 14, 14, if h { 0.94 } else { 0.82 }));
+    l.ui.icon(icon, Vec2::new(r.x + 19.0, r.center().y), 16.0, if h { ACCENT } else { TEXT_DIM });
+    let mut y = r.y + 7.0;
+    for ((px, weight, c), text) in CHIP_LINES.iter().zip(&lines) {
+        l.ui.text_in(text, Rect::new(r.x + 36.0, y, r.w - 44.0, px * 1.32), *px, *weight, *c, Align::Left);
+        y += px * 1.32;
+    }
+    l.ui.tooltip(r, tip);
+    (r, clicked)
+}
+
+/// What the day's step decided, a line each: the clock, the weather, and the day itself - a
+/// server keeps the world's clock and has no day of its own to say.
+fn when_lines(l: &Launcher) -> Vec<String> {
+    let mut lines = vec![clock_line(l), weather_line(l)];
+    let day = date_line(l);
+    if !day.is_empty() {
+        lines.push(day);
+    }
+    lines
+}
+
+/// The icon of what the day's step decided: the weather file's own (snow, rain, fog, a cloud,
+/// the sun), the cycle's arrows, the METAR report's airport, the custom one's dial.
+fn weather_icon(l: &Launcher) -> &'static str {
+    if server_now(l).is_some() {
+        return "partly_cloudy_day";
+    }
+    let w = l.state.choice.weather.as_str();
+    if w.is_empty() {
+        return "wb_sunny";
+    }
+    if w == "cycle" {
+        return "autorenew";
+    }
+    if w.starts_with("metar:") {
+        return "public";
+    }
+    if crate::weather_setup::custom_weather(Some(w)).is_some() {
+        return "tune";
+    }
+    l.state.weathers.iter().find(|x| x.file == w).map(weather_icon_of).unwrap_or("partly_cloudy_day")
+}
+
+/// The icon a weather file deserves: what it says about itself.
+fn weather_icon_of(w: &WeatherInfo) -> &'static str {
+    if w.snow || w.precip.starts_with("snow") {
+        "weather_snowy"
+    } else if w.precip.starts_with("rain") {
+        "rainy"
+    } else if w.fog_m < 1500.0 {
+        "foggy"
+    } else if w.clouds.to_lowercase().contains("overcast") {
+        "cloud"
+    } else if w.clouds.to_lowercase().contains("cumulus") {
+        "partly_cloudy_day"
+    } else {
+        "wb_sunny"
     }
 }
 
@@ -417,9 +558,14 @@ fn book_panel(l: &mut Launcher, r: Rect) {
     step_roadbook(l, Rect::new(r.x + 16.0, r.y + 46.0, r.w - 32.0, r.h - 60.0));
 }
 
-/// The roadbook put away: a button in the map's top right corner. Returns where it is.
+/// Where the roadbook's button stands while the book is away: the map's top right corner.
+fn book_handle_rect(map: Rect) -> Rect {
+    Rect::new(map.right() - 138.0, map.y + 12.0, 126.0, 34.0)
+}
+
+/// The roadbook put away: the button that brings it back. Returns where it is.
 fn book_handle(l: &mut Launcher, map: Rect) -> Rect {
-    let r = Rect::new(map.right() - 138.0, map.y + 12.0, 126.0, 34.0);
+    let r = book_handle_rect(map);
     l.ui.solid(r);
     if l.ui.button("book-open", r, "Roadbook", Some("receipt_long"), ButtonKind::Normal) {
         l.drive.book_open = true;
@@ -530,10 +676,51 @@ fn paint_line(l: &Launcher) -> String {
     }
 }
 
+/// The world a server keeps, when this machine is in somebody else's: its clock and its weather
+/// are what run, whatever was chosen here.
+fn server_now(l: &Launcher) -> Option<omsi_net::ws::ServerInfo> {
+    l.state.joined_server.as_ref().and_then(|a| l.state.server_info.get(a)).and_then(|x| x.1.as_ref().ok()).cloned()
+}
+
+/// The clock the game would start at (on a server: the server's own, in its own words).
+fn clock_line(l: &Launcher) -> String {
+    match server_now(l) {
+        Some(i) => i.time.clone(),
+        None => format!("{:02}:{:02}", l.state.choice.time / 60, l.state.choice.time % 60),
+    }
+}
+
+/// The day the game would start on - the empty string on a server, which keeps no day of its
+/// own to say.
+fn date_line(l: &Launcher) -> String {
+    if server_now(l).is_some() {
+        return String::new();
+    }
+    let (yy, mm, dd) = super::ui::parse_date(&l.state.choice.date);
+    format!("{dd} {} {yy}", super::ui::MONTHS[(mm as usize).clamp(1, 12) - 1])
+}
+
+/// The weather the game would start with: the map's own, a weather file's name, the airport of a
+/// METAR report, the cycle, or what a custom one comes to.
+fn weather_line(l: &Launcher) -> String {
+    if let Some(i) = server_now(l) {
+        return if i.weather.is_empty() { omsi_ui::tr("the map's weather").into_owned() } else { i.weather.clone() };
+    }
+    match l.state.choice.weather.strip_prefix("metar:") {
+        Some(code) => omsi_ui::tr("at %{code}").replace("%{code}", code),
+        None if l.state.choice.weather == "cycle" => omsi_ui::tr("Weather cycle").into_owned(),
+        None if crate::weather_setup::custom_weather(Some(&l.state.choice.weather)).is_some() => {
+            let c = crate::weather_setup::custom_weather(Some(&l.state.choice.weather)).unwrap();
+            format!("{} · {}", omsi_ui::tr("Custom"), custom_weather_summary(&c))
+        }
+        None => l.state.weathers.iter().find(|w| w.file == l.state.choice.weather).map(|w| w.name.clone()).unwrap_or_else(|| omsi_ui::tr("the map's weather").into_owned()),
+    }
+}
+
 /// The chosen day and weather in one line.
 fn start_line(l: &Launcher) -> String {
     // on a server: its clock and its weather, whatever this machine has chosen
-    if let Some(i) = l.state.joined_server.as_ref().and_then(|a| l.state.server_info.get(a)).and_then(|x| x.1.as_ref().ok()) {
+    if let Some(i) = server_now(l) {
         let weather = if i.weather.is_empty() {
             omsi_ui::tr("the map's (the server's)").into_owned()
         } else {
@@ -541,17 +728,7 @@ fn start_line(l: &Launcher) -> String {
         };
         return format!("{} {} · {weather}", i.time, omsi_ui::tr("(the server's clock)"));
     }
-    let weather = match l.state.choice.weather.strip_prefix("metar:") {
-        Some(code) => format!("at {code}"),
-        None if l.state.choice.weather == "cycle" => "weather cycle".into(),
-        None if crate::weather_setup::custom_weather(Some(&l.state.choice.weather)).is_some() => {
-            let c = crate::weather_setup::custom_weather(Some(&l.state.choice.weather)).unwrap();
-            format!("{} · {}", omsi_ui::tr("Custom"), custom_weather_summary(&c))
-        }
-        None => l.state.weathers.iter().find(|w| w.file == l.state.choice.weather).map(|w| w.name.clone()).unwrap_or_else(|| "the map's weather".into()),
-    };
-    let (yy, mm, dd) = super::ui::parse_date(&l.state.choice.date);
-    format!("{:02}:{:02}, {dd} {} {yy} · {weather}", l.state.choice.time / 60, l.state.choice.time % 60, super::ui::MONTHS[(mm as usize).clamp(1, 12) - 1])
+    format!("{}, {} · {}", clock_line(l), date_line(l), weather_line(l))
 }
 
 /// The duty in words: the line and the tour, and when the trip the game would take runs.
@@ -605,11 +782,15 @@ fn map_labels(l: &mut Launcher, map: Rect, avoid: &[Rect]) {
     if let Some(i) = l.mapview.hovered().or_else(|| l.mapview.shown_of(l.state.choice.entry)) {
         if let (Some(name), Some(at)) = (l.mapview.entry_name(i).map(str::to_string), l.mapview.entry_at(i)) {
             if map.contains(at) {
-                let name = if name.chars().count() > 32 { name.chars().take(31).collect::<String>() + "…" } else { name };
-                let w = l.ui.width(&name, 11.5, Weight::Medium) + 14.0;
+                // (the box in the weight the name is drawn in: measured as Medium and drawn as
+                // Bold, it came up a few per cent narrow and the name lost its last letters)
+                let w = l.ui.width(&name, 11.5, Weight::Bold) + 16.0;
                 let right = Rect::new(at.x + 12.0, at.y - 28.0, w, 20.0);
-                let rr = if inside(&right) { right } else { Rect::new(at.x - 12.0 - w, at.y - 28.0, w, 20.0) };
-                if inside(&rr) {
+                let left = Rect::new(at.x - 12.0 - w, at.y - 28.0, w, 20.0);
+                // (the name in full: it used to be cut at thirty-two characters, a trade the map
+                // paid while the column beside it and the roadbook squeezed it. Either side of
+                // its marker is looked for now, wherever there is room and nothing else stands)
+                if let Some(rr) = [right, left].into_iter().find(|r| inside(r) && !taken.iter().any(|t| hits(t, r))) {
                     l.ui.p().rounded(rr, 4.0, ACCENT);
                     l.ui.text_in(&name, rr.pad(7.0, 0.0), 11.5, Weight::Bold, Color::rgba(18, 14, 8, 1.0), Align::Left);
                     taken.push(rr);
@@ -629,14 +810,17 @@ fn map_labels(l: &mut Launcher, map: Rect, avoid: &[Rect]) {
             continue;
         }
         let time = hhmm(st.arr);
-        let w = l.ui.width(&st.name, 11.0, Weight::Medium) + l.ui.width(&time, 11.0, Weight::Bold) + 22.0;
+        // (the card: the time, the name, and the room either side of them - the name given its
+        // own width in the weight it is drawn in, so the fit never has to cut a stop's name)
+        let tw = l.ui.width(&time, 11.0, Weight::Bold);
+        let nw = l.ui.width(&st.name, 11.0, Weight::Medium);
+        let w = tw + nw + 26.0;
         let right = Rect::new(at.x + 9.0, at.y - 9.0, w, 18.0);
         let left = Rect::new(at.x - 9.0 - w, at.y - 9.0, w, 18.0);
         let Some(rr) = [right, left].into_iter().find(|r| inside(r) && !taken.iter().any(|t| hits(t, r))) else { continue };
         l.ui.p().rounded(rr, 4.0, Color::rgba(10, 10, 10, 0.84));
-        let tw = l.ui.width(&time, 11.0, Weight::Bold);
-        l.ui.text_in(&time, Rect::new(rr.x + 6.0, rr.y, tw + 2.0, rr.h), 11.0, Weight::Bold, ACCENT, Align::Left);
-        l.ui.text_in(&st.name, Rect::new(rr.x + 12.0 + tw, rr.y, rr.w - tw - 16.0, rr.h), 11.0, Weight::Medium, TEXT_SOFT, Align::Left);
+        l.ui.text_in(&time, Rect::new(rr.x + 7.0, rr.y, tw + 2.0, rr.h), 11.0, Weight::Bold, ACCENT, Align::Left);
+        l.ui.text_in(&st.name, Rect::new(rr.x + 13.0 + tw, rr.y, nw + 8.0, rr.h), 11.0, Weight::Medium, TEXT_SOFT, Align::Left);
         taken.push(rr);
     }
 }
@@ -1103,20 +1287,7 @@ fn step_time(l: &mut Launcher, r: Rect) {
             continue;
         }
         let vis = if w.fog_m >= 20000.0 { "clear air".to_string() } else { format!("{:.0} m", w.fog_m) };
-        let icon = if w.snow || w.precip.starts_with("snow") {
-            "weather_snowy"
-        } else if w.precip.starts_with("rain") {
-            "rainy"
-        } else if w.fog_m < 1500.0 {
-            "foggy"
-        } else if w.clouds.to_lowercase().contains("overcast") {
-            "cloud"
-        } else if w.clouds.to_lowercase().contains("cumulus") {
-            "partly_cloudy_day"
-        } else {
-            "wb_sunny"
-        };
-        items.push((w.file.clone(), w.name.clone(), format!("{:.0} °C · {} · {vis}", w.temp, w.precip), icon.into(), l.state.fresh.contains_key(&w.file)));
+        items.push((w.file.clone(), w.name.clone(), format!("{:.0} °C · {} · {vis}", w.temp, w.precip), weather_icon_of(&w).into(), l.state.fresh.contains_key(&w.file)));
     }
     if let Some(code) = metar.as_ref() {
         let root = std::path::PathBuf::from(&l.state.config.root);

@@ -21668,6 +21668,22 @@ _version: 2
   de: "Das Fahrzeug und der Tag: zurück zum ersten Reiter"
   zh: "车辆和日期：回到第一个页签"
   zh-tw: "車輛和日期：回到第一個頁籤"
+"The bus: back to the first step":
+  de: "Der Bus: zurück zum ersten Schritt"
+  zh: "车辆：回到第一步"
+  zh-tw: "車輛：回到第一步"
+"The day and the weather: back to the second step":
+  de: "Der Tag und das Wetter: zurück zum zweiten Schritt"
+  zh: "日期和天气：回到第二步"
+  zh-tw: "日期和天氣：回到第二步"
+"The sidebar: the bus, the day and the map":
+  de: "Die Seitenleiste: der Bus, der Tag und die Karte"
+  zh: "侧边栏：车辆、日期和地图"
+  zh-tw: "側邊欄：車輛、日期和地圖"
+"Put the sidebar away: the map takes the whole page":
+  de: "Die Seitenleiste weglegen: die Karte nimmt die ganze Seite"
+  zh: "收起侧边栏：地图占满整页"
+  zh-tw: "收起側邊欄：地圖佔滿整頁"
 "Favourites only":
   de: "Nur Favoriten"
   zh: "只显示收藏的车辆"
@@ -21680,6 +21696,10 @@ _version: 2
   de: "Aus den Favoriten entfernen"
   zh: "取消收藏"
   zh-tw: "取消收藏"
+"at %{code}":
+  de: "in %{code}"
+  zh: "%{code} 实况"
+  zh-tw: "%{code} 實況"
 "(the server's)":
   de: "(des Servers)"
   zh: "（服务器的）"
@@ -21702,6 +21722,14 @@ _version: 2
   es: "Día y tiempo"
   it: "Giorno e meteo"
   nl: "Dag & weer"
+  hu: "Nap és időjárás"
+  pt: "Dia e clima"
+  pt-pt: "Dia e meteorologia"
+  tr: "Gün ve hava durumu"
+  ja: "日付と天候"
+  ko: "날짜와 날씨"
+  zh: "日期与天气"
+  zh-tw: "日期與天氣"
 "Next:":
   ru: "Далее:"
   de: "Weiter:"
