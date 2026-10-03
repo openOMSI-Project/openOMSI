@@ -1013,6 +1013,37 @@ impl ApplicationHandler for App {
                                 t.rot
                             });
                             let fov_setting = self.settings.fov;
+                            // Eased Space return (F1): look + zoom glide home on the
+                            // same ease-out as the viewpoint switch instead of
+                            // teleporting — ahead of the zoom read below, so the
+                            // frame draws this frame's zoom, not the last one's.
+                            // The glide belongs to the camera it started from:
+                            // a switch mid-glide finalizes that camera straight
+                            // ahead instead of saving a partial angle, and
+                            // leaving the view drops it the same way.
+                            let cur = crate::input_script::look_key_of(&self.view, Some(p.cam_choice));
+                            let mine = matches!(&self.f1_reset, Some((.., k)) if *k == cur);
+                            if self.view == "driver" && mine {
+                                if let Some((look_from, zoom_from, t, _)) = self.f1_reset.clone() {
+                                    let (look, zoom, done) =
+                                        crate::input_script::reset_blend(look_from, zoom_from, t + dt);
+                                    if done {
+                                        self.look = (0.0, 0.0);
+                                        self.view_zoom.remove(&self.view);
+                                        self.f1_reset = None;
+                                    } else {
+                                        self.look = look;
+                                        self.view_zoom.insert(self.view.clone(), zoom);
+                                        self.f1_reset = Some((look_from, zoom_from, t + dt, cur));
+                                    }
+                                }
+                            } else if let Some((.., key)) = self.f1_reset.take() {
+                                // camera changed mid-glide, or F1 left: the return
+                                // is done for the camera it started from — store
+                                // it straight ahead, never a partial angle.
+                                self.view_looks.insert(key, (0.0, 0.0));
+                                self.view_zoom.remove("driver");
+                            }
                             let zoom = self.view_zoom.get(&self.view).copied();
                             let finish = move |c: &mut omsi_render::Camera| {
                                 if let Some(r) = tracked_rot {
@@ -1031,7 +1062,7 @@ impl ApplicationHandler for App {
                             let mut cam = p.camera_look(&self.view, &base, self.look, self.orbit);
                             finish(&mut cam);
                             // Smooth cockpit camera switch (arrow keys): the glide mixes the camera left and the one
-                            // taken in the bus's own frame (smootherstep over CAM_BLEND_SECS); the bus's motion and
+                            // taken in the bus's own frame (ease-out over CAM_BLEND_SECS); the bus's motion and
                             // the head go on top afterwards, so nothing of the last frame's picture is needed.
                             {
                                 let inside_view = self.view == "driver";
@@ -1659,6 +1690,7 @@ impl ApplicationHandler for App {
                         self.look = (0.0, 0.0);
                         self.orbit = ORBIT_DEFAULT;
                         self.view_zoom.remove(&self.view);
+                        self.f1_reset = None;
                     }
                 }
                 if self.view != "free" {

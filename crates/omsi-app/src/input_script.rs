@@ -829,12 +829,16 @@ impl App {
 
     /// Zoom the view inside the bus by `notches` of the mouse wheel (in: positive).
     pub(crate) fn zoom_by(&mut self, notches: f32) {
+        // a hand on the zoom cancels an eased Space return.
+        self.f1_reset = None;
         let z = self.view_zoom.entry(self.view.clone()).or_insert(1.0);
         *z = (*z * (1.0 - 0.08 * notches.clamp(-5.0, 5.0))).clamp(0.2, 1.6);
     }
 
     pub(crate) fn look_by(&mut self, dx: f32, dy: f32) {
         self.sync_view_look();
+        // a hand on the view cancels an eased Space return.
+        self.f1_reset = None;
         if self.view == "foot" {
             self.foot_look(dx, dy);
             return;
@@ -1105,6 +1109,8 @@ impl App {
             return false;
         }
         if let Some((y0, v0)) = self.both_drag {
+            // a hand on the zoom cancels an eased Space return.
+            self.f1_reset = None;
             // (0x82c5f8: outside, the distance at the press times 1 + the way up over 500
             // pixels; in the bus the field of view at the press plus the way up over 500
             // pixels times the camera's own, which is also its widest (+0x31c, 0x7edde4):
@@ -3455,20 +3461,52 @@ impl App {
             // (Omsi.exe's camera reset, 0x7edde4, puts back the field of view with the
             // direction: the zoom goes as well, #244)
             "view_reset_direction" => {
-                self.look = (0.0, 0.0);
-                self.view_zoom.remove(&self.view);
+                // F1 eases home (look + zoom glide) from the values in place:
+                // zeroing them first would flash a frame of the destination.
+                if self.view == "driver"
+                    && self.settings.driverview_smooth
+                    && (self.look != (0.0, 0.0) || self.view_zoom.contains_key(&self.view))
+                {
+                    let zoom = self.view_zoom.get(&self.view).copied().unwrap_or(1.0);
+                    let key = self.look_key();
+                    self.f1_reset = Some((self.look, zoom, 0.0, key));
+                } else {
+                    self.f1_reset = None;
+                    self.look = (0.0, 0.0);
+                    self.view_zoom.remove(&self.view);
+                }
                 #[cfg(windows)]
                 if let Some(vr) = self.vr.as_mut() { vr.recenter(); }
             }
             // (Space in Inputs/keyboard.cfg: every view looks ahead again, and back to the
             // standard camera - "center")
             "view_reset_all_directions" => {
-                self.look = (0.0, 0.0);
-                self.view_looks.clear();
-                self.view_zoom.clear();
-                self.orbit = ORBIT_DEFAULT;
+                // F1 eases home (look + zoom glide) from the values in place:
+                // zeroing them first would flash a frame of the destination.
+                // Everything else snaps. The glide belongs to the standard
+                // camera (cam reset first), so a mid-glide switch finalizes it.
+                let zoom = self.view_zoom.get(&self.view).copied().unwrap_or(1.0);
+                let eyed = self.view == "driver"
+                    && self.settings.driverview_smooth
+                    && (self.look != (0.0, 0.0) || self.view_zoom.contains_key(&self.view));
                 if let Some(p) = self.player.as_mut() {
                     p.cam_choice = (0, 0);
+                }
+                self.orbit = ORBIT_DEFAULT;
+                if eyed {
+                    self.view_looks.clear();
+                    self.view_zoom.retain(|k, _| k == "driver");
+                    let key = self.look_key();
+                    self.f1_reset = Some((self.look, zoom, 0.0, key));
+                    // the bookkeeping follows the camera change at once: left
+                    // stale, the next swap would write the old look straight
+                    // back into the previous camera's slot.
+                    self.look_view = self.look_key();
+                } else {
+                    self.f1_reset = None;
+                    self.look = (0.0, 0.0);
+                    self.view_looks.clear();
+                    self.view_zoom.clear();
                 }
             }
             // the next (or the previous) view mode, driver - passenger - outside - map and
@@ -4070,6 +4108,20 @@ pub(crate) fn chase_orbit_step(yaw: f32, pitch: f32, dx_px: f32, dy_px: f32) -> 
     )
 }
 
+/// Eased Space return for the F1 head: look and zoom glide home on the same
+/// ease-out as the viewpoint switch instead of teleporting. `t` seconds in;
+/// returns the current look, zoom and done. Pure (tested below).
+pub(crate) fn reset_blend(look_from: (f32, f32), zoom_from: f32, t: f32) -> ((f32, f32), f32, bool) {
+    let x = (t / crate::app::CAM_BLEND_SECS).clamp(0.0, 1.0);
+    let u = 1.0 - x;
+    let s = 1.0 - u * u * u;
+    (
+        (look_from.0 * (1.0 - s), look_from.1 * (1.0 - s)),
+        zoom_from + (1.0 - zoom_from) * s,
+        x >= 1.0,
+    )
+}
+
 #[cfg(test)]
 mod gear_lever_tests {
     /// The stock cars' gates keep the gear in `antrieb_getr_gang` (#866).
@@ -4136,6 +4188,18 @@ mod look_tests {
         // pitch never leaves the stops, whichever way it is dragged.
         assert_eq!(super::chase_orbit_step(0.0, 0.0, 0.0, -1000.0).1, 25.0);
         assert_eq!(super::chase_orbit_step(0.0, 0.0, 0.0, 1000.0).1, -60.0);
+    }
+
+    #[test]
+    fn space_return_eases_home_like_the_viewpoint_switch() {
+        // start: untouched; partway: well on the way (ease-out); end: exact and done.
+        let (look, zoom, done) = super::reset_blend((30.0, -10.0), 0.5, 0.0);
+        assert_eq!((look, zoom, done), ((30.0, -10.0), 0.5, false));
+        let (look, zoom, done) = super::reset_blend((30.0, -10.0), 0.5, 0.27);
+        assert!(look.0 > 3.0 && look.0 < 27.0 && zoom > 0.5 && zoom < 1.0 && !done);
+        let (look, zoom, done) = super::reset_blend((30.0, -10.0), 0.5, 0.54);
+        assert_eq!((look, zoom, done), ((0.0, 0.0), 1.0, true));
+        assert!(super::reset_blend((30.0, -10.0), 0.5, 5.0).2);
     }
 }
 

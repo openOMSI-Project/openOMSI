@@ -279,6 +279,11 @@ pub(crate) struct App {
     /// The zoom of the views inside the bus (driver, passenger): their field of view is
     /// the camera's times this (the mouse wheel, + and -, a pinch), per view.
     pub(crate) view_zoom: std::collections::HashMap<String, f32>,
+    /// Eased Space return in flight (F1 only): ((look from), (zoom from), seconds in,
+    /// look key it started from). A hand on the view cancels it; other views reset
+    /// instantly. If the camera changes mid-glide, the originating camera is
+    /// finalized straight ahead instead of keeping a partial angle.
+    pub(crate) f1_reset: Option<((f32, f32), f32, f32, String)>,
     pub(crate) orbit: f32,
     pub(crate) frames: u32,
     pub(crate) fps_t: Instant,
@@ -1076,7 +1081,7 @@ pub(crate) fn report_missing_content(w: &World, msg: &mut Option<(String, f32)>)
 
 /// How long the glide between two cockpit cameras takes (seconds). The eye, the turn of the
 /// view and the field of view all follow the same curve over this time. 0 = hard cut.
-pub(crate) const CAM_BLEND_SECS: f32 = 0.6;
+pub(crate) const CAM_BLEND_SECS: f32 = 0.54;
 /// The longest step of time one frame adds to the glide (seconds): a frame that hitches at
 /// the start of a switch does not skip ahead in it.
 pub(crate) const CAM_BLEND_MAX_DT: f32 = 1.0 / 30.0;
@@ -1203,10 +1208,28 @@ impl CamCarry {
 }
 
 impl CamBlend {
-    /// How far along the way from the old camera to the new one: smootherstep of the time
-    /// (no jolt in speed or acceleration at either end).
+    /// How far along the way from the old camera to the new one: ease-out
+    /// `s = 1-(1-t)^3` — fast off the mark, settling softly, so adjacent
+    /// seats snap round without lagging behind the key.
     pub fn progress(&self) -> f32 {
         let t = self.t.clamp(0.0, 1.0);
-        t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+        1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t)
+    }
+}
+
+#[cfg(test)]
+mod cam_blend_tests {
+    use super::CamBlend;
+
+    fn blend(t: f32) -> f32 {
+        CamBlend { key: None, from: None, shown: None, entering: false, t, carry: None }.progress()
+    }
+
+    #[test]
+    fn glide_starts_fast_and_settles_softly() {
+        assert_eq!(blend(0.0), 0.0);
+        assert_eq!(blend(1.0), 1.0);
+        assert!((blend(0.5) - 0.875).abs() < 1e-6);
+        assert!(blend(0.2) > 0.4, "fast off the mark");
     }
 }

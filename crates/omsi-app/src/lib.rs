@@ -487,6 +487,7 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
         mouse_look: false,
         buttons_held: (false, false),
         both_drag: None,
+        f1_reset: None,
         vr_zoom_active: false,
         hover: None,
         hover_part: None,

@@ -1992,7 +1992,8 @@ impl Player {
     /// (the same as `camera_look` makes of the driver's camera).
     pub(crate) fn driver_world(&self, turned: &omsi_vehicle::Camera) -> Camera {
         let (eye, yaw, pitch, roll) = self.vehicle.camera_world_full(turned);
-        let eye = eye + self.vehicle.body_rotation().transform_vector3(self.head + self.seat).as_dvec3();
+        // the driver's eye sits a touch forward of the authored seat point.
+        let eye = eye + self.vehicle.body_rotation().transform_vector3(self.head + self.seat + EYE_NUDGE).as_dvec3();
         Camera { position: eye, yaw, pitch: pitch.clamp(-89.0, 89.0), roll, fov_deg: turned.fov, near: 0.1, far: 6000.0 }
     }
 
@@ -2146,7 +2147,7 @@ impl Player {
                 // cab rocked about it - the "boat" (the body's own motion matches Omsi's).
                 let turned = omsi_vehicle::Camera { yaw: c.yaw + look.0 + if view == "driver" { self.steer_look } else { 0.0 }, pitch: (c.pitch + look.1).clamp(-89.0, 89.0), ..c.clone() };
                 let (eye, yaw, pitch, roll) = self.vehicle.camera_world_full(&turned);
-                let eye = if view == "driver" { eye + self.vehicle.body_rotation().transform_vector3(self.head + self.seat).as_dvec3() } else { eye };
+                let eye = if view == "driver" { eye + self.vehicle.body_rotation().transform_vector3(self.head + self.seat + EYE_NUDGE).as_dvec3() } else { eye };
                 // near 0.1 as in Omsi.exe (every view, 0x6f6aa7); with the reversed float
                 // depth buffer it costs no precision out at 6 km
                 Camera {
@@ -2189,6 +2190,11 @@ pub(crate) fn orbit_pivot(position: DVec3, heading_deg: f64, center: [f32; 3]) -
             .transform_point3(Vec3::new(center[0], center[1], center[2]))
             .as_dvec3()
 }
+
+/// The driver's eye sits a touch forward of the authored seat point (bus frame:
+/// x right, y forward, z up): without it, turning the head shows the inside
+/// of the driver's seat mesh (stock and mod buses alike; OMSI 2 never shows it).
+pub(crate) const EYE_NUDGE: Vec3 = Vec3::new(0.0, 0.12, 0.0);
 
 /// Put a vehicle's meshes where its state says (animations, visibility, lights, the
 /// matrix textures) - the player's bus, and the launcher's showroom bus.
