@@ -1233,14 +1233,18 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
             continue;
         }
         let h2 = rain_hash(vec2<f32>(lane * 1.7 + 8.1, seg * 2.3 + 5.1));
-        let h3 = rain_hash(vec2<f32>(lane * 1.7 + 1.3, seg * 2.3 + 29.7));
         let period = 4.0 + 10.0 * h1.y;
-        let tau = fract(t / period + h2.x) * period;
+        let cycle = t / period + h2.x;
+        let tau = fract(cycle) * period;
+        let h3 = rain_hash(vec2<f32>(lane * 1.7 + 1.3, seg * 2.3 + 29.7)
+                           + floor(cycle) * vec2<f32>(13.0, 41.0));
         // sits and grows a moment, then goes in jerks, then lies still till it dries
         let sit = 0.6 + 1.4 * h2.y;
         let st = max(tau - sit, 0.0);
         let pulse = 0.25 + 0.55 * h3.x;
-        let step_len = (0.02 + 0.04 * h3.y) * (1.0 + 2.0 * blow);
+        // Larger drops overcome pinning more easily. Random surface resistance
+        // modulates their speed; consecutive arrivals do not repeat one track.
+        let step_len = (0.012 + 0.045 * h1.y * h1.y) * (0.8 + 0.4 * h3.y) * (1.0 + blow);
         // Less than one segment: checking this cell and its predecessor sees the
         // complete runner, including its head after it crosses the cell boundary.
         let run_len = 0.18 + 0.27 * h2.y;
@@ -1267,7 +1271,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
             track = max(track, (1.0 - smoothstep(hw * 0.6, hw, abs(dxp))) * vis);
             // A heavy drop draws a narrowing, connected filament behind it. The
             // tail breaks up as the head moves on; lighter runners leave only beads.
-            let tail_len = min(travel, (0.025 + 0.13 * h1.y) * wet);
+            let tail_len = min(travel, (0.04 + 0.22 * h1.y) * wet);
             let tail = smoothstep(travel - tail_len, travel, along);
             let width = rh * (0.12 + 0.35 * tail) * (0.8 + 0.2 * sin(along * 170.0 + h3.x * 6.283185));
             let filament = rain_dome(vec2<f32>(dxp, 0.0), width, px);
@@ -1299,7 +1303,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
     // --- the drops that sit: fine beads, medium drops and larger merged drops.
     for (var layer = 0; layer < 3; layer = layer + 1) {
         let fl = f32(layer);
-        let cellsz = select(select(0.014, 0.0045, layer == 1), 0.009, layer == 2);
+        let cellsz = select(select(0.018, 0.0075, layer == 1), 0.012, layer == 2);
         let turn = 0.61 + fl * 1.37;
         let g2 = rain_turn(scattered, turn) / cellsz + vec2<f32>(fl * 17.3, fl * 5.1);
         let c = floor(g2);
