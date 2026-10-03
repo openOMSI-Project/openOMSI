@@ -1322,7 +1322,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
     }
 
     // where the glass is wetter and where drier, in patches a hand across
-    track = max(track, collectors.b);
+    track = max(track, max(collectors.b, collectors.a));
     let patches = rain_patches(q * 12.0 + 3.1);
     let wetter = 0.2 + 1.6 * patches.x * patches.x;
     // Distort the shared sampling domain, rather than constraining all large
@@ -1382,7 +1382,9 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         let wob = 1.0 + (0.03 + 0.06 * h.y) * wave;
         d = d / max(wob, 0.4);
         d.y = d.y * mix(1.0, 0.88, h.y * h.y * h3.x);
-        let drop = rain_dome(d, r * cellsz, px);
+        // Larger drops on simulated panes belong to the mobile population.
+        let radius = select(r * cellsz, min(r * cellsz, 0.0015), tracked);
+        let drop = rain_dome(d, radius, px);
         let cover = drop.z * present;
         if (cover > best) {
             best = cover;

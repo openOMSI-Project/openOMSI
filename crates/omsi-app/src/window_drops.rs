@@ -94,8 +94,8 @@ impl Drops {
     fn cell(&self, pos: Vec2) -> [usize; 2] {
         let p = pos / self.size;
         [
-            (p.x * self.grid[0] as f32) as usize,
-            (p.y * self.grid[1] as f32) as usize,
+            ((p.x * self.grid[0] as f32) as usize).min(self.grid[0] - 1),
+            ((p.y * self.grid[1] as f32) as usize).min(self.grid[1] - 1),
         ]
     }
 

@@ -49,6 +49,7 @@ struct Film {
     // Negative is a recent wipe's residual film; 0..1 droplets; 1..2 the pushed ridge.
     wet: Vec<f32>,
     unwiped: f32,
+    local: bool,
     image: omsi_texture::Image,
     bounds: [f32; 4],
 }
@@ -214,6 +215,7 @@ impl WindowWipers {
                         points,
                         wet: vec![wetness; SIZE * SIZE],
                         unwiped: wetness,
+                        local: false,
                         image,
                         bounds,
                     });
@@ -270,10 +272,17 @@ impl WindowWipers {
         }
         for film in &mut self.films {
             let liquid = vehicle.host.precip_type != 2.0 || vehicle.host.temperature > 0.0;
+            let previous_wetness = film.unwiped;
             if dt > 0.0 {
                 film.unwiped = (film.unwiped + rate * dt).clamp(0.0, 1.0);
-                for wet in &mut film.wet {
-                    *wet = advance_wetness(*wet, rate, dt);
+                // An untouched pane has uniform wetness. Once it is saturated,
+                // only its moving drops need updates, not every mask pixel.
+                if film.local {
+                    for wet in &mut film.wet {
+                        *wet = advance_wetness(*wet, rate, dt);
+                    }
+                } else if previous_wetness != film.unwiped {
+                    film.wet.fill(film.unwiped);
                 }
                 // Gravity follows the pane's actual inclination. Relative airflow can
                 // carry mobile water sideways/upwards; small pinned beads stay put.
@@ -290,14 +299,16 @@ impl WindowWipers {
                 let force =
                     gravity + air.normalize_or_zero() * (air.length_squared() / 130.0).min(3.0);
                 if liquid {
-                    drain_water(
-                        &mut film.wet,
-                        &film.points,
-                        film.bounds,
-                        force * 0.12,
-                        dt,
-                        &mut self.runoff,
-                    );
+                    if film.local {
+                        drain_water(
+                            &mut film.wet,
+                            &film.points,
+                            film.bounds,
+                            force * 0.12,
+                            dt,
+                            &mut self.runoff,
+                        );
+                    }
                     let wet = &film.wet;
                     let points = &film.points;
                     let bounds = film.bounds;
@@ -328,7 +339,7 @@ impl WindowWipers {
                     }
                     let previous = blade.previous.map(|p| inverse.transform_point3(p));
                     let current = blade.current.map(|p| inverse.transform_point3(p));
-                    wipe(&mut film.wet, &film.points, film.bounds, previous, current);
+                    film.local |= wipe(&mut film.wet, &film.points, film.bounds, previous, current);
                     if liquid {
                         wipe_drops(film, previous, current);
                     }
@@ -355,17 +366,21 @@ impl WindowWipers {
                 }
             }
             let mut changed = false;
-            for (i, (&point, wet)) in film.points.iter().zip(&mut film.wet).enumerate() {
-                let alpha = encode_wetness(if point.is_finite() {
-                    *wet
-                } else {
-                    film.unwiped
-                });
+            if film.local || previous_wetness != film.unwiped {
+                film.local = false;
                 let unwiped = (film.unwiped * 255.0).round() as u8;
-                let pixel = &mut film.image.rgba[i * 4..i * 4 + 4];
-                changed |= pixel[3] != alpha || pixel[2] != unwiped;
-                pixel[2] = unwiped;
-                pixel[3] = alpha;
+                for (i, (&point, wet)) in film.points.iter().zip(&film.wet).enumerate() {
+                    film.local |= point.is_finite() && *wet != film.unwiped;
+                    let alpha = encode_wetness(if point.is_finite() {
+                        *wet
+                    } else {
+                        film.unwiped
+                    });
+                    let pixel = &mut film.image.rgba[i * 4..i * 4 + 4];
+                    changed |= pixel[3] != alpha || pixel[2] != unwiped;
+                    pixel[2] = unwiped;
+                    pixel[3] = alpha;
+                }
             }
             if changed {
                 renderer.update_texture(scene, film.texture, &film.image);
@@ -616,13 +631,13 @@ fn wipe(
     bounds: [f32; 4],
     previous: [Vec3; 2],
     current: [Vec3; 2],
-) {
+) -> bool {
     if previous[0]
         .distance_squared(current[0])
         .max(previous[1].distance_squared(current[1]))
         < 1e-8
     {
-        return; // a parked blade must not continually erase fresh rain
+        return false; // a parked blade must not continually erase fresh rain
     }
     let lo = previous[0].min(previous[1]).min(current[0]).min(current[1]) - Vec3::splat(0.1);
     let hi = previous[0].max(previous[1]).max(current[0]).max(current[1]) + Vec3::splat(0.1);
@@ -654,6 +669,7 @@ fn wipe(
             push_water(wet, points, bounds, previous, current, plane.normal, water);
         }
     }
+    water > 0.0
 }
 
 /// Move collected water to the leading side of the blade. The bounded ridge holds
@@ -899,7 +915,7 @@ mod tests {
         let (points, bounds) = film_points(&data, 0).unwrap();
         for (from, to) in [(start, end), (end, start)] {
             let mut wet = vec![1.0; SIZE * SIZE];
-            wipe(&mut wet, &points, bounds, from, to);
+            assert!(wipe(&mut wet, &points, bounds, from, to));
             for (&p, &wet) in points.iter().zip(&wet) {
                 if p.x < 0.4 {
                     assert!(wet <= 0.004, "{p:?}: {wet}");
@@ -922,10 +938,10 @@ mod tests {
         assert!(points.iter().zip(&wet).any(|(p, w)| p.x < 0.2 && *w > 1.0));
         assert!(wet.iter().all(|w| *w <= 2.0));
         let mut dry = vec![0.0; SIZE * SIZE];
-        wipe(&mut dry, &points, bounds, start, end);
+        assert!(!wipe(&mut dry, &points, bounds, start, end));
         assert!(dry.iter().all(|w| *w == 0.0));
         let mut wet = vec![0.6; SIZE * SIZE];
-        wipe(&mut wet, &points, bounds, start, start);
+        assert!(!wipe(&mut wet, &points, bounds, start, start));
         assert!(wet.iter().all(|w| *w == 0.6));
         let off_glass = start.map(|p| p - Vec3::Y * 0.3);
         wipe(
