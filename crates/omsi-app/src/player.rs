@@ -32,6 +32,26 @@ pub(crate) fn steering_view_yaw(current: f32, steering: f32, dt: f32, enabled: b
     current + (target - current) * (1.0 - (-dt.max(0.0) / response.clamp(0.05, 1.0)).exp())
 }
 
+pub(crate) fn driver_head_look(look: (f32, f32), view: &str, pitch_deg: f32) -> (f32, f32) {
+    if view == "driver" {
+        (look.0, look.1 + pitch_deg)
+    } else {
+        look
+    }
+}
+
+#[cfg(test)]
+mod driver_head_look_tests {
+    use super::driver_head_look;
+
+    #[test]
+    fn head_pitch_adjusts_driver_view_in_any_display_mode_only() {
+        assert_eq!(driver_head_look((4.0, 2.0), "driver", 10.0), (4.0, 12.0));
+        assert_eq!(driver_head_look((4.0, 2.0), "pax", 10.0), (4.0, 2.0));
+        assert_eq!(driver_head_look((4.0, 2.0), "outside", 10.0), (4.0, 2.0));
+    }
+}
+
 fn is_manual_gate_action(name: &str) -> bool {
     let Some(gate) = name.get(..5).filter(|p| p.eq_ignore_ascii_case("kw_s_")).and_then(|_| name.get(5..)) else {
         return false;

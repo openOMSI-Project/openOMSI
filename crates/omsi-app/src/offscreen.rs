@@ -1116,7 +1116,12 @@ pub(crate) fn run_offscreen(
                     p.sync_driver(&renderer, &mut scene, 1.0 / 30.0, settings.driver, args.view == "driver");
                     if args.cam.is_none() && args.view != "free" && args.follow.is_none() {
                         // the head turned as --look says, like the final image
-                        cam = p.camera_look(&args.view, &camera, look_of(args), offscreen_orbit());
+                        let look = crate::player::driver_head_look(
+                            look_of(args),
+                            &args.view,
+                            settings.seat_pitch_deg,
+                        );
+                        cam = p.camera_look(&args.view, &camera, look, offscreen_orbit());
                         if args.view == "outside" {
                             cam = p.camera_clipped(cam, &world, offscreen_orbit(), 0.0);
                         }
@@ -1539,8 +1544,13 @@ pub(crate) fn run_offscreen(
                     })
                     .unwrap_or((1600, 900));
                 // the same camera the picture is taken with, head turn and all
+                let look = crate::player::driver_head_look(
+                    look_of(&args),
+                    &args.view,
+                    settings.seat_pitch_deg,
+                );
                 let cam =
-                    player.camera_look(&args.view, &camera, look_of(&args), offscreen_orbit());
+                    player.camera_look(&args.view, &camera, look, offscreen_orbit());
                 let (o, d) = cursor_ray(&cam, v[0], v[1], w as f32, h as f32);
                 match player.click(o, d, pixel_angle(&cam, h as f32) * 6.0) {
                     Some(i) => log::info!(
@@ -1806,7 +1816,12 @@ pub(crate) fn run_offscreen(
             }
         }
         if args.cam.is_none() && args.view != "free" && args.follow.is_none() {
-            camera = player.camera_look(&args.view, &camera, look_of(&args), offscreen_orbit());
+            let look = crate::player::driver_head_look(
+                look_of(args),
+                &args.view,
+                settings.seat_pitch_deg,
+            );
+            camera = player.camera_look(&args.view, &camera, look, offscreen_orbit());
             if args.view == "outside" {
                 camera = player.camera_clipped(camera, &world, offscreen_orbit(), 0.0);
             }

@@ -329,6 +329,12 @@ view response** sets the smoothing time (50–1000 ms, default 250 ms; larger va
 more slowly). Manual looking remains available. The automatic turn is suppressed while
 VR or an active head tracker controls the view. It is off by default.
 
+Under **Seat position**, **Head pitch** adjusts the driver's neutral view angle up or down
+(-45° to +45°). It applies to the driver's view with any display setup, not just triple
+screens, and is included when taking offscreen screenshots. Manual looking and head tracking
+remain relative to this setting; **Reset the seat position** resets it along with the seat
+offsets.
+
 ## Mods and the content folder
 
 The folder of the game binary (`dist/<platform>` in a build; beside `openOMSI.app` on macOS) is laid out like an OMSI 2

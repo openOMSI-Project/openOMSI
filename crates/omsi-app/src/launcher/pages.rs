@@ -669,6 +669,7 @@ fn driving_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
 fn camera_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, cols: [Rect; 2]) -> [f32; 2] {
     let mut c = Col::new(ui, cols[0], "Driver's view");
     // the driver's eye, moved from the bus's own camera
+    c.section(ui, "Seat position");
     for (key, label, id) in [("seat_y", "Seat forward / back", "s-seaty"), ("seat_z", "Seat up / down", "s-seatz"), ("seat_x", "Seat right / left", "s-seatx")] {
         let mut v = get(s, key).as_f64().unwrap_or(0.0) as f32;
         if ui.slider(id, c.row(), &mut v, -0.6, 0.6, 0.01, label, &|v| format!("{:+.0} cm", v * 100.0)) {
@@ -676,10 +677,16 @@ fn camera_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, co
             *dirty = 0.3;
         }
     }
+    let mut seat_pitch = get(s, "seat_pitch_deg").as_f64().unwrap_or(0.0) as f32;
+    if ui.slider("s-seat-pitch", c.row(), &mut seat_pitch, -45.0, 45.0, 1.0, "Head pitch", &|v| format!("{v:+.0}°")) {
+        s["seat_pitch_deg"] = json!(seat_pitch.round());
+        *dirty = 0.3;
+    }
     if ui.button("s-seatreset", c.row(), "Reset the seat position", Some("restart_alt"), ButtonKind::Normal) {
         for k in ["seat_x", "seat_y", "seat_z"] {
             s[k] = json!(0.0);
         }
+        s["seat_pitch_deg"] = json!(0.0);
         *dirty = 0.3;
     }
     let fov_key = if get(s, "triple_screen").as_bool().unwrap_or(false)
@@ -2456,6 +2463,7 @@ mod settings_tests {
             "s-seaty",
             "s-seatz",
             "s-seatx",
+            "s-seat-pitch",
             "s-seatreset",
             "s-fov",
             "s-look-sens",

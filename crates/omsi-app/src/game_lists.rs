@@ -568,9 +568,11 @@ pub(crate) fn run_move(app: &mut App, kind: &ListKind, action: &str, mv: Move) -
                 }
                 "seat_reset" if step => {
                     app.settings.seat = [0.0; 3];
+                    app.settings.seat_pitch_deg = 0.0;
                     for k in ["seat_x", "seat_y", "seat_z"] {
                         remember_setting(k, "0");
                     }
+                    remember_setting("seat_pitch_deg", "0");
                 }
                 "clock_ontime" if step => {
                     if app.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client) {
@@ -814,6 +816,7 @@ fn steps_of(verb: &str) -> Option<Vec<f32>> {
         "mouse_sens" => (10..=300).map(|v| v as f32 / 100.0).collect(),
         "look_sens" => (2..=40).map(|v| v as f32 * 0.05).collect(),
         "seat" => (-50..=50).map(|v| v as f32 / 100.0).collect(),
+        "seat_pitch" => (-45..=45).map(|v| v as f32).collect(),
         "hour" => (0..24).map(|v| v as f32).collect(),
         "minute" => (0..60).map(|v| v as f32).collect(),
         // the weather, made by hand
@@ -959,6 +962,7 @@ fn option_now(app: &App, verb: &str, arg: &str) -> Option<f32> {
         "steer_look_angle" => s.steer_look_angle,
         "steer_look_response" => s.steer_look_response,
         "seat" => s.seat[arg.trim().parse::<usize>().unwrap_or(0).min(2)],
+        "seat_pitch" => s.seat_pitch_deg,
         "hour" => ((app.clock.time / 3600.0) as i64).rem_euclid(24) as f32,
         "minute" => (((app.clock.time / 60.0) as i64) % 60) as f32,
         "visibility" => app.weather.as_ref()?.fog.0,
@@ -1101,6 +1105,10 @@ fn option_set(app: &mut App, verb: &str, arg: &str, v: f32) -> Option<(&'static 
             let k: usize = arg.trim().parse().unwrap_or(0).min(2);
             app.settings.seat[k] = (v * 100.0).round() / 100.0;
             Some((["seat_x", "seat_y", "seat_z"][k], app.settings.seat[k].to_string()))
+        }
+        "seat_pitch" => {
+            app.settings.seat_pitch_deg = v.clamp(-45.0, 45.0).round();
+            Some(("seat_pitch_deg", app.settings.seat_pitch_deg.to_string()))
         }
         // the clock set directly: the hour or the minute (the seconds stay)
         "hour" | "minute" => {
@@ -2013,6 +2021,7 @@ fn options_pages(app: &App) -> Vec<Page> {
         slider_row(app, "seat 1", "Seat forward and back", "Adjust the driver's seat position forward or backward", &cm),
         slider_row(app, "seat 2", "Seat height", "Adjust the driver's seat height", &cm),
         slider_row(app, "seat 0", "Seat left and right", "Adjust the driver's seat position from side to side", &cm),
+        slider_row(app, "seat_pitch", "Head pitch", "Set the driver's neutral head tilt up or down, independent of the display setup", &|v| format!("{v:+.0}°")),
     ]
         .into_iter()
         .flatten()
