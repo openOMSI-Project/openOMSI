@@ -1098,8 +1098,11 @@ fn rain_dome(d: vec2<f32>, r: f32, px: f32) -> vec3<f32> {
     // (a drop smaller than a pixel fades away rather than flicker: the mist stands in)
     let seen = smoothstep(0.3, 0.9, r / max(px, 1e-6));
     let cover = (1.0 - smoothstep(1.0 - aa, 1.0 + aa, rr)) * seen;
-    let slope = d / max(r, 1e-5) * 0.6;
-    let s = select(slope, slope / max(length(slope), 1e-5) * 0.6, length(slope) > 0.6);
+    // A subpixel cap contains both opposing slopes. Filter its normal before
+    // refraction; using the full rim slope turns fine rain into high-contrast grit.
+    let cap = mix(0.18, 0.6, smoothstep(0.6, 2.0, r / max(px, 1e-6)));
+    let slope = d / max(r, 1e-5) * cap;
+    let s = select(slope, slope / max(length(slope), 1e-5) * cap, length(slope) > cap);
     return vec3<f32>(s, cover);
 }
 
@@ -1466,7 +1469,7 @@ fn rain_behind(world: vec3<f32>, through: vec3<f32>, fallback: vec3<f32>, scale:
     let inside = smoothstep(0.0, 0.06, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
     // A wet film scatters the view. Filter the existing clean scene picture locally:
     // clear glass has a sub-texel footprint, heavy water softens several pixels.
-    let offset = vec2<f32>(1.0, 0.6) * scatter * 8.0 / vec2<f32>(textureDimensions(t_env));
+    let offset = vec2<f32>(1.0, 0.6) * scatter * 4.0 / vec2<f32>(textureDimensions(t_env));
     let a = textureSampleLevel(t_env, s_diffuse, clamp(uv - offset, vec2<f32>(0.001), vec2<f32>(0.999)), 0.0).rgb;
     let b = textureSampleLevel(t_env, s_diffuse, clamp(uv + offset, vec2<f32>(0.001), vec2<f32>(0.999)), 0.0).rgb;
     let seen = finite_or((a + b) * (0.5 * scale), fallback);
