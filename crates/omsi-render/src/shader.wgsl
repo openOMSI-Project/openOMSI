@@ -1203,7 +1203,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
 
     // The wiper pushes a small ridge ahead of its lip. Its height gradient bends
     // the view through this connected water, using the same sample as the droplets.
-    var best = clamp((water - 1.0) * 0.35, 0.0, 1.0);
+    var best = clamp((water - 1.0) * 0.18, 0.0, 1.0);
     let gradient = vec2<f32>((water_dx * duy.y - water_dy * dux.y) / (det * su),
                             (water_dy * dux.x - water_dx * duy.x) / (det * sv));
     if (wiped_film > 0.01 && collectors.a <= 0.01) {
@@ -1213,12 +1213,12 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         if (length(gradient) > 0.01) { along = normalize(vec2<f32>(dot(gradient, side), dot(gradient, down))); }
         let across = vec2<f32>(-along.y, along.x);
         let streak = rain_patches(vec2<f32>(dot(q, across) * 600.0, dot(q, along) * 4.0));
-        let strength = wiped_film * (0.025 + 0.04 * streak.x);
+        let strength = wiped_film * (0.012 + 0.018 * streak.x);
         g.cover = strength;
-        g.n = normalize(out + (side_w * across.x + down_w * across.y) * (streak.y - 0.5) * wiped_film * 0.006);
+        g.n = normalize(out + (side_w * across.x + down_w * across.y) * (streak.y - 0.5) * wiped_film * 0.003);
         return g;
     }
-    var slope = clamp(-0.0003 * vec2<f32>(dot(gradient, side), dot(gradient, down)), vec2<f32>(-0.6), vec2<f32>(0.6)) * best;
+    var slope = clamp(-0.00005 * vec2<f32>(dot(gradient, side), dot(gradient, down)), vec2<f32>(-0.15), vec2<f32>(0.15)) * best;
     // Heavy rain and a strong relative airstream increase coverage. Three larger
     // droplet layers leave room for filtering the view without adding a render pass.
     let density = wet * wet * (1.0 + 0.65 * smoothstep(0.35, 0.9, wet)
@@ -1408,7 +1408,9 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
     // otherwise sharp glass. Runoff clears this film along with the fine drops.
     let film = smoothstep(0.2, 1.0, wet) * 0.7 * (1.0 - track);
     g.mist = clamp(film + mist * (1.0 - track), 0.0, 1.0);
-    slope = slope + (patches - vec2<f32>(0.5)) * film * 0.09 * (1.0 - best);
+    // Unresolved water must soften the view, not retain large, sharp lens ripples.
+    let film_detail = 1.0 - smoothstep(0.003, 0.012, px);
+    slope = slope + (patches - vec2<f32>(0.5)) * film * 0.03 * film_detail * (1.0 - best);
 
     // The CPU map stores slopes along the mesh projection; recover those two
     // directions from the screen derivatives, including a rotated side window.
