@@ -1150,8 +1150,10 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         tracked = abs(depth - pane.z) <= 0.1 && all(pane.xy >= vec2<f32>(0.0)) && all(pane.xy <= vec2<f32>(1.0));
         if (tracked) { collectors = textureSampleLevel(t_bump, s_diffuse, pane.xy, 0.0); }
     }
-    // the pixel's size on the glass
-    let px = max(max(length(dpx), length(dpy)), 1e-5);
+    // Preserve pixel area at oblique angles; the longest axis alone erased
+    // still-visible beads on passenger windows viewed along the bus.
+    let px = max(sqrt(length(cross(dpx, dpy))), 1e-5);
+    let footprint = max(length(dpx), length(dpy));
     let det = dux.x * duy.y - dux.y * duy.x;
     if ((wet <= 0.01 && wiped_film <= 0.01 && collectors.a <= 0.01) || abs(det) < 1e-12) {
         return g;
@@ -1407,9 +1409,12 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
     // Connected water bends the view between visible beads, rather than greying
     // otherwise sharp glass. Runoff clears this film along with the fine drops.
     let film = smoothstep(0.2, 1.0, wet) * 0.7 * (1.0 - track);
-    g.mist = clamp(film + mist * (1.0 - track), 0.0, 1.0);
+    // Unresolved beads contribute partial coverage, not an opaque sheet of water.
+    let film_cover = film * mix(0.35, 1.0, 1.0 - smoothstep(0.0015, 0.006, px));
+    g.mist = clamp(film_cover + mist * (1.0 - track), 0.0, 1.0);
     // Unresolved water must soften the view, not retain large, sharp lens ripples.
-    let film_detail = 1.0 - smoothstep(0.003, 0.012, px);
+    let facing = abs(dot(out, eye));
+    let film_detail = (1.0 - smoothstep(0.003, 0.012, footprint)) * facing * facing;
     slope = slope + (patches - vec2<f32>(0.5)) * film * 0.03 * film_detail * (1.0 - best);
 
     // The CPU map stores slopes along the mesh projection; recover those two
