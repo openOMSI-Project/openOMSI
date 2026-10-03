@@ -258,6 +258,30 @@ impl LuaPlugin {
             })?,
         )?;
         func!("command", String, |io, c| bool => io.command(&c));
+        // the other vehicles around: a list of {id, kind, name, x, y, z, heading}
+        let with6 = with.clone();
+        omsi.set(
+            "others",
+            lua.create_function(move |lua, radius: Option<f64>| {
+                let mut list = Vec::new();
+                with6(&mut |io: &mut dyn PluginIo| list = io.others(radius.unwrap_or(300.0)));
+                let out = lua.create_table()?;
+                for (i, o) in list.into_iter().enumerate() {
+                    let t = lua.create_table()?;
+                    t.set("id", o.id)?;
+                    t.set("kind", o.kind)?;
+                    t.set("name", o.name)?;
+                    t.set("x", o.pos[0])?;
+                    t.set("y", o.pos[1])?;
+                    t.set("z", o.pos[2])?;
+                    t.set("heading", o.pos[3])?;
+                    out.set(i + 1, t)?;
+                }
+                Ok(out)
+            })?,
+        )?;
+        func!("other_var", (u64, String), |io, (id, n)| Option<f32> => io.other_var(id, &n));
+        func!("set_other_var", (u64, String, f32), |io, (id, n, v)| bool => io.set_other_var(id, &n, v));
         let with4 = with.clone();
         omsi.set(
             "vars",

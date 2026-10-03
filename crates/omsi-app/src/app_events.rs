@@ -1392,7 +1392,13 @@ impl ApplicationHandler for App {
                     let info = crate::plugins::game_info(self);
                     let keys = std::mem::take(&mut self.plugin_keys);
                     let plugins = self.plugins.as_mut().unwrap();
-                    let mut io = crate::plugins::Io { vehicle: self.player.as_mut().map(|p| &mut p.vehicle), dt, message: None, info, commands: Vec::new(), keys };
+                    // the vehicles around it: the AI traffic and the other players' buses
+                    let mut others: Vec<(u64, &'static str, &mut omsi_sim::VehicleInstance)> = Vec::new();
+                    if let Some(t) = self.traffic.as_mut() {
+                        others.extend(t.cars.iter_mut().map(|c| (c.id, "ai", &mut c.vehicle)));
+                    }
+                    others.extend(self.remotes.remotes.iter_mut().map(|(id, r)| ((1u64 << 48) | *id as u64, "player", r.vehicle_mut())));
+                    let mut io = crate::plugins::Io { vehicle: self.player.as_mut().map(|p| &mut p.vehicle), others, dt, message: None, info, commands: Vec::new(), keys };
                     plugins.frame(&mut io);
                     let commands = std::mem::take(&mut io.commands);
                     if let Some(m) = io.message {

@@ -656,6 +656,33 @@ pub trait PluginIo {
     fn keys(&self) -> Vec<(String, bool)> {
         Vec::new()
     }
+    /// The other vehicles within `radius` m of the player's (Lua plugins' `omsi.others`):
+    /// the AI traffic and the other LAN players' buses.
+    fn others(&self, _radius: f64) -> Vec<Other> {
+        Vec::new()
+    }
+    /// A variable of one of [`PluginIo::others`] by its id.
+    fn other_var(&mut self, _id: u64, _name: &str) -> Option<f32> {
+        None
+    }
+    /// Writes a variable of one of [`PluginIo::others`] (an AI vehicle's; another player's
+    /// bus takes its values from the network again).
+    fn set_other_var(&mut self, _id: u64, _name: &str, _v: f32) -> bool {
+        false
+    }
+}
+
+/// One of [`PluginIo::others`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Other {
+    /// Stable while the vehicle is there: AI cars by their id, LAN players by theirs.
+    pub id: u64,
+    /// "ai" or "player".
+    pub kind: &'static str,
+    /// Manufacturer and type, as `omsi.vehicle()` gives the player's.
+    pub name: String,
+    /// x, y, z and heading in degrees, as `omsi.position()`.
+    pub pos: [f64; 4],
 }
 
 /// A value of [`PluginIo::info`].

@@ -27,6 +27,8 @@ pub(crate) fn load() -> Plugins {
 /// The game's side of a plugin frame: the player's bus, when there is one.
 pub(crate) struct Io<'a> {
     pub vehicle: Option<&'a mut omsi_sim::VehicleInstance>,
+    /// `omsi.others`: the AI traffic and the other LAN players' buses, by id.
+    pub others: Vec<(u64, &'static str, &'a mut omsi_sim::VehicleInstance)>,
     /// Seconds since the last frame.
     pub dt: f32,
     /// A plugin's `omsi.message`, shown when the frame is done.
@@ -171,5 +173,29 @@ impl PluginIo for Io<'_> {
 
     fn keys(&self) -> Vec<(String, bool)> {
         self.keys.clone()
+    }
+
+    fn others(&self, radius: f64) -> Vec<omsi_plugin::Other> {
+        let Some(me) = self.vehicle.as_ref().map(|v| v.position) else {
+            return Vec::new();
+        };
+        self.others
+            .iter()
+            .filter(|(_, _, v)| (v.position.x - me.x).powi(2) + (v.position.y - me.y).powi(2) <= radius * radius)
+            .map(|(id, kind, v)| omsi_plugin::Other {
+                id: *id,
+                kind,
+                name: format!("{} {}", v.ty.def.manufacturer, v.ty.def.type_name).trim().to_string(),
+                pos: [v.position.x, v.position.y, v.position.z, v.heading],
+            })
+            .collect()
+    }
+
+    fn other_var(&mut self, id: u64, name: &str) -> Option<f32> {
+        self.others.iter().find(|o| o.0 == id)?.2.var(name)
+    }
+
+    fn set_other_var(&mut self, id: u64, name: &str, v: f32) -> bool {
+        self.others.iter_mut().find(|o| o.0 == id).is_some_and(|o| o.2.set_var(name, v))
     }
 }

@@ -89,6 +89,9 @@ have, reads give `nil` and writes do nothing.
 | `omsi.trigger(name)` | a key press: fires the trigger, then `<name>_off` |
 | `omsi.press(name)` / `omsi.release(name)` | holds a key down / lets it go (`name`, later `name_off`) |
 | `omsi.position()` | `x, y, z, heading` of the bus (map metres, degrees), or nothing on foot |
+| `omsi.others(radius)` | the other vehicles within `radius` m of the bus (default 300): a list of `{id, kind, name, x, y, z, heading}`, `kind` being `"ai"` (the traffic) or `"player"` (another player's bus in a LAN game); empty on foot |
+| `omsi.other_var(id, name)` | a script variable of one of them, or `nil` |
+| `omsi.set_other_var(id, name, value)` | sets it; `true` when that vehicle has the variable. An AI vehicle keeps it until its scripts write it again; another player's bus takes its values from the network again |
 
 #### The game
 
