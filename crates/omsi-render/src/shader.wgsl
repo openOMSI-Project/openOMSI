@@ -1095,12 +1095,13 @@ struct RainGlass {
 fn rain_dome(d: vec2<f32>, r: f32, px: f32) -> vec3<f32> {
     let rr = length(d) / max(r, 1e-5);
     let aa = max(px / max(r, 1e-5), 0.02);
-    // (a drop smaller than a pixel fades away rather than flicker: the mist stands in)
-    let seen = smoothstep(0.3, 0.9, r / max(px, 1e-6));
+    // Subpixel drops retain diminishing coverage instead of disappearing at a
+    // fixed cutoff; their opposing slopes average towards the flat pane.
+    let seen = smoothstep(0.0, 0.9, r / max(px, 1e-6));
     let cover = (1.0 - smoothstep(1.0 - aa, 1.0 + aa, rr)) * seen;
     // A subpixel cap contains both opposing slopes. Filter its normal before
     // refraction; using the full rim slope turns fine rain into high-contrast grit.
-    let cap = mix(0.18, 0.6, smoothstep(0.6, 2.0, r / max(px, 1e-6)));
+    let cap = mix(0.18, 0.6, smoothstep(0.6, 2.0, r / max(px, 1e-6))) * seen;
     let slope = d / max(r, 1e-5) * cap;
     let s = select(slope, slope / max(length(slope), 1e-5) * cap, length(slope) > cap);
     return vec3<f32>(s, cover);
