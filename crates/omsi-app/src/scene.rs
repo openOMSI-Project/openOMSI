@@ -625,9 +625,8 @@ pub struct StagedTile {
     base_terrain: Terrain,
     /// `[spline_terrain_align]` splines: (index into `splines`, reach in metres).
     align: Vec<(usize, f32)>,
-    /// The outlines (world x, y) those splines cut out of the ground (see
-    /// `omsi_geometry::spline_hole_outlines`).
-    hole_outlines: Vec<Vec<DVec2>>,
+    /// The hole boundaries in world space, including the profile's authored height.
+    hole_rims: Vec<Vec<DVec3>>,
     water: Option<[f32; 4]>,
     splines: Vec<StagedSpline>,
     /// The whole spline meshes, in the order of `splines`, until the tile is placed.
@@ -764,6 +763,8 @@ pub struct Prepared {
     pub tx: i32,
     pub ty: i32,
     terrain: Option<MeshData>,
+    /// The terrain's exposed sides, drawn separately so the hole mask cannot cut them.
+    hole_walls: MeshData,
     /// Ground painting: for every `[groundtex]` layer above the first that is painted on
     /// this tile, its index and the alpha mask the editor's brush left behind (as read;
     /// [`World::cut_terrain`] turns them into `paint`).
@@ -771,6 +772,8 @@ pub struct Prepared {
     /// The painted layers ready for the GPU: index, mask (with the roads' cut taken out)
     /// and the painted fraction of the tile.
     paint: Vec<(usize, TextureData, f32)>,
+    /// The same brush masks without the hole cut, for the exposed terrain sides.
+    wall_paint: Vec<(usize, TextureData)>,
     /// `tile.map.water`: the height of the tile's water surface at its four corners.
     water: Option<[f32; 4]>,
     /// Spline meshes are local to the tile origin.
@@ -3643,7 +3646,7 @@ impl World {
             path: path.to_path_buf(),
             base_terrain,
             align: Vec::new(),
-            hole_outlines: Vec::new(),
+            hole_rims: Vec::new(),
             water: None,
             splines: Vec::new(),
             meshes: Mutex::new(Some(Vec::new())),
@@ -3772,14 +3775,15 @@ impl World {
                         let p = curve.point_at(curve.length * 0.5);
                         log::info!("aligned spline {} {} mode {mode} mid ({:.1}, {:.1}, {:.1}) heading {:.0}", s.id, s.file, p.x, p.y, p.z, curve.heading_at(curve.length * 0.5));
                     }
-                    for ring in omsi_geometry::spline_hole_outlines(&st.def, &curve, s.mirror, mode) {
+                    for rim in omsi_geometry::spline_hole_rims(&st.def, &curve, s.mirror, mode) {
+                        let ring: Vec<_> = rim.iter().map(|v| v.truncate()).collect();
                         if omsi_geometry::outline_crosses_itself(&ring) {
                             if debug_splines {
                                 log::info!("tile {tx},{ty} spline {} {}: its hole outline crosses itself, no hole (as in Omsi.exe)", s.id, s.file);
                             }
                             continue;
                         }
-                        out.hole_outlines.push(ring);
+                        out.hole_rims.push(rim);
                     }
                 }
                 let bounds = mesh_bounds(&mesh, &Mat4::IDENTITY, origin);
@@ -4351,7 +4355,7 @@ impl World {
         // (Omsi.exe does not move the ground at all when it loads a map: the editor's "align
         // the terrain to the spline" wrote the heights into the tile's `.terrain`, and the
         // flag left in the map only makes the spline cut its outline out of the ground -
-        // see `hole_outlines`. Pulled onto the road again here, every vertex under it took
+        // see `hole_rims`. Pulled onto the road again here, every vertex under it took
         // the height of whatever lay over it, and between those five-metre points the
         // ground's triangles cut through the camber and past the kerbs: a piece of road
         // gone under the grass, while beside it the ground stood lifted over the verge.
@@ -5036,8 +5040,10 @@ impl World {
             tx,
             ty,
             terrain: Some(build_terrain_mesh(terrain)),
+            hole_walls: MeshData::default(),
             paint_masks: self.load_ground_paint(&st.path),
             paint: Vec::new(),
+            wall_paint: Vec::new(),
             water: st.water,
             splines,
             ground_splines,
@@ -5080,6 +5086,7 @@ impl World {
                 let mut order: Vec<&Arc<StagedTile>> = src.values().collect();
                 order.sort_by_key(|q| (q.tx, q.ty));
                 let mut ts = TileSurface::new(SURFACE_RASTER);
+                let mut hole_rims = Vec::new();
                 // meshes the wheels stand on, and of them low objects they climb
                 let mut wheel_meshes = 0usize;
                 let report = |mesh: &MeshData,
@@ -5155,8 +5162,10 @@ impl World {
                         continue;
                     };
                     if omsi_cfg::env::var_os("OMSI_NO_SPLINE_HOLES").is_none() {
-                        for ring in &q.hole_outlines {
-                            ts.add_outline(ring, tx, ty);
+                        for rim in &q.hole_rims {
+                            let ring: Vec<_> = rim.iter().map(|v| v.truncate()).collect();
+                            ts.add_outline(&ring, tx, ty);
+                            hole_rims.push(rim.iter().map(|v| *v - p.origin).collect());
                         }
                     }
                     for (oi, (o, pose)) in q.objects.iter().zip(res.poses.iter()).enumerate() {
@@ -5175,9 +5184,11 @@ impl World {
                                 // and cut exactly along its rim, as along a spline's outline:
                                 // by texel alone the ground stood a metre into the road at
                                 // the edges of a junction (Spandau, Bahnstr./Hansastr.)
-                                for ring in omsi_geometry::hole_mesh_outlines(h, &pose.rot, pose.pos) {
+                                for rim in omsi_geometry::hole_mesh_rims(h, &pose.rot, pose.pos) {
+                                    let ring: Vec<_> = rim.iter().map(|v| v.truncate()).collect();
                                     if !omsi_geometry::outline_crosses_itself(&ring) {
                                         ts.add_outline(&ring, tx, ty);
+                                        hole_rims.push(rim.iter().map(|v| *v - p.origin).collect());
                                     }
                                 }
                             }
@@ -5239,6 +5250,10 @@ impl World {
                 }
                 ts.finish();
                 let tile_terrain = self.terrains.read().get(&key).cloned();
+                p.hole_walls = tile_terrain
+                    .as_ref()
+                    .map(|terrain| omsi_geometry::terrain_hole_walls(&hole_rims, terrain))
+                    .unwrap_or_default();
                 // How much of the ground the old cut rule ("anything below the terrain takes
                 // it away") would have removed with nothing to put in its place: a hole in
                 // the world you can see the sky through.
@@ -5304,6 +5319,7 @@ impl World {
                 // the painted ground layers: where the roads cut the ground away the paint
                 // goes too, and a layer with nothing left on the tile is not drawn
                 let masks = std::mem::take(&mut p.paint_masks);
+                p.wall_paint.clear();
                 p.paint = masks
                     .into_iter()
                     .filter_map(|(layer, img)| {
@@ -5312,6 +5328,22 @@ impl World {
                             img.width as usize,
                             img.height as usize,
                         );
+                        if !p.hole_walls.indices.is_empty()
+                            && rgba.chunks_exact(4).any(|v| v[3] > 8)
+                        {
+                            p.wall_paint.push((
+                                layer,
+                                tile_texture(
+                                    Image {
+                                        width: w as u32,
+                                        height: h as u32,
+                                        rgba: rgba.clone(),
+                                        has_alpha: true,
+                                    },
+                                    true,
+                                ),
+                            ));
+                        }
                         let img = Image {
                             width: w as u32,
                             height: h as u32,
@@ -6327,6 +6359,23 @@ impl World {
                             }
                         };
                         pl.terrain_mapping_mat = Some(uncut);
+                        let wall_id = if p.hole_walls.indices.is_empty() {
+                            None
+                        } else {
+                            let wall = gpu.add_mesh(renderer, scene, &p.hole_walls);
+                            tg.meshes.push(wall);
+                            let wi = instance!(renderer.add_instance(
+                                scene,
+                                wall,
+                                p.origin,
+                                Mat4::IDENTITY,
+                                vec![uncut]
+                            ));
+                            if let Some(inst) = scene.instances.get_mut(wi) {
+                                inst.render_phase = RenderPhase::Terrain;
+                            }
+                            Some(wall)
+                        };
                         // The painted ground: every further [groundtex] the editor's brush put on this
                         // tile is the same tile mesh once more, blended in through its own mask - which
                         // is how OMSI's car parks get their asphalt, its side streets their cobbles and
@@ -6378,6 +6427,54 @@ impl World {
                             }
                             if omsi_cfg::env::var_os("OMSI_DEBUG_SURFACES").is_some() {
                                 log::info!("tile ({}, {}): ground layer {layer} '{}' painted on {:.1} % of the tile, mask {:?}", p.tx, p.ty, gt.texture, painted * 100.0, mask.format);
+                            }
+                        }
+                        // Exposed sides keep the original brush layers. The horizontal ground's
+                        // masks include the hole cut and would erase these vertical faces again.
+                        if let Some(wall) = wall_id {
+                            for (layer, mask) in p.wall_paint.iter().filter(|_| !no_paint) {
+                                let Some(gt) = self.global.ground_textures.get(*layer) else {
+                                    continue;
+                                };
+                                let tex = gpu.add_data(renderer, scene, mask);
+                                tg.textures.push(tex);
+                                let layer_tex = gpu
+                                    .texture(renderer, scene, &gt.texture, &ground_dirs, images)
+                                    .map(|(id, path)| {
+                                        tg.shared_textures.push(path);
+                                        id
+                                    });
+                                let detail = gpu
+                                    .texture(renderer, scene, &gt.detail_texture, &ground_dirs, images)
+                                    .map(|(id, path)| {
+                                        tg.shared_textures.push(path);
+                                        (id, gt.detail_repeats())
+                                    });
+                                let gdirs: Vec<&Path> =
+                                    ground_dirs.iter().map(|p| p.as_path()).collect();
+                                let cfg = self.textures.cfg(&gt.texture, &gdirs);
+                                let m = renderer.add_terrain_layer_material(
+                                    scene,
+                                    layer_tex,
+                                    tex,
+                                    detail,
+                                    gt.repeats(),
+                                    lm,
+                                    if cfg.moisture || cfg.puddles { 1.0 } else { 0.0 },
+                                );
+                                let m = gpu.material(renderer, scene, m);
+                                tg.materials.push(m);
+                                let wi = instance!(renderer.add_surface_instance(
+                                    scene,
+                                    wall,
+                                    p.origin,
+                                    Mat4::IDENTITY,
+                                    vec![m]
+                                ));
+                                if let Some(inst) = scene.instances.get_mut(wi) {
+                                    inst.ground_layer = true;
+                                    inst.render_phase = RenderPhase::Terrain;
+                                }
                             }
                         }
                         // the tile's water surface: one quad at the four corner heights, drawn over the

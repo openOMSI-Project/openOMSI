@@ -6,6 +6,10 @@ use glam::{DVec2, DVec3, Mat4, Quat, Vec2, Vec3};
 use omsi_map::{tile_size, MapSpline, Terrain};
 use omsi_scenery::Spline;
 
+mod hole_rims;
+mod terrain_walls;
+pub use terrain_walls::terrain_hole_walls;
+
 /// A renderable triangle mesh with one texture per material slot.
 #[derive(Debug, Clone, Default)]
 pub struct MeshData {
@@ -498,6 +502,7 @@ pub fn terrain_hole_profiles(def: &Spline) -> Vec<Vec<[f32; 3]>> {
         return def.terrain_hole_profiles.clone();
     }
     const JOIN: f32 = 0.01;
+    const INSET: f32 = 0.03;
     let profiles: Vec<Vec<(f32, f32)>> = def.profiles.iter().map(|p| p.points.iter().map(|q| (q.x, q.z)).collect()).collect();
     let mut used = vec![false; profiles.len()];
     let mut out = Vec::new();
@@ -533,6 +538,12 @@ pub fn terrain_hole_profiles(def: &Spline) -> Vec<Vec<[f32; 3]>> {
                 }
             }
         }
+        // An automatic trough needs positive width after both insets. Thin overhead
+        // wires otherwise produce an inverted cut with terrain walls up to the wire.
+        // Explicit terrainholeprofiles returned above keep their authored dimensions.
+        if xl + INSET >= xr - INSET {
+            continue;
+        }
         let points = || chain.iter().flat_map(|&j| profiles[j].iter().copied());
         let low = points().fold(zl.min(zr), |m, (_, z)| m.min(z));
         let bottom_left = if low < zl {
@@ -546,7 +557,7 @@ pub fn terrain_hole_profiles(def: &Spline) -> Vec<Vec<[f32; 3]>> {
             (xr - xl) * 3.0 / 4.0 + xl
         };
         let low = low - 0.1;
-        out.push(vec![[xl + 0.03, zl - 0.003, 0.0], [bottom_left, low, -0.5], [bottom_right, low, -0.5], [xr - 0.03, zr - 0.003, 0.0]]);
+        out.push(vec![[xl + INSET, zl - 0.003, 0.0], [bottom_left, low, -0.5], [bottom_right, low, -0.5], [xr - INSET, zr - 0.003, 0.0]]);
     }
     out
 }
@@ -561,6 +572,13 @@ pub fn terrain_hole_profiles(def: &Spline) -> Vec<Vec<[f32; 3]>> {
 /// 3 and 4 the near end at the start. A mirrored spline takes the profile backwards and
 /// turned across.
 pub fn spline_hole_outlines(def: &Spline, curve: &SplineCurve, mirror: bool, mode: u8) -> Vec<Vec<DVec2>> {
+    spline_hole_rims(def, curve, mirror, mode).into_iter()
+        .map(|ring| ring.into_iter().map(DVec3::truncate).collect()).collect()
+}
+
+/// The same boundary as [`spline_hole_outlines`], retaining each profile point's height
+/// (including gradient, cant and skew) for the ground's connection to the spline.
+pub fn spline_hole_rims(def: &Spline, curve: &SplineCurve, mirror: bool, mode: u8) -> Vec<Vec<DVec3>> {
     if mode == 0 || curve.length <= 0.0 {
         return Vec::new();
     }
@@ -569,7 +587,7 @@ pub fn spline_hole_outlines(def: &Spline, curve: &SplineCurve, mirror: bool, mod
     let n = n.max(1);
     let l = curve.length;
     let curve = &curve.with_sli(def);
-    let at = |x: f32, s: f64| skewed_point(curve, s, x as f64, 0.0).0.truncate();
+    let at = |q: &[f32; 3], s: f64| skewed_point(curve, s, q[0] as f64, q[1] as f64).0;
     terrain_hole_profiles(def)
         .into_iter()
         .filter(|p| !p.is_empty())
@@ -578,16 +596,16 @@ pub fn spline_hole_outlines(def: &Spline, curve: &SplineCurve, mirror: bool, mod
             let k = p.len();
             let mut ring = Vec::with_capacity(2 * (k + n - 1));
             for i in 1..n {
-                ring.push(at(p[k - 1][0], i as f64 * l / n as f64));
+                ring.push(at(&p[k - 1], i as f64 * l / n as f64));
             }
             for q in p.iter().rev() {
-                ring.push(at(q[0], if mode & 1 == 0 { l } else { l - q[2] as f64 }));
+                ring.push(at(q, if mode & 1 == 0 { l } else { l - q[2] as f64 }));
             }
             for i in (1..n).rev() {
-                ring.push(at(p[0][0], i as f64 * l / n as f64));
+                ring.push(at(&p[0], i as f64 * l / n as f64));
             }
             for q in &p {
-                ring.push(at(q[0], if mode > 2 { 0.0 } else { q[2] as f64 }));
+                ring.push(at(q, if mode > 2 { 0.0 } else { q[2] as f64 }));
             }
             ring
         })
@@ -624,39 +642,51 @@ pub fn outline_crosses_itself(ring: &[DVec2]) -> bool {
 /// The outlines of a `[terrainhole]` cutter, seen from above (world x, y): its open rims,
 /// the edges only one face uses, chained into closed rings. OMSI 2 cuts the ground along an
 /// object's cutter as exactly as along a spline's outline, so a junction's ground ends at its
-/// kerb, not a texel short of it. A closed cutter (no rim) or a rim that branches gives no
-/// ring.
+/// kerb, not a texel short of it. Rims that meet at a vertex are separated using their
+/// incident faces. A closed cutter (no rim) gives no ring.
 /// Positions are the mesh's after `transform`, relative to `origin`.
 pub fn hole_mesh_outlines(mesh: &MeshData, transform: &Mat4, origin: DVec3) -> Vec<Vec<DVec2>> {
+    hole_mesh_rims(mesh, transform, origin).into_iter()
+        .map(|ring| ring.into_iter().map(DVec3::truncate).collect()).collect()
+}
+
+/// The open rims of an object cutter, retaining their transformed world heights.
+/// Touching rims follow the mesh's face adjacency, not the angle of their projection:
+/// a vertical profile can share a corner with a road without joining their boundaries.
+/// Closed meshes still have no rim; no wall height is invented for them.
+pub fn hole_mesh_rims(mesh: &MeshData, transform: &Mat4, origin: DVec3) -> Vec<Vec<DVec3>> {
     use std::collections::HashMap;
     // (a model repeats a vertex for every face and UV seam: the corners by place, to the mm)
     let key = |v: Vec3| ((v.x * 1000.0).round() as i64, (v.y * 1000.0).round() as i64, (v.z * 1000.0).round() as i64);
-    let mut place: HashMap<(i64, i64, i64), DVec2> = HashMap::new();
-    let mut edges: HashMap<((i64, i64, i64), (i64, i64, i64)), u32> = HashMap::new();
+    let mut place: HashMap<(i64, i64, i64), DVec3> = HashMap::new();
+    let mut edges: HashMap<((i64, i64, i64), (i64, i64, i64)), Vec<usize>> = HashMap::new();
+    let mut faces = Vec::new();
     for t in mesh.indices.chunks_exact(3) {
         let k = [0, 1, 2].map(|i| {
             let v = mesh.positions[t[i] as usize];
             let kv = key(v);
-            place.entry(kv).or_insert_with(|| origin.truncate() + transform.transform_point3(v).truncate().as_dvec2());
+            place.entry(kv).or_insert_with(|| origin + transform.transform_point3(v).as_dvec3());
             kv
         });
         if k[0] == k[1] || k[1] == k[2] || k[2] == k[0] {
             continue;
         }
+        let face = faces.len();
+        faces.push(k);
         for i in 0..3 {
             let (a, b) = (k[i], k[(i + 1) % 3]);
-            *edges.entry(if a < b { (a, b) } else { (b, a) }).or_insert(0) += 1;
+            edges.entry(if a < b { (a, b) } else { (b, a) }).or_default().push(face);
         }
     }
     let mut next: HashMap<(i64, i64, i64), Vec<(i64, i64, i64)>> = HashMap::new();
     for ((a, b), n) in &edges {
-        if *n == 1 {
+        if n.len() == 1 {
             next.entry(*a).or_default().push(*b);
             next.entry(*b).or_default().push(*a);
         }
     }
     if next.values().any(|v| v.len() != 2) {
-        return Vec::new();
+        return hole_rims::trace_faces(&faces, &edges, &place);
     }
     let mut starts: Vec<_> = next.keys().copied().collect();
     starts.sort_unstable();
