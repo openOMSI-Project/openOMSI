@@ -722,7 +722,9 @@ fn push_water(
             let d = p - current[0] - edge * t;
             let distance = d.dot(across);
             if d.dot(normal).abs() <= 0.1 && distance > 0.0 && distance < WIDTH {
-                wet[i] = (wet[i] + amount * (1.0 - distance / WIDTH)).min(2.0);
+                // Values above one mark mobile water, even when the wiped
+                // pane carried only a few newly landed drops.
+                wet[i] = (wet[i].max(1.0) + amount * (1.0 - distance / WIDTH)).min(2.0);
             }
         }
     }
@@ -827,7 +829,7 @@ impl SweepTriangle {
     fn coordinates(&self, p: Vec3) -> Option<Vec2> {
         let d = p - self.origin;
         let offset = d.dot(self.depth);
-        if offset.abs() > 0.12 {
+        if !offset.is_finite() || offset.abs() > 0.12 {
             return None;
         }
         // Project along the pane depth, not the slanted sweep's normal: an
@@ -883,6 +885,7 @@ mod tests {
         assert!(sweep.crosses(Vec3::new(0.045, 0.1, 1.1), Vec3::new(0.045, 0.1, 0.2)));
         assert!(!sweep.crosses(Vec3::new(0.2, 0.1, 1.1), Vec3::new(0.2, 0.1, 0.2)));
         assert!(!sweep.contains(Vec3::new(0.045, 0.4, 0.5)));
+        assert!(!sweep.crosses(Vec3::NAN, Vec3::ZERO));
     }
 
     #[test]
@@ -1019,6 +1022,34 @@ mod tests {
             off_glass.map(|p| p + Vec3::X * 0.4),
         );
         assert!(wet.iter().all(|w| *w == 0.6));
+    }
+
+    #[test]
+    fn fresh_rain_is_carried_and_leaves_film_on_subsequent_strokes() {
+        let data = MeshData {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Z, Vec3::X + Vec3::Z],
+            indices: vec![0, 1, 2, 1, 3, 2],
+            ranges: vec![(0, 6, 0)],
+            ..Default::default()
+        };
+        let (points, bounds) = film_points(&data, 0).unwrap();
+        let low = [Vec3::new(0.0, 0.03, 0.2), Vec3::new(1.0, 0.03, 0.2)];
+        let high = low.map(|p| p + Vec3::Z * 0.4);
+        let mut wet = vec![0.0; SIZE * SIZE];
+        for (from, to) in [(low, high), (high, low), (low, high)] {
+            // Fresh arrivals after a previously cleared pane: much less than saturation.
+            wet.fill(0.03);
+            assert!(wipe(&mut wet, &points, bounds, from, to));
+            assert!(points
+                .iter()
+                .zip(&wet)
+                .any(|(p, w)| { (0.25..0.55).contains(&p.z) && *w == WIPED_FILM }));
+            let direction = (to[0].z - from[0].z).signum();
+            assert!(points
+                .iter()
+                .zip(&wet)
+                .any(|(p, w)| { (p.z - to[0].z) * direction > 0.0 && *w > 1.0 }));
+        }
     }
 
     #[test]

@@ -1209,10 +1209,10 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
         var along = vec2<f32>(0.0, 1.0);
         if (length(gradient) > 0.01) { along = normalize(vec2<f32>(dot(gradient, side), dot(gradient, down))); }
         let across = vec2<f32>(-along.y, along.x);
-        let streak = rain_patches(vec2<f32>(dot(q, across) * 140.0, dot(q, along) * 4.0));
-        let strength = wiped_film * (0.025 + 0.12 * pow(streak.x, 4.0));
+        let streak = rain_patches(vec2<f32>(dot(q, across) * 600.0, dot(q, along) * 4.0));
+        let strength = wiped_film * (0.015 + 0.20 * pow(streak.x, 4.0));
         g.cover = strength;
-        g.n = normalize(out + (side_w * across.x + down_w * across.y) * (streak.y - 0.5) * wiped_film * 0.3);
+        g.n = normalize(out + (side_w * across.x + down_w * across.y) * (streak.y - 0.5) * wiped_film * 0.12);
         return g;
     }
     var slope = clamp(-0.0003 * vec2<f32>(dot(gradient, side), dot(gradient, down)), vec2<f32>(-0.6), vec2<f32>(0.6)) * best;
@@ -1326,13 +1326,20 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
     track = max(track, max(collectors.b, collectors.a));
     let patches = rain_patches(q * 12.0 + 3.1);
 
+    // Fine beads converge into the moving water bank before the blade clears
+    // them. This local displacement follows either stroke, without moving the
+    // untouched pane's pattern or adding a particle for every small drop.
+    let lip_gradient = vec2<f32>(dot(gradient, side), dot(gradient, down));
+    let bead_q = q - lip_gradient / max(length(lip_gradient), 1.0)
+                     * clamp(water - 1.0, 0.0, 1.0) * 0.006;
+
     // --- the drops that sit: fine beads, medium drops and larger merged drops.
     for (var layer = 0; layer < 3; layer = layer + 1) {
         if (tracked && layer == 0) { continue; }
         let fl = f32(layer);
         let cellsz = select(select(0.018, 0.005, layer == 1), 0.0085, layer == 2);
         let turn = 0.61 + fl * 1.37;
-        let g2 = rain_turn(q, turn) / cellsz + vec2<f32>(fl * 17.3, fl * 5.1);
+        let g2 = rain_turn(bead_q, turn) / cellsz + vec2<f32>(fl * 17.3, fl * 5.1);
         let c = floor(g2);
         let timing = rain_hash(c + 3.7);
         let life = 4.0 + timing.y * 7.0;
@@ -1392,7 +1399,7 @@ fn rain_glass(world: vec3<f32>, uv: vec2<f32>, n: vec3<f32>, water: f32, t: f32,
     // --- the mist: independently scattered droplets of a millimetre or less
     var grain = 0.0;
     {
-        let mg = rain_turn(q, 0.33) / 0.0028;
+        let mg = rain_turn(bead_q, 0.33) / 0.0028;
         let mc = floor(mg);
         let mh = rain_hash(mc + 71.0);
         let mr = 0.1 + 0.16 * mh.y;
