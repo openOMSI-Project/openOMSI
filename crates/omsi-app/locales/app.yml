@@ -3494,7 +3494,7 @@ _version: 2
   id: "Skor mengemudi (0 terbaik)"
   ms: "Markah memandu (0 terbaik)"
   tl: "Driving score (0 ang pinakamahusay)"
-"comfort"
+"comfort":
   zh: "舒适度"
 "ticket selling":
   ru: "продажа билетов"
@@ -3522,7 +3522,7 @@ _version: 2
   id: "Penjualan tiket"
   ms: "Jualan tiket"
   tl: "Pagbebenta ng tiket"
-"runs"
+"runs":
   zh: "行车数"
 "Recent runs":
   ru: "Последние поездки"
