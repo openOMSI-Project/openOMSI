@@ -947,5 +947,56 @@ mod tests {
         assert!(!p.has_script_var("Velocity"));
         assert!(p.var("PAX_Exit0_Open").is_some());
     }
+
+    /// The fields of a placed object: the lines of the files its `.sco` names under
+    /// `[stringvarnamelist]` are its string variables in order, and the labels of its
+    /// `[object]` record are their values, one for one - a stop sign's picture, a traffic
+    /// light's countdown. A name out of step with its label would show the wrong text.
+    #[test]
+    fn the_stringvarlists_name_the_variables_the_map_fills_in_order() {
+        let dir = std::env::temp_dir().join(format!("omsi_strvars_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // several files, as a stop sign has them, and blank lines the original passes over
+        std::fs::write(dir.join("GF_stringvarlist.txt"), "Plate Image\r\nLine\r\n").unwrap();
+        std::fs::write(dir.join("GF_stringvarlist1.txt"), "\r\nStop Name\r\n\r\n").unwrap();
+        let p = compile(&CompileInput {
+            stringvarlists: vec![dir.join("GF_stringvarlist.txt"), dir.join("GF_stringvarlist1.txt")],
+            ..Default::default()
+        });
+        assert_eq!(p.str_var_names, ["Plate Image", "Line", "Stop Name"]);
+        // the labels of the copy the map placed, put into the variables as it is placed
+        let strings: Vec<String> = ["haltestelle.bmp", "12", "Hauptbahnhof"].iter().map(|s| s.to_string()).collect();
+        let mut st = crate::vm::State::new(&p);
+        for (v, s) in st.str_vars.iter_mut().zip(&strings) {
+            v.clone_from(s);
+        }
+        assert_eq!(st.str_vars[p.str_var("Plate Image").unwrap() as usize], "haltestelle.bmp");
+        assert_eq!(st.str_vars[p.str_var("Line").unwrap() as usize], "12");
+        assert_eq!(st.str_vars[p.str_var("Stop Name").unwrap() as usize], "Hauptbahnhof");
+        // a script reaches them by index too, as Omsi.exe reads a number in a
+        // `[texttexture]` variable (and in `[matl_freetex]`) as one
+        assert_eq!(p.text_texture_var("1"), p.str_var("Line"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A name the varlist writes again does not get a slot of its own: it is the variable
+    /// it already named, so the labels of a placed copy are not shifted (a real object
+    /// writes its eight names three times).
+    #[test]
+    fn a_name_declared_twice_is_one_variable() {
+        let dir = std::env::temp_dir().join(format!("omsi_strvars_dup_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("s.txt"), "Ersatzverkehr\r\nHaltstellennamen\r\nErsatzverkehr\r\nHaltstellennamen\r\n").unwrap();
+        let p = compile(&CompileInput { stringvarlists: vec![dir.join("s.txt")], ..Default::default() });
+        assert_eq!(p.str_var_names, ["Ersatzverkehr", "Haltstellennamen"]);
+        // the second label of the copy is the second name, not a fifth one
+        let strings: Vec<String> = ["ja", "Hauptbahnhof"].iter().map(|s| s.to_string()).collect();
+        let mut st = crate::vm::State::new(&p);
+        for (v, s) in st.str_vars.iter_mut().zip(&strings) {
+            v.clone_from(s);
+        }
+        assert_eq!(st.str_vars[p.str_var("Haltstellennamen").unwrap() as usize], "Hauptbahnhof");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
 

@@ -333,10 +333,17 @@ fn check_models(root: &Path, verbose: bool) {
 fn check_scenery(root: &Path, verbose: bool) {
     let files = files_with_ext(root, &["sco"]);
     let ignored = std::sync::atomic::AtomicUsize::new(0);
+    // a `[stringvarnamelist]` file that is not there: the object's fields (the values the
+    // map fills its string variables with) have no names - as in Omsi.exe, which then
+    // shows them nameless too
+    let nameless = std::sync::atomic::AtomicUsize::new(0);
     let errors: Vec<String> = files
         .par_iter()
         .filter_map(|p| match omsi_scenery::SceneryObject::load(p) {
             Ok(o) => {
+                if o.scripts.stringvarlists.iter().any(|f| !f.exists()) {
+                    nameless.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 // `[collisionmesh]` is a misspelling OMSI ignores as well (it knows only
                 // `[collision_mesh]`): the original's own behaviour, noted, not a failure
                 let ignored_by_omsi = |k: &str| k == "collisionmesh";
@@ -358,6 +365,10 @@ fn check_scenery(root: &Path, verbose: bool) {
     let n = ignored.load(std::sync::atomic::Ordering::Relaxed);
     if n > 0 {
         println!("  note: {n} objects spell [collisionmesh], which Omsi.exe ignores too (no collision shape)");
+    }
+    let n = nameless.load(std::sync::atomic::Ordering::Relaxed);
+    if n > 0 {
+        println!("  note: {n} objects name a [stringvarnamelist] file that is not there: their fields have no name");
     }
     let files = files_with_ext(root, &["sli"]);
     let errors: Vec<String> = files

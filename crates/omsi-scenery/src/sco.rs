@@ -174,7 +174,50 @@ fn read_list(r: &mut omsi_cfg::CfgReader, base: &Path) -> Vec<PathBuf> {
     (0..n).map(|_| omsi_cfg::resolve_path(base, r.str())).filter(|p| !p.as_os_str().is_empty()).collect()
 }
 
+/// One variable name per line, as the original reads a varlist and as the script
+/// compiler does (`omsi_script::compile::read_list` + `declare_str_var`): trimmed, empty
+/// lines passed over, and a name that comes again is the variable it already named - the
+/// compiler hands out one slot per name (`X10 Objekte/Cooper/Modul1_stringvarlist.txt`
+/// writes its eight names three times; Omsi.exe has eight variables for it, not 24).
+/// A file that is not there gives no names - the object simply has none of them.
+fn read_names(files: &[PathBuf]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for p in files {
+        match omsi_cfg::CfgFile::read(p) {
+            Ok(f) => {
+                for l in f.lines.iter().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+                    if seen.insert(l.to_ascii_lowercase()) {
+                        out.push(l.to_string());
+                    }
+                }
+            }
+            Err(e) => log::debug!("{e}"),
+        }
+    }
+    out
+}
+
 impl SceneryObject {
+    /// The names of the object's string variables, in the order the map fills them: the
+    /// lines of the files its `[stringvarnamelist]` names, one name each. The labels of a
+    /// placed copy are those variables in this order - a sign's text, a bush's texture,
+    /// a stop's name, a display's countdown - and they are what OMSI's Labels dialog
+    /// edits. Read exactly as the script compiler reads them, so the n-th name is the
+    /// variable the n-th label fills; an object without a stringvarlist carries values
+    /// that have no name.
+    pub fn string_var_names(&self) -> Vec<String> {
+        read_names(&self.scripts.stringvarlists)
+    }
+
+    /// The names of the object's float variables: the lines of the files its
+    /// `[varnamelist]` names. The map does not fill these - the object's own script sets
+    /// them (a traffic light writes its `Red_light_duration` from the string the map gave
+    /// it), so there is nothing for the map to fill in.
+    pub fn var_names(&self) -> Vec<String> {
+        read_names(&self.scripts.varlists)
+    }
+
     /// Whether the map stores this object's height as it stands (not over the terrain):
     /// Omsi.exe sets that flag (+0x194) at the end of loading the .sco for `[absheight]` and
     /// for every object with a traffic path (0x7b8c66: the path ends `[path]` made, built by
@@ -460,6 +503,36 @@ mod tests {
             (Path::new("objects/model"), "end.o3d"),
             (Path::new("objects"), "cut.o3d"),
         ]);
+    }
+
+    /// The varlists of an object name the fields its placed copies carry in the map: the
+    /// labels of a placed object are its string variables, one value per name.
+    #[test]
+    fn the_varlists_name_the_fields_of_a_placed_object() {
+        let dir = std::env::temp_dir().join(format!("omsi_sco_names_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sco = dir.join("stop.sco");
+        std::fs::write(dir.join("strings.txt"), "BusStop\r\nTexture\r\n").unwrap();
+        std::fs::write(dir.join("vars.txt"), "Delay\r\n\r\n").unwrap();
+        let o = SceneryObject::parse(&CfgFile::from_str(
+            &*sco.to_string_lossy(),
+            "[stringvarnamelist]\n1\nstrings.txt\n[varnamelist]\n1\nvars.txt\n",
+        ));
+        assert_eq!(o.string_var_names(), vec!["BusStop".to_string(), "Texture".to_string()]);
+        assert_eq!(o.var_names(), vec!["Delay".to_string()]);
+        // an object without a varlist: its labels are values without a name
+        let bare = SceneryObject::parse(&CfgFile::from_str(&*dir.join("tree.sco").to_string_lossy(), "[fixed]\n"));
+        assert!(bare.string_var_names().is_empty() && bare.var_names().is_empty());
+        // a name written again names the variable it already named: the compiler gives it
+        // one slot, so the names must not outnumber the values the map writes (a real
+        // object writes its eight names three times - `X10 Objekte/Cooper`)
+        std::fs::write(dir.join("thrice.txt"), "Ersatzverkehr\r\nHaltstellennamen\r\nErsatzverkehr\r\nHaltstellennamen\r\n").unwrap();
+        let again = SceneryObject::parse(&CfgFile::from_str(
+            &*sco.to_string_lossy(),
+            "[stringvarnamelist]\n1\nthrice.txt\n",
+        ));
+        assert_eq!(again.string_var_names(), vec!["Ersatzverkehr".to_string(), "Haltstellennamen".to_string()]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The stock timetable pole: the `attach_trans` after `[complexity]` belongs to the
