@@ -78,7 +78,7 @@ libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Devices_HumanInterfaceDevice", "Win32_Foundation", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi_Common", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 openxr = { version = "0.22", default-features = false, features = ["static"] }
-wgpu-hal = { version = "29", features = ["dx12"] }
+wgpu-hal = { version = "30", features = ["dx12"] }
 
 # macOS: the axes of wheels and pedals straight from their HID elements (see `mac_hid`)
 [target.'cfg(target_os = "macos")'.dependencies]
