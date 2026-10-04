@@ -766,6 +766,7 @@ fn camera_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, co
     toggle_setting(ui, s, dirty, c.row(), "Camera glides between viewpoints", "driverview_smooth");
     toggle_setting(ui, s, dirty, c.row(), "Driver's hands in the cab view", "hands_in_cab");
     toggle_setting(ui, s, dirty, c.row(), "Right mouse button turns the view, Shift+right zooms (off: right zooms as in OMSI, the wheel button turns)", "alt_view");
+    toggle_setting(ui, s, dirty, c.row(), "Precision mouse zoom (FOV curve instead of the linear way)", "precision_zoom");
     let left = c.used();
     let mut c = Col::new(ui, cols[1], "Outside views");
     toggle_setting(ui, s, dirty, c.row(), "Camera collisions (outside view)", "camera_collision");
@@ -2605,6 +2606,7 @@ mod settings_tests {
             "set-driverview_smooth",
             "set-hands_in_cab",
             "set-alt_view",
+            "set-precision_zoom",
             "set-camera_collision",
             "set-driver",
             "set-head_tracking",

@@ -1254,6 +1254,7 @@ fn toggle_now(app: &App, id: &str) -> Option<bool> {
         "texture_compression" => s.texture_compression,
         "driver" => s.driver,
         "alt_view" => s.alt_view,
+        "precision_zoom" => s.precision_zoom,
         "triple_screen" => s.triple.enabled,
         "triple_hud_center" => s.triple_hud_center,
         "triple_span" => s.triple_span,
@@ -1468,6 +1469,10 @@ fn toggle_set(app: &mut App, id: &str, on: bool) -> Option<(&'static str, String
         "alt_view" => {
             app.settings.alt_view = on;
             Some(("alt_view", bit))
+        }
+        "precision_zoom" => {
+            app.settings.precision_zoom = on;
+            Some(("precision_zoom", bit))
         }
         "triple_screen" => {
             app.settings.triple.enabled = on;
@@ -2075,6 +2080,7 @@ fn options_pages(app: &App) -> Vec<Page> {
         slider_row(app, "look_sens", "Mouse look sensitivity", "How fast the view turns when looking round with the mouse (100% is OMSI's)", &pct),
         slider_row(app, "look_smoothing_ms", "Smooth the mouse look", "How long the view takes to come round to where the mouse or the stick turned it (off: at once, as OMSI)", &|v| if v <= 0.0 { "Off".to_string() } else { format!("{v:.0} ms") }),
         switch_row(app, "alt_view", "Right mouse button turns the view", "Shift+right zooms; off: right zooms as in OMSI, the wheel button turns"),
+        switch_row(app, "precision_zoom", "Precision mouse zoom", "The mouse zoom follows the FOV curve instead of OMSI's linear way"),
         slider_row(app, "fov", "Field of view", "Vertical field of view; in triple screen Default uses physical measurements, an override moves the virtual eye", &|v| if v < 20.0 { "Default".to_string() } else { format!("{v:.0}°") }),
         slider_row(app, "seat 1", "Seat forward and back", "Adjust the driver's seat position forward or backward", &cm),
         slider_row(app, "seat 2", "Seat height", "Adjust the driver's seat height", &cm),

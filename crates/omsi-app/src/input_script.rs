@@ -1136,7 +1136,7 @@ impl App {
             if self.view == "outside" {
                 let k = (1.0 + (y0 - y) / 500.0).max(0.05);
                 self.orbit = (v0 * k).clamp(ORBIT_MIN, ORBIT_MAX);
-            } else {
+            } else if self.settings.precision_zoom {
                 // precision zoom from the press anchor (drag down zooms in):
                 // the FOV-multiplier curve instead of the linear way, same
                 // floor. Past the authored field of view it stays linear.
@@ -1148,6 +1148,8 @@ impl App {
                     precision_zoom_step(v0, dy, intent).clamp(0.2, 1.0)
                 };
                 self.view_zoom.insert(self.view.clone(), m);
+            } else {
+                self.view_zoom.insert(self.view.clone(), (v0 + (y0 - y) / 500.0).clamp(0.2, 1.0_f32.max(v0)));
             }
             return false;
         }
@@ -4054,8 +4056,12 @@ impl App {
         // (steering with the mouse: a cross, as OMSI shows it; turning the view with the
         // right button held: the four arrows OMSI shows then, #185)
         // (zooming with the mouse: the up-down arrows, Omsi's crSizeNS)
+        // SIZENS only while the right button really zooms (with `alt_view`
+        // it turns the view instead, and keeps the four arrows).
         let rmb_zoom = self.buttons_held.1
             && !self.mmb_held
+            && !self.settings.alt_view
+            && self.player.is_some()
             && self.both_drag.is_none()
             && matches!(self.view.as_str(), "driver" | "outside" | "pax" | "free");
         let kind: u8 = if self.both_drag.is_some() && self.game_menu.is_none() {
@@ -4204,6 +4210,20 @@ pub(crate) fn precision_zoom_step(mult: f32, dy_px: f32, intent: f32) -> f32 {
 pub(crate) const ZOOM_INTENT_F1: f32 = 0.56;
 /// Outside/free zoom intent: a full 364 px drag takes `z` 0 to 0.70.
 pub(crate) const ZOOM_INTENT: f32 = 0.70;
+
+/// Eased Space return for the F1 head: look and zoom glide home on the same
+/// ease-out as the viewpoint switch instead of teleporting. `t` seconds in;
+/// returns the current look, zoom and done. Pure (tested below).
+pub(crate) fn reset_blend(look_from: (f32, f32), zoom_from: f32, t: f32) -> ((f32, f32), f32, bool) {
+    let x = (t / crate::app::CAM_BLEND_SECS).clamp(0.0, 1.0);
+    let u = 1.0 - x;
+    let s = 1.0 - u * u * u;
+    (
+        (look_from.0 * (1.0 - s), look_from.1 * (1.0 - s)),
+        zoom_from + (1.0 - zoom_from) * s,
+        x >= 1.0,
+    )
+}
 
 #[cfg(test)]
 mod gear_lever_tests {
