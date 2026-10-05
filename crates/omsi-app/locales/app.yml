@@ -24057,7 +24057,7 @@ _version: 2
   fr: "Retour en solo : la carte, l'heure et la météo sont de nouveau les vôtres"
   pt: "Voltar a dirigir sozinho: o mapa, o relógio e o clima voltam a ser seus"
   pt-pt: "Voltar a conduzir sozinho: o mapa, o relógio e a meteorologia voltam a ser seus"
-"Day & weather":
+"Day & weather": 
   ca: "Dia i temps"
   ru: "День и погода"
   de: "Tag & Wetter"
@@ -24072,6 +24072,7 @@ _version: 2
   zh-tw: "日期和天氣"
   pt: "Dia e clima"
   pt-pt: "Dia e meteorologia"
+  hu: "Pálya és időjárás
 "Next:":
   ca: "Següent:"
   ru: "Далее:"
@@ -24087,6 +24088,7 @@ _version: 2
   zh-tw: "下一個："
   pt: "Próximo:"
   pt-pt: "Seguinte:"
+  hu: "Következő"
 "Continue last game":
   ca: "Continua l'última partida"
   ru: "Продолжить игру"
@@ -25021,6 +25023,7 @@ _version: 2
   ca: "El launcher queda en repòs mentre hi ha una partida (cedeix la targeta gràfica al joc)"
   fr: "Le lanceur se met en pause pendant une partie (laisse la carte graphique au jeu)"
   zh-tw: "遊戲運行時啟動器休息（提供遊戲顯示卡）"
+  hu: "A launcher szüneteltetve van, ameddig a játék fut, így a grafikus kártyát csak a játék használja."
 
   pt: "O launcher fica em repouso enquanto um jogo está em execução (deixa a placa de vídeo para o jogo)"
   pt-pt: "O launcher fica em repouso enquanto um jogo está em execução (deixa a placa gráfica para o jogo)"
@@ -25028,6 +25031,7 @@ _version: 2
   ca: "Tres pantalles iguals alineades horitzontalment. OpenXR té prioritat."
   fr: "Trois écrans identiques côte à côte. OpenXR est prioritaire."
   zh-tw: "水平排的三個相等的螢幕。 OpenXR 優先。"
+  hu: "Három egyforma monitor vízszintes sorban. Az OpenXR válik elsődlegessé"
 
   pt: "Três telas iguais lado a lado na horizontal. O OpenXR tem prioridade."
   pt-pt: "Três ecrãs iguais lado a lado na horizontal. O OpenXR tem prioridade."
@@ -25037,6 +25041,7 @@ _version: 2
 
   pt: "Três projeções físicas de tela; o OpenXR tem prioridade"
   pt-pt: "Três projeções físicas de ecrã; o OpenXR tem prioridade"
+  hu: "Tripla-monitoros megjelenítés, az OpenXR válik elsődlegessé"
 "Three screen projections":
   ca: "Projeccions de tres pantalles"
   fr: "Projection sur trois écrans"
@@ -25044,24 +25049,28 @@ _version: 2
 
   pt: "Três projeções de tela"
   pt-pt: "Três projeções de ecrã"
+  hu: "Tripla monitoros kivetülések"
 "Tools":
   ca: "Eines"
   zh-tw: "工具"
 
   pt: "Ferramentas"
   pt-pt: "Ferramentas"
+  hu: "Eszközök"
 "Top left":
   ca: "Superior esquerra"
   zh-tw: "左上"
 
   pt: "Superior esquerdo"
   pt-pt: "Superior esquerdo"
+  hu: "Bal-felső"
 "Top right":
   ca: "Superior dreta"
   zh-tw: "右上"
 
   pt: "Superior direito"
   pt-pt: "Superior direito"
+  hu: "Jobb-felső"
 "Triple screen":
   ca: "Triple pantalla"
   fr: "Triple écran"
@@ -25069,30 +25078,35 @@ _version: 2
 
   pt: "Tela tripla"
   pt-pt: "Ecrã triplo"
+  hu: "Tripla-monitor mód"
 "triple screen: the window spans three monitors, fullscreen is left alone":
   ca: "triple pantalla: la finestra ocupa tres monitors; no es modifica la pantalla completa"
   zh-tw: "三重螢幕：視窗跨越三個顯示器，全螢幕單獨保留"
 
   pt: "tela tripla: a janela ocupa três monitores; a tela cheia não é alterada"
   pt-pt: "ecrã triplo: a janela ocupa três monitores; o ecrã completo não é alterado"
+  hu: "Tripla monitor mód: Az ablak kiterjesztődik a 3 monitorra, egységes teljes képernyőt alkotva."
 "Vertical eye offset":
   ca: "Desplaçament vertical de l'ull"
   zh-tw: "垂直視點偏移"
 
   pt: "Deslocamento vertical dos olhos"
   pt-pt: "Deslocamento vertical dos olhos"
+  hu: "'Virtuális szem' eltolása"
 "Vertical field of view; in triple screen Default uses physical measurements, an override moves the virtual eye":
   ca: "Camp de visió vertical; en triple pantalla, Per defecte fa servir mesures físiques i un valor manual desplaça l'ull virtual"
   zh-tw: "垂直視野；在三重螢幕中預設使用物理測量，覆蓋移動虛擬眼睛"
 
   pt: "Campo de visão vertical; na tela tripla, Padrão usa medidas físicas e uma substituição move o olho virtual"
   pt-pt: "Campo de visão vertical; no ecrã triplo, Predefinição usa medidas físicas e uma substituição move o olho virtual"
+  hu: "Függőleges látómező. Tripla monitornál a Default beállítás fizikai méréseket használ, a felülírt beállítás elmozdítja a kamerát/'virtuális szemet'"
 "Visible panel width":
   ca: "Amplada visible del panell"
   zh-tw: "可見面板寬度"
 
   pt: "Largura visível do painel"
   pt-pt: "Largura visível do painel"
+  hu: "Látható panelszélesség"
 "Visible width of one panel":
   ca: "Amplada visible d'un panell"
   fr: "Largeur visible d'un écran"
@@ -25100,24 +25114,28 @@ _version: 2
 
   pt: "Largura visível de um painel"
   pt-pt: "Largura visível de um painel"
+  hu: "Egy panel látható szélessége"
 "What passengers say":
   ca: "Què diuen els passatgers"
   zh-tw: "乘客語音"
 
   pt: "O que os passageiros dizem"
   pt-pt: "O que os passageiros dizem"
+  hu: "Utasok hangjai"
 "Which keys drive the vehicle":
   ca: "Quines tecles condueixen el vehicle"
   zh-tw: "駕駛車輛的按鍵"
 
   pt: "Quais teclas controlam o veículo"
   pt-pt: "Quais teclas controlam o veículo"
+  hu: "A járművet irányító gombok"
 "Width of one screen without its frame":
   ca: "Amplada d'una pantalla sense el marc"
   zh-tw: "不含邊框的一屏寬度"
 
   pt: "Largura de uma tela sem a moldura"
   pt-pt: "Largura de um ecrã sem a moldura"
+  hu: "Egy képernyő szélessége a kerete nélkül"
 "What each axis and button of a wheel, pedals or joystick does - OMSI 2's gamectrler.cfg, kept in the content folder.":
   ca: "Funció de cada eix i botó d'un volant, pedals o joystick: gamectrler.cfg d'OMSI 2, desat a la carpeta de contingut."
   fr: "Ce que fait chaque axe et bouton d'un volant, d'un pédalier ou d'un joystick - le gamectrler.cfg d'OMSI 2, gardé dans le dossier de contenu."
@@ -25125,6 +25143,7 @@ _version: 2
 
   pt: "O que cada eixo e botão de um volante, pedais ou joystick faz — o gamectrler.cfg do OMSI 2, mantido na pasta de conteúdo."
   pt-pt: "O que cada eixo e botão de um volante, pedais ou joystick faz — o gamectrler.cfg do OMSI 2, mantido na pasta de conteúdo."
+  hu: "A kormányon vagy kontrolleren beállított axis-ok működése - Az OMSI 2 gamectrler.cfg fájlja, ami a játék content könyvtárában van."
 "Window size":
   ca: "Mida de la finestra"
   fr: "Taille de la fenêtre"
@@ -25132,6 +25151,7 @@ _version: 2
 
   pt: "Tamanho da janela"
   pt-pt: "Tamanho da janela"
+  hu: "Ablak mérete"
 "Press \"Reset timetable\" again to put the map's own timetable back (the changes made here are lost)":
   ca: "Torna a prémer «Restableix l'horari» per recuperar l'horari original del mapa (es perdran els canvis fets aquí)"
   fr: "Appuyez de nouveau sur « Réinitialiser l'horaire » pour remettre l'horaire de la carte (les modifications faites ici sont perdues)"
@@ -25139,6 +25159,7 @@ _version: 2
 
   pt: "Pressione \"Redefinir tabela horária\" novamente para restaurar a tabela horária original do mapa (as alterações feitas aqui serão perdidas)"
   pt-pt: "Prima \"Redefinir horário\" novamente para restaurar o horário original do mapa (as alterações feitas aqui serão perdidas)"
+  hu: "Nyomd meg a \"Menetrend visszaállítása\"-t még egyszer, hogy visszaállítsd a pálya eredeti menetrendjét.(A változtatások el fognak veszni!)"
 "Enter takes the first match":
   ca: "Retorn tria la primera coincidència"
   fr: "Entrée choisit le premier résultat"
@@ -25153,10 +25174,12 @@ _version: 2
 
   pt: "Nada encontrado"
   pt-pt: "Nada encontrado"
+  hu: "Semmit sem talált"
 "The Vulkan graphics driver stopped while compiling shaders. Starting the game again will switch to OpenGL (or change it in Settings → Graphics API).":
   ca: "El controlador gràfic Vulkan s'ha aturat en compilar els shaders. En reiniciar, el joc canviarà a OpenGL (també pots canviar-ho a Configuració → API gràfica)."
   fr: "Le pilote graphique Vulkan s'est arrêté pendant la compilation des shaders. Relancer le jeu passera en OpenGL (ou changez-le dans Réglages → API graphique)."
   zh-tw: "Vulkan 圖形驅動程式在編譯著色器時停止。重新啟動遊戲將切換至 OpenGL（或在「設定」→「圖形 API」中變更）。"
+  hu: "A Vulkan grafikus driver leállt a grafikus elemek fordítása közben. A játék újraindításával a grafikus renderelő beállítás automatikusan OpenGL-re fog váltani. (Ezt a Beállítások -> Grafikai API menünél tudod visszaállítani.)"
 
   pt: "O driver gráfico Vulkan parou durante a compilação dos shaders. Ao iniciar o jogo novamente, ele mudará para OpenGL (ou altere em Configurações → API gráfica)."
   pt-pt: "O driver gráfico Vulkan parou durante a compilação dos shaders. Ao iniciar o jogo novamente, mudará para OpenGL (ou altere em Definições → API gráfica)."
@@ -25164,6 +25187,7 @@ _version: 2
   ca: "El sistema ha tancat el joc"
   fr: "Le jeu a été fermé par le système"
   zh-tw: "遊戲已被系統關閉"
+  hu: "A rendszer leállította a játékmenetet."
 
   pt: "O jogo foi fechado pelo sistema"
   pt-pt: "O jogo foi fechado pelo sistema"
@@ -25174,6 +25198,7 @@ _version: 2
 
   pt: "O sistema fechou o jogo enquanto ele estava em execução, normalmente porque o dispositivo ficou sem memória (RAM). Reduzir a resolução das texturas ou o tráfego de IA em Configurações ajuda a evitar falta de memória."
   pt-pt: "O sistema fechou o jogo enquanto estava em execução, normalmente porque o dispositivo ficou sem memória (RAM). Reduzir a resolução das texturas ou o tráfego de IA em Definições ajuda a evitar falta de memória."
+  hu: "A rendszer bezárta a játékot miközben az futott, mert valószínűleg elfogyott a felhasználható memória (RAM). A textúrafelbontás csökkentése vagy az AI-forgalom csökkentése a Beállításokban alacsonyabb mértékű memóriahasználatot tud eredményezni."
 "As the map sets it":
   ca: "Tal com ho estableix el mapa"
   fr: "Comme le prévoit la carte"
@@ -25181,6 +25206,7 @@ _version: 2
 
   pt: "Como definido pelo mapa"
   pt-pt: "Como definido pelo mapa"
+  hu: "A pálya alapbeállítása szerint"
 "Asking…":
   ca: "Consultant…"
   fr: "Demande en cours…"
@@ -25188,6 +25214,7 @@ _version: 2
 
   pt: "Consultando…"
   pt-pt: "A consultar…"
+  hu: "Kérés..."
 "Choose a bus first.":
   ca: "Tria primer un autobús."
   fr: "Choisissez d'abord un bus."
@@ -25195,6 +25222,7 @@ _version: 2
 
   pt: "Escolha primeiro um ônibus."
   pt-pt: "Escolha primeiro um autocarro."
+  hu: "Előbb válassz buszt!"
 "Choose a map":
   ca: "Tria un mapa"
   fr: "Choisissez une carte"
@@ -25202,6 +25230,7 @@ _version: 2
 
   pt: "Escolha um mapa"
   pt-pt: "Escolha um mapa"
+  hu: "Pálya kiválasztása"
 "Choose another weather":
   ca: "Tria un altre temps"
   fr: "Choisir une autre météo"
@@ -25209,6 +25238,7 @@ _version: 2
 
   pt: "Escolher outro clima"
   pt-pt: "Escolher outra meteorologia"
+  hu: "Másik/egyéni időjárás kiválasztása"
 "Choose the bus":
   ca: "Tria l'autobús"
   fr: "Choisir le bus"
@@ -25216,6 +25246,7 @@ _version: 2
 
   pt: "Escolha o ônibus"
   pt-pt: "Escolha o autocarro"
+  hu: "Busz kiválasztása"
 "Choose the livery":
   ca: "Tria la decoració"
   fr: "Choisir la livrée"
@@ -25223,6 +25254,7 @@ _version: 2
 
   pt: "Escolha a pintura"
   pt-pt: "Escolha a pintura"
+  hu: "Festés kiválasztása"
 "Choose the map":
   ca: "Tria el mapa"
   fr: "Choisir la carte"
@@ -25230,6 +25262,7 @@ _version: 2
 
   pt: "Escolha o mapa"
   pt-pt: "Escolha o mapa"
+  hu: "Pálya kiválasztása"
 "Choose the tour":
   ca: "Tria el torn"
   fr: "Choisir le service"
@@ -25237,6 +25270,7 @@ _version: 2
 
   pt: "Escolha a escala"
   pt-pt: "Escolha a escala"
+  hu: "Forda kiválasztása"
 "Current weather (METAR)":
   ca: "Temps actual (METAR)"
   fr: "Météo actuelle (METAR)"
@@ -25244,6 +25278,7 @@ _version: 2
 
   pt: "Clima atual (METAR)"
   pt-pt: "Meteorologia atual (METAR)"
+  hu: "Aktuális időjárás (METAR alapján)"
 "Games running and their logs":
   ca: "Partides en marxa i registres"
   fr: "Parties en cours et leurs journaux"
@@ -25251,6 +25286,7 @@ _version: 2
 
   pt: "Jogos em execução e seus logs"
   pt-pt: "Jogos em execução e os seus registos"
+  hu: "Futó játékmenetek és naplóik"
 "Graphics, sound, gameplay":
   ca: "Gràfics, so i jugabilitat"
   fr: "Graphismes, son, jouabilité"
@@ -25258,18 +25294,21 @@ _version: 2
 
   pt: "Gráficos, som e jogabilidade"
   pt-pt: "Gráficos, som e jogabilidade"
+  hu: "Grafika, Hang és Játékmenet"
 "How fast the view turns when looking round with the mouse (100% is OMSI's)":
   ca: "Velocitat de gir de la vista amb el ratolí (100% correspon a OMSI)"
   zh-tw: "使用滑鼠環視時視圖轉動的速度有多快（100% 是 OMSI 的）"
 
   pt: "Velocidade com que a visão gira ao olhar ao redor com o mouse (100% é o valor do OMSI)"
   pt-pt: "Velocidade com que a vista gira ao olhar em redor com o rato (100% é o valor do OMSI)"
+  hu: "Egérrel mozgatott kamera érzékenysége (a 100%-os beállítás megegyezik az alap OMSI beállításaival!)"
 "How passengers get their tickets":
   ca: "Com obtenen els bitllets els passatgers"
   zh-tw: "乘客如何取票"
 
   pt: "Como os passageiros compram seus bilhetes"
   pt-pt: "Como os passageiros obtêm os seus bilhetes"
+  hu: "Jegyeladási opciók"
 "Learn to drive the buses":
   ca: "Aprèn a conduir els autobusos"
   fr: "Apprendre à conduire les bus"
@@ -25277,6 +25316,7 @@ _version: 2
 
   pt: "Aprenda a dirigir os ônibus"
   pt-pt: "Aprenda a conduzir os autocarros"
+  hu: "Tanuld meg vezetni a buszokat!"
 "Left screen angle":
   ca: "Angle de la pantalla esquerra"
   zh-tw: "左螢幕角度"
@@ -25290,6 +25330,7 @@ _version: 2
 
   pt: "Linha ou direção livre"
   pt-pt: "Linha ou condução livre"
+  hu: "Menetrendi vagy szabad vezetés"
 "Looking for the server…":
   ca: "Cercant el servidor…"
   fr: "Recherche du serveur…"
@@ -25297,6 +25338,7 @@ _version: 2
 
   pt: "Procurando o servidor…"
   pt-pt: "À procura do servidor…"
+  hu: "Szerver keresése..."
 "Name":
   ca: "Nom"
   fr: "Nom"
@@ -25304,6 +25346,7 @@ _version: 2
 
   pt: "Nome"
   pt-pt: "Nome"
+  hu: "Név"
 "No timetable: drive where you like, the buses and traffic about you":
   ca: "Sense horari: condueix on vulguis, amb autobusos i trànsit al voltant"
   fr: "Sans horaire : roulez où vous voulez, avec les bus et la circulation autour de vous"
@@ -25311,6 +25354,7 @@ _version: 2
 
   pt: "Sem tabela horária: dirija por onde quiser, com ônibus e trânsito ao seu redor"
   pt-pt: "Sem horário: conduza por onde quiser, com autocarros e trânsito à sua volta"
+  hu: "Szabad vezetés menetrend nékül"
 "Online":
   ca: "En línia"
   fr: "En ligne"
@@ -25318,36 +25362,42 @@ _version: 2
 
   pt: "Online"
   pt-pt: "Online"
+  hu: "Online"
 "Options":
   ca: "Opcions"
   zh-tw: "選項"
 
   pt: "Opções"
   pt-pt: "Opções"
+  hu: "Beállítások"
 "Overcast":
   ca: "Cel cobert"
   zh-tw: "陰天"
 
   pt: "Encoberto"
   pt-pt: "Encoberto"
+  hu: "Borult"
 "Overcast 1":
   ca: "Cel cobert 1"
   zh-tw: "陰天 1"
 
   pt: "Encoberto 1"
   pt-pt: "Encoberto 1"
+  hu: "Borulás 1"
 "Place a vehicle":
   ca: "Col·loca un vehicle"
   zh-tw: "放置車輛"
 
   pt: "Colocar um veículo"
   pt-pt: "Colocar um veículo"
+  hu: "Busz lerakása"
 "Place a vehicle of your choice":
   ca: "Col·loca el vehicle que vulguis"
   zh-tw: "放置你選擇的車輛"
 
   pt: "Colocar um veículo à sua escolha"
   pt-pt: "Colocar um veículo à sua escolha"
+  hu: "Saját busz lerakása"
 "Play":
   ca: "Juga"
   fr: "Jouer"
@@ -25355,6 +25405,7 @@ _version: 2
 
   pt: "Jogar"
   pt-pt: "Jogar"
+  hu: "Játék"
 "Remove server":
   ca: "Elimina el servidor"
   fr: "Retirer le serveur"
@@ -25362,10 +25413,12 @@ _version: 2
 
   pt: "Remover servidor"
   pt-pt: "Remover servidor"
+  hu: "Szerver eltávolítása"
 "The METAR is fetched when the game starts.":
   ca: "El METAR es consulta en iniciar el joc."
   fr: "Le METAR est récupéré au lancement du jeu."
   zh-tw: "遊戲開始時會取得 METAR 數據。"
+  hu: "A METAR/ Élő Időjárás a játék indulásakor kerül lekérdezésre"
 
   pt: "O METAR é consultado quando o jogo inicia."
   pt-pt: "O METAR é consultado quando o jogo inicia."
@@ -25373,6 +25426,7 @@ _version: 2
   ca: "La carpeta d'OMSI 2 i el contingut"
   fr: "Le dossier OMSI 2 et le contenu"
   zh-tw: "OMSI 2 資料夾和內容"
+  hu: "Az OMSI 2 mappa tartalma"
 
   pt: "A pasta do OMSI 2 e o conteúdo"
   pt-pt: "A pasta do OMSI 2 e os conteúdos"
@@ -25383,10 +25437,12 @@ _version: 2
 
   pt: "As linhas e viagens do mapa"
   pt-pt: "As linhas e viagens do mapa"
+  hu: "A pálya vonalai és fordái"
 "The map's weather":
   ca: "El temps del mapa"
   fr: "La météo de la carte"
   zh-tw: "地圖天氣"
+  hu: "A pálya időjárása"
 
   pt: "O clima do mapa"
   pt-pt: "A meteorologia do mapa"
@@ -25394,6 +25450,7 @@ _version: 2
   ca: "Hora i temps"
   fr: "Heure et météo"
   zh-tw: "時間與天氣"
+  hu: "Idő és időjárás"
 
   pt: "Hora e clima"
   pt-pt: "Hora e meteorologia"
@@ -25401,6 +25458,7 @@ _version: 2
   ca: "Controls tàctils, volants i comandaments"
   fr: "Tactile, volants et manettes"
   zh-tw: "觸摸、方向盤和遊戲手柄"
+  hu: "Érintőképernyők, kormányok és kontrollerek"
 
   pt: "Toque, volantes e gamepads"
   pt-pt: "Toque, volantes e comandos"
@@ -25410,12 +25468,14 @@ _version: 2
 
   pt: "Trânsito e pessoas"
   pt-pt: "Trânsito e pessoas"
+  hu: "Forgalom és emberek"
 "Treat the road surface as snow-covered.":
   ca: "Tracta el paviment com si estigués cobert de neu."
   zh-tw: "將路面視為積雪。"
 
   pt: "Tratar a superfície da pista como coberta de neve."
   pt-pt: "Tratar a superfície da estrada como coberta de neve."
+  hu: "Útfelületek kezelése csúszósként/hóval borítottként"
 "Visibility, wind, temperature, rain, snow and road state":
   ca: "Visibilitat, vent, temperatura, pluja, neu i estat de la carretera"
   fr: "Visibilité, vent, température, pluie, neige et état de la route"
@@ -25423,6 +25483,7 @@ _version: 2
 
   pt: "Visibilidade, vento, temperatura, chuva, neve e estado da pista"
   pt-pt: "Visibilidade, vento, temperatura, chuva, neve e estado da estrada"
+  hu: "Látótávolság, szél, hőmérséklet, eső, hó és útállapot"
 "Your driver, level and records":
   ca: "El teu conductor, nivell i registres"
   fr: "Votre conducteur, son niveau et ses records"
@@ -25430,18 +25491,22 @@ _version: 2
 
   pt: "Seu motorista, nível e recordes"
   pt-pt: "O seu condutor, nível e recordes"
+  hu: "A sofőröd szintje és adatai"
 "VR":
   ca: "RV"
   zh-tw: "VR"
 
   pt: "VR"
   pt-pt: "VR"
+  hu: "VR"
 "A right click ends the mouse steering":
   ca: "Un clic dret desactiva la direcció amb ratolí"
   zh-tw: "按一下滑鼠右鍵即可停止滑鼠轉向"
 
   pt: "Um clique com o botão direito encerra a direção pelo mouse"
   pt-pt: "Um clique com o botão direito termina a direção pelo rato"
+
+  hu: "A jobb-klikk kikapcsolja az egeres kormányzást"
 "Natural weather":
   ca: "Temps natural"
   pt: "Clima natural"
@@ -25450,6 +25515,7 @@ _version: 2
   pl: "Naturalna pogoda"
   fr: "Météo naturelle"
   zh-tw: "自然天氣"
+  hu: "Természetes időjárás"
 
 "Develops by itself through the day and the season":
   ca: "Evoluciona per si sol segons el moment del dia i l'estació"
@@ -25459,6 +25525,7 @@ _version: 2
   pl: "Rozwija się sama w ciągu dnia i pory roku"
   fr: "Évolue d'elle-même au fil de la journée et de la saison"
   zh-tw: "隨一天與季節自行演變"
+  hu: "A nap és az évszak függvényében dinamikusan változik"
 
 "H-pattern shifter: return to neutral when the gear is released":
   ca: "Canvi en H: torna a punt mort en deixar anar la marxa"
@@ -25554,6 +25621,7 @@ _version: 2
   it: "Disconnesso dal server"
   nl: "Verbinding met de server verbroken"
   tr: "Sunucu bağlantısı kesildi"
+  hu: "Lecsatlakoztatva a szerverről"
 "The server ended your game. Its message:":
   ca: "El servidor ha finalitzat la teva partida. El seu missatge:"
   ru: "Сервер завершил вашу игру. Его сообщение:"
@@ -25568,6 +25636,7 @@ _version: 2
   it: "Il server ha chiuso la tua partita. Il suo messaggio:"
   nl: "De server heeft je spel beëindigd. Zijn bericht:"
   tr: "Sunucu oyununu sonlandırdı. Mesajı:"
+  hu: "A szerver az alábbi üzenettel leállította a játékmeneted:"
 "the host has sent you away from this session":
   ca: "l'amfitrió t'ha expulsat d'aquesta sessió"
   ru: "хост выгнал вас из этой сессии"
@@ -25582,3 +25651,4 @@ _version: 2
   it: "l’host ti ha escluso da questa sessione"
   nl: "de host heeft je uit deze sessie gestuurd"
   tr: "ev sahibi seni bu oturumdan attı"
+  hu: "A hoszt kitette a szűröd a játékmenetből"
