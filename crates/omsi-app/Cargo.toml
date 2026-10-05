@@ -95,5 +95,5 @@ ct2rs = { version = "0.9.17", default-features = false, features = ["tokenizers"
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { workspace = true, features = ["android-native-activity"] }
 android_logger = "0.14"
-jni = "0.21"
+jni = "0.22"
 ndk-context = "0.1"

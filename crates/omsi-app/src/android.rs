@@ -538,16 +538,17 @@ fn call_activity_int(name: &str, arg: i32) -> Option<()> {
     let ctx = ndk_context::android_context();
     // SAFETY: the VM ndk_context was given and the activity android-activity holds live as
     // long as the program
-    let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.ok()?;
-    let mut env = vm.attach_current_thread().ok()?;
-    let activity = unsafe { jni::objects::JObject::from_raw(activity_ptr().cast()) };
-    let r = env.call_method(&activity, name, "(I)V", &[jni::objects::JValue::Int(arg)]);
-    if r.is_err() {
-        let _ = env.exception_clear();
-    }
-    // (the activity is not ours to delete: it was lent)
-    std::mem::forget(activity);
-    Some(())
+    let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) };
+    let name = jni::strings::JNIString::from(name);
+    vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+        // (the activity is not ours to delete: it was lent; a JObject deletes nothing)
+        let activity = unsafe { jni::objects::JObject::from_raw(env, activity_ptr().cast()) };
+        if env.call_method(&activity, &name, jni::jni_sig!("(I)V"), &[jni::objects::JValue::Int(arg)]).is_err() {
+            env.exception_clear();
+        }
+        Ok(())
+    })
+    .ok()
 }
 
 pub(crate) fn vibrate(ms: u32) {
@@ -562,19 +563,22 @@ pub(crate) fn vibrate(ms: u32) {
 
 /// Run `f` with the Java environment and the activity (None when Java is out of reach or
 /// the call threw).
-fn with_activity<R>(f: impl FnOnce(&mut jni::JNIEnv, &jni::objects::JObject) -> jni::errors::Result<R>) -> Option<R> {
+fn with_activity<R>(f: impl FnOnce(&mut jni::Env, &jni::objects::JObject) -> jni::errors::Result<R>) -> Option<R> {
     let ctx = ndk_context::android_context();
     // SAFETY: as in `call_activity_int`
-    let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.ok()?;
-    let mut env = vm.attach_current_thread().ok()?;
-    let activity = unsafe { jni::objects::JObject::from_raw(activity_ptr().cast()) };
-    let r = f(&mut env, &activity);
+    let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) };
+    let r = vm.attach_current_thread(|env| {
+        let activity = unsafe { jni::objects::JObject::from_raw(env, activity_ptr().cast()) };
+        let r = f(env, &activity);
+        if r.is_err() && env.exception_check() {
+            env.exception_describe();
+            env.exception_clear();
+        }
+        r
+    });
     if let Err(e) = &r {
         log::warn!("Java call failed: {e}");
-        let _ = env.exception_describe();
-        let _ = env.exception_clear();
     }
-    std::mem::forget(activity);
     r.ok()
 }
 
@@ -584,7 +588,7 @@ pub(crate) fn install_apk(path: &std::path::Path) -> anyhow::Result<()> {
     let p = path.to_string_lossy().to_string();
     with_activity(|env, activity| {
         let s = env.new_string(&p)?;
-        env.call_method(activity, "installApk", "(Ljava/lang/String;)V", &[(&s).into()])?;
+        env.call_method(activity, jni::jni_str!("installApk"), jni::jni_sig!("(Ljava/lang/String;)V"), &[(&s).into()])?;
         Ok(())
     })
     .ok_or_else(|| anyhow::anyhow!("the system's package installer could not be reached"))
@@ -595,9 +599,10 @@ pub(crate) fn install_apk(path: &std::path::Path) -> anyhow::Result<()> {
 /// 6 that permission refused.
 pub(crate) fn install_status() -> Option<(i32, String)> {
     with_activity(|env, activity| {
-        let code = env.call_method(activity, "getInstallStatus", "()I", &[])?.i()?;
-        let msg = env.call_method(activity, "getInstallMessage", "()Ljava/lang/String;", &[])?.l()?;
-        let msg: String = if msg.is_null() { String::new() } else { env.get_string(&jni::objects::JString::from(msg))?.into() };
+        let code = env.call_method(activity, jni::jni_str!("getInstallStatus"), jni::jni_sig!("()I"), &[])?.i()?;
+        let msg = env.call_method(activity, jni::jni_str!("getInstallMessage"), jni::jni_sig!("()Ljava/lang/String;"), &[])?.l()?;
+        let msg = env.cast_local::<jni::objects::JString>(msg)?;
+        let msg = if msg.is_null() { String::new() } else { msg.try_to_string(env)? };
         Ok((code, msg))
     })
 }
@@ -607,7 +612,7 @@ pub(crate) fn open_url(url: &str) {
     let u = url.to_string();
     let _ = with_activity(|env, activity| {
         let s = env.new_string(&u)?;
-        env.call_method(activity, "openUrl", "(Ljava/lang/String;)V", &[(&s).into()])?;
+        env.call_method(activity, jni::jni_str!("openUrl"), jni::jni_sig!("(Ljava/lang/String;)V"), &[(&s).into()])?;
         Ok(())
     });
 }
