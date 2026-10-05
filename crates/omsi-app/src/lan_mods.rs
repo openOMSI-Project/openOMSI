@@ -360,19 +360,60 @@ fn add_fonts(fonts_used: &HashSet<String>, files: &mut Found, original: &Path) {
 }
 
 /// The entries of `files` (size and hash read), in name order, with where each is read from.
-fn entries_of(files: Found, vehicle: Option<&str>) -> (Vec<Entry>, Vec<PathBuf>, u64) {
+/// A plain file's size and modification time (seconds), the key its hash is kept under.
+fn size_and_time(path: &Path) -> Option<(u64, u64)> {
+    let md = std::fs::metadata(path).ok()?;
+    let t = md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+    Some((md.len(), t))
+}
+
+/// The first bytes of a file (the start a program shows itself by).
+fn head_of(path: &Path) -> Option<Vec<u8>> {
+    let mut head = vec![0u8; 8];
+    let n = std::fs::File::open(path).and_then(|mut f| f.read(&mut head)).ok()?;
+    head.truncate(n);
+    Some(head)
+}
+
+/// The entries of `files` (size and hash read), in name order, with where each is read from.
+/// A plain file's hash is taken from `cache` while its size and time are the same (a big map
+/// was hashed again at every start of the server: ten minutes for 14 GB, with every join
+/// waiting), and noted there when it is new.
+fn entries_of(files: Found, vehicle: Option<&str>, cache: &mut HashCache) -> (Vec<Entry>, Vec<PathBuf>, u64) {
     let mut list: Vec<(String, PathBuf)> = files.into_values().filter(|(rel, _)| refuse_path(rel).is_none() && !is_litter(rel)).collect();
     list.sort_by(|a, b| a.0.cmp(&b.0));
     let mut entries = Vec::with_capacity(list.len());
     let mut sources = Vec::with_capacity(list.len());
     let mut total = 0u64;
     for (rel, path) in list {
-        let Ok(data) = omsi_cfg::vfs::read(&path) else { continue };
-        if data.len() as u64 > MAX_FILE || looks_executable(&data[..data.len().min(8)]) {
-            continue;
-        }
-        total += data.len() as u64;
-        entries.push(Entry { path: rel, size: data.len() as u64, sha256: sha256_of(&data), vehicle: vehicle.map(str::to_string) });
+        let plain = omsi_cfg::vfs::archive_of(&path).is_none();
+        let key = path.to_string_lossy().to_string();
+        let known = plain
+            .then(|| size_and_time(&path))
+            .flatten()
+            .and_then(|(size, time)| cache.get(&key).filter(|(s, t, _)| *s == size && *t == time).map(|(_, _, h)| (size, h.clone())));
+        let (size, sha256) = match known {
+            Some((size, h)) => {
+                let Some(head) = head_of(&path) else { continue };
+                if size > MAX_FILE || looks_executable(&head) {
+                    continue;
+                }
+                (size, h)
+            }
+            None => {
+                let Ok(data) = omsi_cfg::vfs::read(&path) else { continue };
+                if data.len() as u64 > MAX_FILE || looks_executable(&data[..data.len().min(8)]) {
+                    continue;
+                }
+                let h = sha256_of(&data);
+                if let Some((size, time)) = plain.then(|| size_and_time(&path)).flatten() {
+                    cache.insert(key, (size, time, h.clone()));
+                }
+                (data.len() as u64, h)
+            }
+        };
+        total += size;
+        entries.push(Entry { path: rel, size, sha256, vehicle: vehicle.map(str::to_string) });
         sources.push(path);
     }
     (entries, sources, total)
@@ -381,6 +422,7 @@ fn entries_of(files: Found, vehicle: Option<&str>) -> (Vec<Entry>, Vec<PathBuf>,
 /// What the host serves: the session's list (`LIST`), the longer one with the buses a
 /// dedicated server offers (`LIST ALL`: the same entries first, so a file has one number in
 /// both), and where each file is read from.
+#[derive(Clone)]
 struct Served {
     list: Vec<u8>,
     list_all: Vec<u8>,
@@ -390,8 +432,11 @@ struct Served {
 /// The files the host's session uses that are not stock content, with where each is read
 /// from (a folder or a mounted archive); then those of the buses a dedicated server offers
 /// (`vehicles` of `server.cfg`) that the session has not named already.
-fn collect(args: &Args) -> Served {
+/// `publish` is told the session's list as soon as it is made (with `LIST ALL` the same for the
+/// moment: a player joins without waiting for the offered buses), and again with the buses.
+fn collect(args: &Args, publish: &dyn Fn(Served)) {
     let t0 = Instant::now();
+    let mut cache = hash_cache();
     let original = args.root.clone();
     let mut folders: Vec<String> = Vec::new();
     let map_dir = norm(Path::new(&args.map).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default().as_str());
@@ -424,7 +469,7 @@ fn collect(args: &Args) -> Served {
         }
     }
     add_fonts(&fonts_used, &mut files, &original);
-    let (mut entries, mut sources, total) = entries_of(files, None);
+    let (mut entries, mut sources, total) = entries_of(files, None, &mut cache);
     log::info!(
         "LAN mods: {} files ({:.1} MB) of this session are not stock content and go to joining players (listed in {:.1} s)",
         entries.len(),
@@ -433,6 +478,8 @@ fn collect(args: &Args) -> Served {
     );
     let manifest = |entries: &[Entry]| Manifest { map: args.map.replace('\\', "/"), bus: args.bus.clone().unwrap_or_default().replace('\\', "/"), entries: entries.to_vec() };
     let list = serde_json::to_vec(&manifest(&entries)).unwrap_or_default();
+    publish(Served { list: list.clone(), list_all: list.clone(), sources: sources.clone() });
+    save_hash_cache(&cache);
     // a dedicated server's buses: a player fetches the one it drives when it joins, the
     // launcher all of them (with the map) before, when the player asks it to
     let mut offered: Vec<String> = Vec::new();
@@ -451,7 +498,7 @@ fn collect(args: &Args) -> Served {
             let (mut found, fonts_used) = gather(vec![folder.clone()], Vec::new(), &original);
             add_fonts(&fonts_used, &mut found, &original);
             found.retain(|k, _| !taken.contains(k));
-            let (more, more_sources, size) = entries_of(found, Some(&folder.to_lowercase()));
+            let (more, more_sources, size) = entries_of(found, Some(&folder.to_lowercase()), &mut cache);
             taken.extend(more.iter().map(|e| e.path.to_lowercase()));
             n += more.len();
             bytes += size;
@@ -459,9 +506,10 @@ fn collect(args: &Args) -> Served {
             sources.extend(more_sources);
         }
         log::info!("LAN mods: the {} buses offered bring {n} files more ({:.1} MB; listed in {:.1} s)", offered.len(), bytes as f64 / 1e6, t1.elapsed().as_secs_f64());
+        let list_all = serde_json::to_vec(&manifest(&entries)).unwrap_or_default();
+        publish(Served { list, list_all, sources });
+        save_hash_cache(&cache);
     }
-    let list_all = serde_json::to_vec(&manifest(&entries)).unwrap_or_default();
-    Served { list, list_all, sources }
 }
 
 /// Serve the session's mods on TCP `port` (a thread; the list is made in the background).
@@ -483,8 +531,9 @@ pub fn serve(port: u16, session: u64, args: &Args) {
         std::thread::Builder::new()
             .name("lan-mods-list".into())
             .spawn(move || {
-                let m = collect(&args);
-                *ready.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(m));
+                // (a connection keeps the list it was greeted with: the longer one has the same
+                // entries first, so its numbers stay right)
+                collect(&args, &|m| *ready.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(m)));
             })
             .ok();
     }
@@ -1246,6 +1295,32 @@ mod tests {
         let m = read_list(&mut out, &mut input, true).unwrap();
         assert_eq!(m.entries.len(), 1);
         assert_eq!(m.entries[0].path, "maps/Grundorf2/global.cfg");
+    }
+
+    #[test]
+    fn a_hash_is_kept_while_the_file_stays_the_same() {
+        let dir = std::env::temp_dir().join(format!("openomsi-hostcache-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.dds");
+        std::fs::write(&file, b"DDS one").unwrap();
+        let found = || -> Found { HashMap::from([("maps/x/a.dds".to_string(), ("maps/x/a.dds".to_string(), file.clone()))]) };
+        let mut cache = HashCache::new();
+        let (e, _, _) = entries_of(found(), None, &mut cache);
+        assert_eq!(e[0].sha256, sha256_of(b"DDS one"));
+        // (the next listing takes the hash it noted: it does not read the file again)
+        let key = file.to_string_lossy().to_string();
+        cache.get_mut(&key).unwrap().2 = "f".repeat(64);
+        let (e, _, _) = entries_of(found(), None, &mut cache);
+        assert_eq!(e[0].sha256, "f".repeat(64));
+        // a file that changed (another size) is hashed again
+        std::fs::write(&file, b"DDS two!").unwrap();
+        let (e, _, _) = entries_of(found(), None, &mut cache);
+        assert_eq!(e[0].sha256, sha256_of(b"DDS two!"));
+        assert_eq!(cache[&key].2, sha256_of(b"DDS two!"));
+        // a program is refused whatever the cache says
+        std::fs::write(&file, b"MZ\x90\x00 ok").unwrap();
+        assert!(entries_of(found(), None, &mut cache).0.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
