@@ -433,10 +433,12 @@ fn collect(args: &Args) -> Served {
     );
     let manifest = |entries: &[Entry]| Manifest { map: args.map.replace('\\', "/"), bus: args.bus.clone().unwrap_or_default().replace('\\', "/"), entries: entries.to_vec() };
     let list = serde_json::to_vec(&manifest(&entries)).unwrap_or_default();
-    // a dedicated server's buses: a player fetches the one it drives when it joins, the
-    // launcher all of them (with the map) before, when the player asks it to
+    // a dedicated server's buses, when its owner shares its content (`share_content`): a player
+    // fetches the one it drives when it joins, the launcher all of them (with the map) before,
+    // when the player asks it to
     let mut offered: Vec<String> = Vec::new();
-    for bus in crate::server::SERVER_VEHICLES.get().map(|v| v.as_slice()).unwrap_or_default() {
+    let vehicles = crate::server::SERVER_VEHICLES.get().filter(|_| crate::server::shares_content());
+    for bus in vehicles.map(|v| v.as_slice()).unwrap_or_default() {
         if let Some(f) = owner_folder(&norm(bus)) {
             if !offered.iter().any(|o| o.eq_ignore_ascii_case(&f)) {
                 offered.push(f);

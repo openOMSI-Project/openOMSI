@@ -755,8 +755,11 @@ pub fn tunnel_url() -> Option<String> {
 /// `web_port` 0 picks the session port + 10.
 pub fn open_public_gateway(session: &LanSession, mut info: omsi_net::ws::ServerInfo, web_port: u16, want_tunnel: bool) {
     let Some(udp) = session.local_addr() else { return };
-    // (for the launcher, which fetches the host's mods before it joins)
-    info.session = omsi_net::session_hex(session.session);
+    // (for the launcher, which fetches the host's mods to keep before it joins: only from a
+    // server whose owner lets it, `share_content`)
+    if crate::server::shares_content() {
+        info.session = omsi_net::session_hex(session.session);
+    }
     let target = SocketAddr::from(([127, 0, 0, 1], udp.port()));
     let port = if web_port == 0 { udp.port().saturating_add(10) } else { web_port };
     let gateway = match omsi_net::ws::WsGateway::start(SocketAddr::from(([0, 0, 0, 0], port)), target, info.clone()).or_else(|_| omsi_net::ws::WsGateway::start(SocketAddr::from(([0, 0, 0, 0], 0)), target, info)) {

@@ -48,6 +48,11 @@ pub(crate) struct ServerCfg {
     pub vehicles: Vec<String>,
     /// `GET /players` on the web port tells who drives what and where (for a web map).
     pub share_positions: bool,
+    /// The server hands out its content to keep: the buses of `vehicles` come with its mods
+    /// (`LIST ALL`), and the launcher may install them with its map as a mod. Off, the mods
+    /// come for a session only, as a joining game always took them - a server with paid maps
+    /// or buses must not give them away.
+    pub share_content: bool,
     /// The GreenTeaSpeak server and channel the players talk in (`voice`).
     pub voice: Option<crate::voice::VoiceServer>,
 }
@@ -111,6 +116,11 @@ vehicles =
 # positions - for a live map of the server on a website; tell your players when it is on
 share_positions = 0
 
+# let players download this server's content to keep (1 = on): its map and the buses of the
+# vehicles list, installed by their launcher as a mod. Off, they get the map only for a session,
+# as always. Turn it on only for content you may share: never for paid maps or buses
+share_content = 0
+
 # voice chat: the players hear each other where they stand, through GreenTeaSpeak and its
 # openOMSI plugin (as SaltyChat does for FiveM). voice_server_uid is the voice server's unique
 # id (its info panel; needed: without it there is no voice chat), voice_channel the in-game
@@ -167,6 +177,7 @@ impl ServerCfg {
             metar_station: kv.get("metar_station").map(|v| v.chars().filter(|c| c.is_ascii_alphabetic()).take(4).collect::<String>().to_ascii_uppercase()).unwrap_or_default(),
             vehicles: kv.get("vehicles").map(|v| v.split(';').map(|x| x.trim().replace('\\', "/")).filter(|x| !x.is_empty()).collect()).unwrap_or_default(),
             share_positions: flag("share_positions", false),
+            share_content: flag("share_content", false),
             voice: crate::voice::VoiceServer::from_kv(|k| kv.get(k).cloned()),
         })
     }
@@ -202,6 +213,7 @@ pub(crate) fn prepare(args: &mut Args, path: &Path) -> Result<ServerCfg> {
     let _ = SERVER_ADMIN.set((cfg.admin_password.clone(), if cfg.real_time { 1.0 } else { cfg.time_speed }));
     crate::real_time::set_server_real(cfg.real_time);
     let _ = SERVER_VEHICLES.set(cfg.vehicles.clone());
+    SHARE_CONTENT.store(cfg.share_content, std::sync::atomic::Ordering::Relaxed);
     let _ = SERVER_VOICE.set(cfg.voice.clone());
     args.map = cfg.map.clone();
     args.time = cfg.time.clone();
@@ -243,6 +255,14 @@ pub(crate) static SERVER_METAR: std::sync::OnceLock<Option<String>> = std::sync:
 
 /// The buses a dedicated server allows (`vehicles`; empty: every bus it has).
 pub(crate) static SERVER_VEHICLES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+/// A dedicated server's `share_content` (a game that hosts a session never shares to keep).
+pub(crate) static SHARE_CONTENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether this host hands out its content to keep (see `ServerCfg::share_content`).
+pub(crate) fn shares_content() -> bool {
+    SHARE_CONTENT.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Whether a `vehicles` list allows the bus `file` (an empty list: every bus). A player's
 /// game may name it with a folder before it (`D:/OMSI 2/Vehicles/…/….bus`).
@@ -317,6 +337,26 @@ pub(crate) fn player_info<'a>(q: &omsi_net::Pose, pose_of: impl Fn(u32) -> Optio
         aboard,
         lat_lon: omsi_map::world_to_lat_lon(x, y),
     })
+}
+
+#[cfg(test)]
+mod share_content_tests {
+    use super::{ServerCfg, DEFAULT_CFG};
+
+    #[test]
+    fn a_server_shares_its_content_only_when_its_owner_says_so() {
+        let dir = std::env::temp_dir().join(format!("openomsi-share-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("server.cfg");
+        // (a new server.cfg, and one written before the key existed)
+        std::fs::write(&cfg, DEFAULT_CFG).unwrap();
+        assert!(!ServerCfg::load(&cfg).unwrap().share_content);
+        std::fs::write(&cfg, DEFAULT_CFG.replace("share_content = 0\n", "")).unwrap();
+        assert!(!ServerCfg::load(&cfg).unwrap().share_content);
+        std::fs::write(&cfg, DEFAULT_CFG.replace("share_content = 0", "share_content = 1")).unwrap();
+        assert!(ServerCfg::load(&cfg).unwrap().share_content);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

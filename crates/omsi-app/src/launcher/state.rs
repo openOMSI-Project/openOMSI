@@ -165,7 +165,7 @@ fn note_installed_from(address: &str, files: &[(String, String)], left_out: &[St
 /// which answers wherever its status does. One forward a gateway.
 fn server_mods_addr(info: &omsi_net::ws::ServerInfo) -> Result<(std::net::SocketAddr, u64), String> {
     static FORWARDS: std::sync::Mutex<Option<std::collections::HashMap<String, std::net::SocketAddr>>> = std::sync::Mutex::new(None);
-    let session = u64::from_str_radix(&info.session, 16).ok().filter(|_| !info.session.is_empty()).ok_or("this server runs an older openOMSI, which does not hand out its content before a join")?;
+    let session = u64::from_str_radix(&info.session, 16).ok().filter(|_| !info.session.is_empty()).ok_or("this server does not share its content to keep (its owner can turn on share_content), or runs an older openOMSI")?;
     let base = omsi_net::ws::ws_url(&info.reached_at).ok_or("the server's web address is not known")?;
     let url = format!("{}/tcp", base.strip_suffix("/ws").unwrap_or(&base));
     let mut g = FORWARDS.lock().unwrap_or_else(|e| e.into_inner());

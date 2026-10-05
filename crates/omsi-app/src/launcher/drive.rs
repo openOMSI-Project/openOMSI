@@ -855,9 +855,13 @@ fn server_content_banner(l: &mut Launcher, r: Rect) -> f32 {
     let server_map = l.state.server_info.get(&address).and_then(|x| x.1.as_ref().ok()).map(|i| i.map.replace('\\', "/")).unwrap_or_default();
     let map_missing = !server_map.is_empty() && !l.state.maps.is_empty() && !l.state.maps.iter().any(|m| m.file.eq_ignore_ascii_case(&server_map));
     let to_fetch = lack.as_ref().map(|x| x.missing + x.outdated).unwrap_or(0);
+    // (a server whose owner does not share its content to keep - `share_content` - says no
+    // session: its map still comes for the session when the game joins, its buses do not)
+    let shares = l.state.server_info.get(&address).and_then(|x| x.1.as_ref().ok()).is_some_and(|i| !i.session.is_empty());
     // (until the server has said what is missing, what the lists show)
     let wanted = match &lack {
         Some(_) => to_fetch > 0,
+        None if !shares => buses_missing > 0,
         None => buses_missing > 0 || map_missing,
     };
     if dl.is_none() && !wanted {
@@ -893,6 +897,7 @@ fn server_content_banner(l: &mut Launcher, r: Rect) -> f32 {
             let (line, line_c) = match &finished {
                 Some(Ok(m)) => (m.clone(), OK),
                 Some(Err(e)) => (format!("{} {e}", omsi_ui::tr("The download failed:")), DANGER),
+                None if !shares => (omsi_ui::tr("The server does not share its buses for download: install them yourself.").to_string(), TEXT_DIM),
                 None => (omsi_ui::tr("Download it from the server: it is installed as a mod you can remove under Mods, and kept up to date with the server.").to_string(), TEXT_DIM),
             };
             l.ui.text_in(&head, text, 12.5, Weight::Medium, TEXT, Align::Left);
@@ -900,7 +905,7 @@ fn server_content_banner(l: &mut Launcher, r: Rect) -> f32 {
             l.ui.text_in(&line, sub, 11.0, Weight::Regular, line_c, Align::Left);
             l.ui.tooltip(sub, &line);
             let label = if lack.as_ref().is_some_and(|x| x.missing == 0 && x.outdated > 0) { "Update" } else { "Download" };
-            if wanted && l.ui.button("server-download", btn, label, Some("download"), ButtonKind::Primary) {
+            if wanted && shares && l.ui.button("server-download", btn, label, Some("download"), ButtonKind::Primary) {
                 l.state.download_server_content(&address);
             }
         }

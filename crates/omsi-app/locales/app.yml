@@ -23696,3 +23696,6 @@ _version: 2
   it: "l’host ti ha escluso da questa sessione"
   nl: "de host heeft je uit deze sessie gestuurd"
   tr: "ev sahibi seni bu oturumdan attı"
+
+"The server does not share its buses for download: install them yourself.":
+  ru: "Сервер не раздаёт свои автобусы для скачивания: установите их сами."

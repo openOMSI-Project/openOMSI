@@ -49,6 +49,11 @@ Players reach it two ways:
   map such as Berlin-Spandau, `null` elsewhere), refreshed every second - what a live map of
   the server on a website needs.
   It is off by default: the players' names and positions are then nobody's business.
+  With `share_content = 1` the server also lets players download its content to keep: its
+  `/status` says the session id, its mods' `LIST ALL` adds the buses of its `vehicles` list,
+  and the launcher installs them with the map as a mod. It is off by default, and then a
+  joining game takes the host's mods for its session only, as it always did: turn it on only
+  for content you may share, never for paid maps or buses.
 
 With `voice_channel` set, the players **talk** to each other through
 [GreenTeaSpeak](https://greenteaspeak.de) as SaltyChat lets FiveM players do: a player is
