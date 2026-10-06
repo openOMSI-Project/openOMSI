@@ -734,6 +734,10 @@ struct BusNow {
     takes: Takes,
     /// The places its scripts have switched off (see `places_off`; empty: none).
     places_off: Vec<bool>,
+    /// A timetable bus boarding at a stop the passengers' nearby stops do not have (its
+    /// tile is not among theirs): the stop its timetable serves, so that its riders still
+    /// get off there.
+    served: Option<i64>,
 }
 
 /// What passengers feel stepping into a bus (OMSI reads the same fields: the vehicle's
@@ -3087,6 +3091,7 @@ impl Humans {
                     .or_else(|| self.vehicle_next_stop(b)),
                 walk_open: None,
                 places_off: places_off(b, &cabin),
+                served: None,
                 cabin,
                 pos: b.position,
                 rot: b.body_rotation(),
@@ -3122,11 +3127,21 @@ impl Humans {
                     continue;
                 };
                 let speed = c.state.speed as f64;
-                let stop = if c.at_station() && speed.abs() < 0.3 {
+                let boarding = c.at_station() && speed.abs() < 0.3;
+                let near_stop = if boarding {
                     serving(c.vehicle.position, c.vehicle.heading, 18.0)
                 } else {
                     None
                 };
+                // A bus boarding at a stop missing from the stops near the passengers (the
+                // bus drove off with riders beyond them) serves its timetable's stop all the
+                // same: without it the doors stayed shut for its riders, and the one on the
+                // way to an exit held the bus at the stop for good (#1593).
+                let served = match near_stop {
+                    None if boarding => c.bus.as_ref().and_then(|b| b.stops.front()).map(|s| s.id),
+                    _ => None,
+                };
+                let stop = near_stop.or(served);
                 let since = match stop {
                     Some(s) => {
                         let v = match self.ai_visits.get(&c.id) {
@@ -3181,6 +3196,7 @@ impl Humans {
                         }),
                     walk_open: None,
                     places_off: places_off(&c.vehicle, &cabin),
+                    served,
                     cabin,
                     pos: c.vehicle.position,
                     rot: c.vehicle.body_rotation(),
@@ -3237,6 +3253,7 @@ impl Humans {
             terminus: None,
             takes: Takes::Nobody,
             places_off: Vec::new(),
+            served: None,
             id,
             next_stop: None,
             entry_open: vec![false; cabin.entries.len()],
@@ -3344,6 +3361,7 @@ impl Humans {
                 terminus: None,
                 takes: Takes::Nobody,
                 places_off: Vec::new(),
+                served: None,
                 id: BusId::Ai(remote_bus_id(player)),
                 next_stop: None,
                 entry_open: vec![false; cabin.entries.len()],
@@ -6395,6 +6413,7 @@ mod tests {
             takes: Takes::Terminus,
             next_stop: None,
             places_off: Vec::new(),
+            served: None,
         };
         let taken = places_taken(&bn, &[(BusId::Player, 1), (BusId::Ai(2), 2)]);
         assert_eq!(taken, [("fold_seat_down".to_string(), true)]);
@@ -6407,6 +6426,47 @@ mod tests {
     /// #720: `PAX_Entry<n>_Busy` / `PAX_Exit<n>_Busy` tell a door script that somebody stands
     /// in that doorway - on the threshold or in the opening, not in the queue outside a shut
     /// door, the aisle or the deck above - and go with the frame like the requests.
+    /// A timetable bus boarding at a stop the passengers' stops do not have (#1593): its
+    /// riders get off at its timetable's stop instead of waiting at a shut door for good.
+    #[test]
+    fn riders_get_off_at_a_timetable_stop_the_nearby_stops_do_not_have() {
+        let dir = std::env::temp_dir().join(format!("omsi-served-stop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("test.bus"), "[boundingbox]\n2.5\n12\n3\n0\n0\n1.5\n\n[passengercabin]\ncabin.cfg\n\n[paths]\npaths.cfg\n").unwrap();
+        std::fs::write(dir.join("paths.cfg"), "[pathpnt]\n1.1\n4\n0.4\n\n[pathpnt]\n0\n4\n0.5\n\n[pathpnt]\n0\n-3\n0.5\n\n[pathpnt]\n1.1\n-3\n0.4\n\n[pathlink]\n0\n1\n\n[pathlink]\n1\n2\n\n[pathlink]\n2\n3\n").unwrap();
+        std::fs::write(dir.join("cabin.cfg"), "[entry]\n0\n\n[exit]\n3\n\n[passpos]\n-0.5\n0\n0.9\n0.45\n0\n").unwrap();
+        let def = omsi_vehicle::Vehicle::load(&dir.join("test.bus")).unwrap();
+        let cabin = Arc::new(Cabin::load_train(&[(&def, Vec3::ZERO, f32::INFINITY)]).expect("cabin"));
+        std::fs::remove_dir_all(&dir).ok();
+        let bus = |served| BusNow {
+            id: BusId::Ai(5),
+            cabin: cabin.clone(),
+            pos: DVec3::new(-198.0, 2359.0, 0.0),
+            rot: Mat4::IDENTITY,
+            heading: 0.0,
+            speed: 0.0,
+            entry_open: vec![true],
+            exit_open: vec![true],
+            walk_open: None,
+            interior: 0.0,
+            air: CabinAir::default(),
+            half: DVec2::new(1.25, 6.0),
+            centre: DVec2::ZERO,
+            accel: DVec2::ZERO,
+            trailers: Vec::new(),
+            terminus: None,
+            takes: Takes::Terminus,
+            next_stop: None,
+            places_off: Vec::new(),
+            served,
+        };
+        let mut h = Humans::new(Path::new("/nonexistent"));
+        let reg = h.register_buses(&[bus(Some(496193))], 0.0);
+        assert_eq!(reg[&BusId::Ai(5)].next, Some(496193));
+        let reg = h.register_buses(&[bus(None)], 0.0);
+        assert_eq!(reg[&BusId::Ai(5)].next, None, "no stop near and none served: nowhere to get off");
+    }
+
     #[test]
     fn a_doorway_is_busy_while_somebody_stands_in_it() {
         let dir = std::env::temp_dir().join(format!("omsi-doorway-busy-{}", std::process::id()));
@@ -6453,6 +6513,7 @@ mod tests {
             takes: Takes::Terminus,
             next_stop: None,
             places_off: Vec::new(),
+            served: None,
         };
         let step_in = bn.world(Vec3::new(1.35, 4.0, 0.0));
         assert_eq!(doorways_taken(&bn, &[(None, step_in)]), (vec![true], vec![false]));

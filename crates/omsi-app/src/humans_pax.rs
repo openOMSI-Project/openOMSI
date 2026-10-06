@@ -820,6 +820,12 @@ impl Humans {
                     self.stops.get_mut(id).unwrap().buses.push((bn.id, in_box));
                 }
             }
+            
+            // a timetable bus boarding at a stop none of these know: its riders get off at
+            // its timetable's stop (#1593)
+            if reg.next.is_none() {
+                reg.next = bn.served;
+            }
             out.insert(bn.id, reg);
         }
         out
