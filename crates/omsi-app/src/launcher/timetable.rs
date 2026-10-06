@@ -182,7 +182,7 @@ pub fn draw(l: &mut Launcher, area: Rect) {
     let body = l.page_title(area, "Timetable", "A map's lines: their tours and when each trip leaves. Saved as the line's .ttl (in the content folder; OMSI 2's own files stay as they are).");
     let maps: Vec<(String, String)> = l.state.maps.iter().map(|m| (m.friendly.clone(), m.file.clone())).collect();
     if maps.is_empty() {
-        l.ui.paragraph("No maps found.", glam::Vec2::new(body.x, body.y), body.w, 14.0, Weight::Regular, TEXT_DIM);
+        l.ui.paragraph("No maps found.", glam::Vec2::new(body.x, body.y), body.w, 14.0, Weight::Regular, TEXT_DIM());
         return;
     }
     let tv = &mut l.pages.tt;
@@ -294,13 +294,13 @@ pub fn draw(l: &mut Launcher, area: Rect) {
                 pick_line = Some(i);
             }
             let star = if dirty.contains(name) { " •" } else { "" };
-            ui.text_in(&format!("{name}{star}"), Rect::new(r.x + 12.0, r.y, r.w - 90.0, r.h), 13.0, Weight::Medium, TEXT, Align::Left);
-            ui.text_in(&format!("{tours} tours"), Rect::new(r.right() - 90.0, r.y, 80.0, r.h), 11.5, Weight::Regular, TEXT_DIM, Align::Right);
+            ui.text_in(&format!("{name}{star}"), Rect::new(r.x + 12.0, r.y, r.w - 90.0, r.h), 13.0, Weight::Medium, TEXT(), Align::Left);
+            ui.text_in(&format!("{tours} tours"), Rect::new(r.right() - 90.0, r.y, 80.0, r.h), 11.5, Weight::Regular, TEXT_DIM(), Align::Right);
         }
         lines.len() as f32 * 42.0
     });
     if lines.is_empty() {
-        ui.paragraph("This map has no timetable (no TTData lines).", glam::Vec2::new(inner.x, inner.y + ROW + 20.0), inner.w, 13.0, Weight::Regular, TEXT_DIM);
+        ui.paragraph("This map has no timetable (no TTData lines).", glam::Vec2::new(inner.x, inner.y + ROW + 20.0), inner.w, 13.0, Weight::Regular, TEXT_DIM());
         return;
     }
     if let Some(i) = pick_line {
@@ -342,8 +342,8 @@ pub fn draw(l: &mut Launcher, area: Rect) {
             if ui.row(&format!("tt-tour-{i}"), r, i == sel_tour) {
                 pick_tour = Some(i);
             }
-            ui.text_in(&format!("Tour {num}"), Rect::new(r.x + 12.0, r.y, r.w - 100.0, r.h), 13.0, Weight::Medium, TEXT, Align::Left);
-            ui.text_in(&format!("{first} · {n}"), Rect::new(r.right() - 100.0, r.y, 90.0, r.h), 11.5, Weight::Regular, TEXT_DIM, Align::Right);
+            ui.text_in(&format!("Tour {num}"), Rect::new(r.x + 12.0, r.y, r.w - 100.0, r.h), 13.0, Weight::Medium, TEXT(), Align::Left);
+            ui.text_in(&format!("{first} · {n}"), Rect::new(r.right() - 100.0, r.y, 90.0, r.h), 11.5, Weight::Regular, TEXT_DIM(), Align::Right);
         }
         tours.len() as f32 * 42.0
     });
@@ -421,7 +421,7 @@ pub fn draw(l: &mut Launcher, area: Rect) {
     let (tw, pw) = (110.0, 150.0);
     let dest_w = 170.0;
     let trip_w = (inner.w - tw - pw - dest_w - 40.0 - 4.0 * GAP).max(120.0);
-    let head = |ui: &mut Ui, x: f32, w: f32, t: &str| ui.text_in(t, Rect::new(x, inner.y, w, 18.0), 11.5, Weight::Bold, TEXT_DIM, Align::Left);
+    let head = |ui: &mut Ui, x: f32, w: f32, t: &str| ui.text_in(t, Rect::new(x, inner.y, w, 18.0), 11.5, Weight::Bold, TEXT_DIM(), Align::Left);
     head(ui, inner.x, tw, "Departs");
     head(ui, inner.x + tw + GAP, trip_w, "Trip");
     head(ui, inner.x + tw + trip_w + 2.0 * GAP, pw, "Profile");
@@ -444,7 +444,7 @@ pub fn draw(l: &mut Launcher, area: Rect) {
                 }
             }
             if bad {
-                ui.p().rounded_border(Rect::new(x, y, tw, ROW), 6.0, 1.5, DANGER);
+                ui.p().rounded_border(Rect::new(x, y, tw, ROW), 6.0, 1.5, DANGER());
             }
             let mut ti = trip_names.iter().position(|n| n.eq_ignore_ascii_case(&t.trip)).unwrap_or(0);
             if ui.select(&format!("tt-trip-{key}-{i}"), Rect::new(x + tw + GAP, y, trip_w, ROW), &mut ti, &trip_names) {
@@ -459,7 +459,7 @@ pub fn draw(l: &mut Launcher, area: Rect) {
                 t.profile = pi as i32;
                 changed = true;
             }
-            ui.text_in(&dest, Rect::new(x + tw + trip_w + pw + 3.0 * GAP, y, dest_w, ROW), 12.5, Weight::Regular, TEXT_SOFT, Align::Left);
+            ui.text_in(&dest, Rect::new(x + tw + trip_w + pw + 3.0 * GAP, y, dest_w, ROW), 12.5, Weight::Regular, TEXT_SOFT(), Align::Left);
             if ui.icon_button(&format!("tt-x-{key}-{i}"), glam::Vec2::new(v.right() - 26.0, y + ROW * 0.5), 14.0, "close", "Remove this trip") {
                 remove = Some(i);
             }

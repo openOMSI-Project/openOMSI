@@ -513,23 +513,23 @@ impl Ui {
 
     // --- surfaces ------------------------------------------------------------------------
 
-    /// A panel: flat, dark, a hairline edge.
+    /// A panel: flat, a hairline edge.
     pub fn panel(&mut self, r: Rect) {
         self.solid(r);
         let p = self.p();
-        p.rounded(r, RADIUS, PANEL);
-        p.rounded_border(r, RADIUS, 1.0, EDGE);
+        p.rounded(r, RADIUS, PANEL());
+        p.rounded_border(r, RADIUS, 1.0, EDGE());
     }
 
-    /// A section heading inside a panel: an accent tick and the title in capitals.
+    /// A section heading inside a panel.
     pub fn heading(&mut self, r: Rect, title: &str, icon: Option<&str>) -> Rect {
         let _ = icon;
-        self.text(&omsi_ui::tr(title).to_uppercase(), Vec2::new(r.x, r.y + 14.0), 11.0, Weight::Bold, TEXT_DIM, Align::Left);
+        self.text(&omsi_ui::tr(title), Vec2::new(r.x, r.y + 15.0), 13.5, Weight::Bold, TEXT(), Align::Left);
         Rect::new(r.x, r.y + 26.0, r.w, (r.h - 26.0).max(0.0))
     }
 
     pub fn label(&mut self, r: Rect, text: &str) {
-        self.text_in(text, r, 13.0, Weight::Medium, TEXT_DIM, Align::Left);
+        self.text_in(text, r, 13.0, Weight::Medium, TEXT_DIM(), Align::Left);
     }
 
     // --- controls ------------------------------------------------------------------------
@@ -541,12 +541,12 @@ impl Ui {
         let t = self.anim(id, if h { 1.0 } else { 0.0 }, 0.06);
         let rr = if held { r.inset(0.5) } else { r };
         let (fill, text_c, edge) = match kind {
-            ButtonKind::Primary => (ACCENT.lighten(0.08 * t), Color::rgba(18, 14, 8, 1.0), Color::CLEAR),
-            ButtonKind::Danger => (FIELD.mix(HOVER, t), DANGER, DANGER.alpha(0.35 + 0.3 * t)),
-            ButtonKind::Normal => (FIELD.mix(HOVER, t), TEXT, EDGE),
-            ButtonKind::Ghost => (Color::WHITE.alpha(0.05 * t), if h { TEXT } else { TEXT_DIM }, Color::CLEAR),
+            ButtonKind::Primary => (ACCENT().lighten(0.25 * t), ON_ACCENT(), Color::CLEAR),
+            ButtonKind::Danger => (FIELD().mix(HOVER(), t), DANGER(), DANGER().alpha(0.35 + 0.3 * t)),
+            ButtonKind::Normal => (FIELD().mix(HOVER(), t), TEXT(), EDGE()),
+            ButtonKind::Ghost => (LIFT().alpha(0.07 * t), if h { TEXT() } else { TEXT_DIM() }, Color::CLEAR),
         };
-        let rad = 6.0;
+        let rad = CTRL;
         self.p().rounded(rr, rad, fill);
         if edge.0[3] > 0.0 {
             self.p().rounded_border(rr, rad, 1.0, edge);
@@ -570,8 +570,8 @@ impl Ui {
         let rect = Rect::new(c.x - r, c.y - r, 2.0 * r, 2.0 * r);
         let (h, _, clicked) = self.interact(id, rect);
         let t = self.anim(id, if h { 1.0 } else { 0.0 }, 0.08);
-        self.p().circle(c, r, Color::WHITE.alpha(0.06 * t));
-        self.icon(icon, c, r * 1.1, if h { TEXT } else { TEXT_DIM });
+        self.p().circle(c, r, LIFT().alpha(0.09 * t));
+        self.icon(icon, c, r * 1.1, if h { TEXT() } else { TEXT_DIM() });
         if !tip.is_empty() {
             self.tooltip(rect, tip);
         }
@@ -589,10 +589,10 @@ impl Ui {
         let tw = 34.0;
         let th = 18.0;
         let track = Rect::new(r.right() - tw, r.y + (r.h - th) * 0.5, tw, th);
-        self.p().rounded(track, th * 0.5, Color::rgba(62, 62, 62, 1.0).mix(ACCENT, on));
+        self.p().rounded(track, th * 0.5, TRACK().mix(ACCENT(), on));
         let kx = track.x + th * 0.5 + (tw - th) * on;
-        self.p().circle(Vec2::new(kx, track.center().y), th * 0.5 - 3.0, Color::rgba(240, 240, 240, 1.0));
-        self.text_in(label, Rect::new(r.x, r.y, r.w - tw - 10.0, r.h), 13.0, Weight::Regular, if h { TEXT } else { TEXT_SOFT }, Align::Left);
+        self.p().circle(Vec2::new(kx, track.center().y), th * 0.5 - 3.0, KNOB().mix(ON_ACCENT(), on));
+        self.text_in(label, Rect::new(r.x, r.y, r.w - tw - 10.0, r.h), 13.0, Weight::Regular, if h { TEXT() } else { TEXT_SOFT() }, Align::Left);
         clicked
     }
 
@@ -621,17 +621,18 @@ impl Ui {
         let frac = ((*value - min) / (max - min).max(1e-6)).clamp(0.0, 1.0);
         let shown = self.anim(id ^ 3, frac, 0.06);
         if !label.is_empty() {
-            self.text_in(label, Rect::new(r.x, r.y, label_w - 8.0, r.h), 13.0, Weight::Regular, TEXT_SOFT, Align::Left);
+            self.text_in(label, Rect::new(r.x, r.y, label_w - 8.0, r.h), 13.0, Weight::Regular, TEXT_SOFT(), Align::Left);
         }
         let cy = track_r.center().y;
         let th = 4.0;
         let track = Rect::new(track_r.x, cy - th * 0.5, track_r.w, th);
-        self.p().rounded(track, th * 0.5, Color::rgba(58, 58, 58, 1.0));
-        self.p().rounded(Rect::new(track.x, track.y, track.w * shown, th), th * 0.5, ACCENT);
+        self.p().rounded(track, th * 0.5, TRACK());
+        self.p().rounded(Rect::new(track.x, track.y, track.w * shown, th), th * 0.5, ACCENT());
         let kc = Vec2::new(track.x + track.w * shown, cy);
-        self.p().circle(kc, if h || held { 7.5 } else { 6.5 }, Color::rgba(240, 240, 240, 1.0));
+        self.p().circle(kc, if h || held { 8.5 } else { 7.5 }, ACCENT());
+        self.p().circle(kc, if held { 2.5 } else { 3.5 }, ON_ACCENT());
         let txt = fmt(*value);
-        self.text_in(&txt, Rect::new(r.right() - val_w + 8.0, r.y, val_w - 8.0, r.h), 12.5, Weight::Medium, TEXT, Align::Right);
+        self.text_in(&txt, Rect::new(r.right() - val_w + 8.0, r.y, val_w - 8.0, r.h), 12.5, Weight::Medium, TEXT(), Align::Right);
         *value != before
     }
 
@@ -639,11 +640,13 @@ impl Ui {
     pub fn segmented(&mut self, name: &str, r: Rect, selected: &mut usize, labels: &[&str]) -> bool {
         let n = labels.len().max(1);
         let id = id_of(name);
-        self.p().rounded(r, 6.0, FIELD);
+        self.p().rounded(r, CTRL, FIELD());
+        self.p().rounded_border(r, CTRL, 1.0, EDGE());
         let w = r.w / n as f32;
         let at = self.anim(id, *selected as f32, 0.07);
         let knob = Rect::new(r.x + 3.0 + w * at, r.y + 3.0, w - 6.0, r.h - 6.0);
-        self.p().rounded(knob, 4.0, Color::rgba(62, 62, 62, 1.0));
+        self.p().rounded(knob, CTRL - 2.0, TRACK());
+        self.p().rounded(Rect::new(knob.x + 10.0, knob.bottom() - 2.0, knob.w - 20.0, 2.0), 1.0, ACCENT());
         let mut changed = false;
         for (k, l) in labels.iter().enumerate() {
             let cell = Rect::new(r.x + w * k as f32, r.y, w, r.h);
@@ -652,7 +655,7 @@ impl Ui {
                 *selected = k;
                 changed = true;
             }
-            let c = if *selected == k { TEXT } else if h { TEXT_SOFT } else { TEXT_DIM };
+            let c = if *selected == k { TEXT() } else if h { TEXT_SOFT() } else { TEXT_DIM() };
             self.text_in(l, cell.pad(4.0, 0.0), 12.5, Weight::Medium, c, Align::Center);
         }
         changed
@@ -674,12 +677,12 @@ impl Ui {
         let (h, _, clicked) = self.interact(id, r);
         let open = self.popup.as_ref().map(|p| p.id == id).unwrap_or(false);
         let t = self.anim(id, if h || open { 1.0 } else { 0.0 }, 0.08);
-        self.p().rounded(r, 6.0, FIELD.mix(HOVER, t));
-        self.p().rounded_border(r, 6.0, 1.0, if open { ACCENT.alpha(0.7) } else { EDGE });
+        self.p().rounded(r, 6.0, FIELD().mix(HOVER(), t));
+        self.p().rounded_border(r, 6.0, 1.0, if open { ACCENT().alpha(0.7) } else { EDGE() });
         let txt = options.get(*selected).cloned().unwrap_or_default();
-        self.text_in(&txt, Rect::new(r.x + 12.0, r.y, r.w - 40.0, r.h), 13.0, Weight::Regular, TEXT, Align::Left);
+        self.text_in(&txt, Rect::new(r.x + 12.0, r.y, r.w - 40.0, r.h), 13.0, Weight::Regular, TEXT(), Align::Left);
         let rot = self.anim(id ^ 9, if open { 1.0 } else { 0.0 }, 0.08);
-        self.icon(if rot > 0.5 { "expand_less" } else { "expand_more" }, Vec2::new(r.right() - 18.0, r.center().y), 20.0, if h { TEXT } else { TEXT_DIM });
+        self.icon(if rot > 0.5 { "expand_less" } else { "expand_more" }, Vec2::new(r.right() - 18.0, r.center().y), 20.0, if h { TEXT() } else { TEXT_DIM() });
         if clicked {
             // (a phone's tap can come twice - as a touch and as the mouse click made of it:
             // the second one closed the list it had just opened)
@@ -819,11 +822,11 @@ impl Ui {
             self.caret.insert(id, (caret, moved));
         }
         let t = self.anim(id, if focused { 1.0 } else if h { 0.5 } else { 0.0 }, 0.08);
-        self.p().rounded(r, 6.0, FIELD.mix(HOVER, t * 0.5));
-        self.p().rounded_border(r, 6.0, 1.0, if focused { ACCENT.alpha(0.7) } else { EDGE });
+        self.p().rounded(r, 6.0, FIELD().mix(HOVER(), t * 0.5));
+        self.p().rounded_border(r, 6.0, 1.0, if focused { ACCENT().alpha(0.7) } else { EDGE() });
         let mut x = r.x + 12.0;
         if let Some(i) = icon {
-            self.icon(i, Vec2::new(x + 8.0, r.center().y), 18.0, TEXT_DIM);
+            self.icon(i, Vec2::new(x + 8.0, r.center().y), 18.0, TEXT_DIM());
             x += 24.0;
         }
         let inner = Rect::new(x, r.y, r.right() - x - 10.0, r.h);
@@ -874,7 +877,7 @@ impl Ui {
             }
         }
         if value.is_empty() && !focused {
-            self.text_in(placeholder, inner, px, Weight::Regular, TEXT_FAINT, Align::Left);
+            self.text_in(placeholder, inner, px, Weight::Regular, TEXT_FAINT(), Align::Left);
         } else {
             let (caret, moved) = self.caret.get(&id).copied().unwrap_or((0, 0.0));
             let upto: String = value.chars().take(caret).collect();
@@ -892,25 +895,25 @@ impl Ui {
 
                     self.p().rect(
                         Rect::new(inner.x + sx, r.y + 5.0, sw, r.h - 10.0),
-                        ACCENT.alpha(0.35),
+                        ACCENT_2().alpha(0.35),
                     );
                 }
             }
             // keep the caret in view
             let shift = (cw - inner.w + 4.0).max(0.0);
-            self.text_in(value, Rect::new(inner.x - shift, inner.y, inner.w + shift + 2000.0, inner.h), px, Weight::Regular, TEXT, Align::Left);
+            self.text_in(value, Rect::new(inner.x - shift, inner.y, inner.w + shift + 2000.0, inner.h), px, Weight::Regular, TEXT(), Align::Left);
             if focused 
                 && self.selection.get(&id).is_none_or(|&(a, b)| a == b)
                 && ((self.time - moved) % 1.0) < 0.55
             {
                 self.p().rect(
                     Rect::new(inner.x - shift + cw + 0.5, r.center().y -8.5, 1.5, 17.0),
-                    ACCENT,
+                    ACCENT(),
                 );
             }
         }
         if value.is_empty() {
-            self.text_in(placeholder, inner, px, Weight::Regular, TEXT_FAINT, Align::Left);
+            self.text_in(placeholder, inner, px, Weight::Regular, TEXT_FAINT(), Align::Left);
         }
         self.pop_clip();
         *value != before
@@ -919,8 +922,8 @@ impl Ui {
     /// Hours and minutes with arrows (and the wheel over either).
     pub fn time_field(&mut self, name: &str, r: Rect, minutes: &mut i32) -> bool {
         let before = *minutes;
-        self.p().rounded(r, 6.0, FIELD);
-        self.p().rounded_border(r, 6.0, 1.0, EDGE);
+        self.p().rounded(r, 6.0, FIELD());
+        self.p().rounded_border(r, 6.0, 1.0, EDGE());
         let half = (r.w - 16.0) * 0.5;
         for (k, (unit, step)) in [(60, 60), (1, 5)].iter().enumerate() {
             let cell = Rect::new(r.x + k as f32 * (half + 16.0), r.y, half, r.h);
@@ -931,13 +934,13 @@ impl Ui {
                 self.wheel_taken = true;
             }
             let v = if *unit == 60 { minutes.rem_euclid(1440) / 60 } else { minutes.rem_euclid(60) };
-            self.text_in(&format!("{v:02}"), Rect::new(cell.x + 8.0, cell.y, cell.w - 30.0, cell.h), 17.0, Weight::Medium, TEXT, Align::Center);
+            self.text_in(&format!("{v:02}"), Rect::new(cell.x + 8.0, cell.y, cell.w - 30.0, cell.h), 17.0, Weight::Medium, TEXT(), Align::Center);
             let up = Rect::new(cell.right() - 24.0, cell.y + 3.0, 20.0, cell.h * 0.5 - 3.0);
             let down = Rect::new(cell.right() - 24.0, cell.center().y, 20.0, cell.h * 0.5 - 3.0);
             let (hu, _, cu) = self.interact(id ^ 1, up);
             let (hd, _, cd) = self.interact(id ^ 2, down);
-            self.icon("expand_less", up.center(), 16.0, if hu { TEXT } else { TEXT_FAINT });
-            self.icon("expand_more", down.center(), 16.0, if hd { TEXT } else { TEXT_FAINT });
+            self.icon("expand_less", up.center(), 16.0, if hu { TEXT() } else { TEXT_FAINT() });
+            self.icon("expand_more", down.center(), 16.0, if hd { TEXT() } else { TEXT_FAINT() });
             if cu {
                 *minutes += step;
             }
@@ -945,7 +948,7 @@ impl Ui {
                 *minutes -= step;
             }
         }
-        self.text_in(":", Rect::new(r.x + half, r.y, 16.0, r.h - 2.0), 17.0, Weight::Medium, TEXT_DIM, Align::Center);
+        self.text_in(":", Rect::new(r.x + half, r.y, 16.0, r.h - 2.0), 17.0, Weight::Medium, TEXT_DIM(), Align::Center);
         *minutes = minutes.rem_euclid(1440);
         *minutes != before
     }
@@ -964,13 +967,13 @@ impl Ui {
         let (h, _, clicked) = self.interact(id, r);
         let open = self.date_popup.as_ref().map(|p| p.id == id).unwrap_or(false);
         let t = self.anim(id, if h || open { 1.0 } else { 0.0 }, 0.08);
-        self.p().rounded(r, 6.0, FIELD.mix(HOVER, t));
-        self.p().rounded_border(r, 6.0, 1.0, if open { ACCENT.alpha(0.7) } else { EDGE });
-        self.icon("calendar_month", Vec2::new(r.x + 20.0, r.center().y), 17.0, TEXT_DIM);
+        self.p().rounded(r, 6.0, FIELD().mix(HOVER(), t));
+        self.p().rounded_border(r, 6.0, 1.0, if open { ACCENT().alpha(0.7) } else { EDGE() });
+        self.icon("calendar_month", Vec2::new(r.x + 20.0, r.center().y), 17.0, TEXT_DIM());
         let (y, m, d) = parse_date(date);
         let shown = format!("{} {} {}", d, MONTHS[(m as usize).clamp(1, 12) - 1], y);
-        self.text_in(&shown, Rect::new(r.x + 38.0, r.y, r.w - 60.0, r.h), 13.0, Weight::Regular, TEXT, Align::Left);
-        self.icon("expand_more", Vec2::new(r.right() - 18.0, r.center().y), 20.0, TEXT_DIM);
+        self.text_in(&shown, Rect::new(r.x + 38.0, r.y, r.w - 60.0, r.h), 13.0, Weight::Regular, TEXT(), Align::Left);
+        self.icon("expand_more", Vec2::new(r.right() - 18.0, r.center().y), 20.0, TEXT_DIM());
         if clicked {
             if open {
                 self.date_popup = None;
@@ -984,13 +987,13 @@ impl Ui {
 
     /// A progress bar (0..1), animated stripes while `busy`.
     pub fn progress(&mut self, r: Rect, frac: f32, busy: bool) {
-        self.p().rounded(r, r.h * 0.5, Color::rgba(50, 50, 50, 1.0));
+        self.p().rounded(r, r.h * 0.5, TRACK());
         let w = (r.w * frac.clamp(0.0, 1.0)).max(r.h);
-        self.p().rounded(Rect::new(r.x, r.y, w, r.h), r.h * 0.5, ACCENT);
+        self.p().rounded(Rect::new(r.x, r.y, w, r.h), r.h * 0.5, ACCENT());
         if busy {
             let x = r.x + ((self.time * 0.6) % 1.0) * (w + 60.0) - 60.0;
             self.push_clip(Rect::new(r.x, r.y, w, r.h), r.h * 0.5);
-            self.p().gradient_h(Rect::new(x, r.y, 60.0, r.h), Color::WHITE.alpha(0.0), Color::WHITE.alpha(0.15));
+            self.p().gradient_h(Rect::new(x, r.y, 60.0, r.h), LIFT().alpha(0.0), LIFT().alpha(0.15));
             self.pop_clip();
         }
     }
@@ -1035,7 +1038,7 @@ impl Ui {
                 target = ((self.input.mouse.y - r.y - bar_h * 0.5) / (r.h - bar_h).max(1.0)) * max;
             }
             let t = self.anim(id ^ 0x77, if h || held || self.hover(r) { 1.0 } else { 0.0 }, 0.15);
-            self.p().rounded(bar, 2.0, Color::WHITE.alpha(0.10 + 0.25 * t));
+            self.p().rounded(bar, 2.0, LIFT().alpha(0.10 + 0.25 * t));
         }
         target = target.clamp(0.0, max);
         self.scroll.insert(id ^ 0xabc, target);
@@ -1059,10 +1062,10 @@ impl Ui {
         let t = self.anim(id, if h { 1.0 } else { 0.0 }, 0.08);
         let s = self.anim(id ^ 4, if selected { 1.0 } else { 0.0 }, 0.1);
         if s > 0.01 {
-            self.p().rounded(r, 6.0, SELECTED.alpha(s));
-            self.p().rounded(Rect::new(r.x, r.y + 8.0, 2.0, r.h - 16.0), 1.0, ACCENT.alpha(s));
+            self.p().rounded(r, CTRL, SELECTED().alpha(s));
+            self.p().rounded(Rect::new(r.x + 1.0, r.y + 7.0, 3.0, r.h - 14.0), 1.5, ACCENT().alpha(s));
         } else if t > 0.01 {
-            self.p().rounded(r, 6.0, HOVER.alpha(t));
+            self.p().rounded(r, 6.0, HOVER().alpha(t));
         }
         clicked
     }
@@ -1071,7 +1074,7 @@ impl Ui {
     pub fn badge(&mut self, at: Vec2, text: &str, c: Color) -> f32 {
         let w = self.width(text, 10.0, Weight::Bold) + 10.0;
         let r = Rect::new(at.x, at.y, w, 16.0);
-        self.p().rounded(r, 4.0, c.alpha(0.14));
+        self.p().rounded(r, 8.0, c.alpha(0.18));
         self.text_in(text, r, 10.0, Weight::Bold, c, Align::Center);
         w
     }
@@ -1094,9 +1097,10 @@ impl Ui {
             if r.bottom() > self.size.y - 8.0 {
                 r.y = at.y - 12.0 - r.h;
             }
-            self.p().rounded(r, 6.0, Color::rgba(34, 34, 34, 1.0));
-            self.p().rounded_border(r, 7.0, 1.0, Color::WHITE.alpha(0.1));
-            self.paragraph(&t, Vec2::new(r.x + 10.0, r.y + 4.0), w - 20.0, 12.5, Weight::Medium, TEXT_SOFT);
+            self.p().shadow(Rect::new(r.x, r.y + 3.0, r.w, r.h), CTRL, 14.0, SHADOW());
+            self.p().rounded(r, CTRL, POPUP());
+            self.p().rounded_border(r, CTRL, 1.0, EDGE());
+            self.paragraph(&t, Vec2::new(r.x + 10.0, r.y + 4.0), w - 20.0, 12.5, Weight::Medium, TEXT_SOFT());
         }
         let mut layers = Vec::new();
         let mut verts = Vec::new();
@@ -1147,8 +1151,9 @@ impl Ui {
         p.opened = (p.opened + self.dt / 0.3).min(1.0);
         let e = 1.0 - (1.0 - p.opened).powi(3);
         let rr = Rect::new(r.x, r.y - 6.0 * (1.0 - e), r.w, r.h);
-        self.p().rounded(rr, 8.0, Color::rgba(28, 28, 28, e));
-        self.p().rounded_border(rr, 8.0, 1.0, Color::WHITE.alpha(0.1 * e));
+        self.p().shadow(Rect::new(rr.x, rr.y + 6.0, rr.w, rr.h), 8.0, 24.0, SHADOW().alpha(e));
+        self.p().rounded(rr, 8.0, POPUP().alpha(e));
+        self.p().rounded_border(rr, 8.0, 1.0, EDGE().alpha(e));
         let row = 34.0;
         let shown = p.shown();
         // (what was typed, over the options it leaves)
@@ -1179,11 +1184,11 @@ impl Ui {
         self.push_clip(rr.inset(4.0), 8.0);
         if head > 0.0 {
             let y = rr.y + 4.0 - p.scroll;
-            self.icon("search", Vec2::new(rr.x + 22.0, y + row * 0.5), 16.0, TEXT_DIM);
+            self.icon("search", Vec2::new(rr.x + 22.0, y + row * 0.5), 16.0, TEXT_DIM());
             let caret = if (self.time * 2.0) as i64 % 2 == 0 { "|" } else { "" };
-            self.text_in(&format!("{}{caret}", p.query), Rect::new(rr.x + 38.0, y, rr.w - 60.0, row), 13.0, Weight::Medium, TEXT, Align::Left);
+            self.text_in(&format!("{}{caret}", p.query), Rect::new(rr.x + 38.0, y, rr.w - 60.0, row), 13.0, Weight::Medium, TEXT(), Align::Left);
             if shown.is_empty() {
-                self.text_in("Nothing found", Rect::new(rr.x + 14.0, y + row, rr.w - 28.0, row), 13.0, Weight::Regular, TEXT_DIM, Align::Left);
+                self.text_in("Nothing found", Rect::new(rr.x + 14.0, y + row, rr.w - 28.0, row), 13.0, Weight::Regular, TEXT_DIM(), Align::Left);
             }
         }
         for (n, &k) in shown.iter().enumerate() {
@@ -1195,12 +1200,12 @@ impl Ui {
             let cell = Rect::new(rr.x + 4.0, y, rr.w - 8.0, row);
             let h = cell.contains(self.input.mouse) && rr.contains(self.input.mouse) && !dragging && !(max > 0.0 && track.contains(self.input.mouse));
             if k == p.selected {
-                self.p().rounded(cell, 5.0, SELECTED);
-                self.icon("check", Vec2::new(cell.right() - 16.0, cell.center().y), 15.0, ACCENT);
+                self.p().rounded(cell, 5.0, SELECTED());
+                self.icon("check", Vec2::new(cell.right() - 16.0, cell.center().y), 15.0, ACCENT());
             } else if h {
-                self.p().rounded(cell, 5.0, HOVER);
+                self.p().rounded(cell, 5.0, HOVER());
             }
-            self.text_in(o, Rect::new(cell.x + 10.0, cell.y, cell.w - 36.0, cell.h), 13.0, Weight::Regular, TEXT, Align::Left);
+            self.text_in(o, Rect::new(cell.x + 10.0, cell.y, cell.w - 36.0, cell.h), 13.0, Weight::Regular, TEXT(), Align::Left);
             if h {
                 self.cursor = winit::window::CursorIcon::Pointer;
                 if self.input.released && !fresh {
@@ -1213,7 +1218,7 @@ impl Ui {
             let y = rr.y + (rr.h - bar_h) * (p.scroll / max.max(1.0));
             let wide = dragging || track.contains(self.input.mouse);
             let w = if wide { 5.0 } else { 3.0 };
-            self.p().rounded(Rect::new(rr.right() - 2.0 - w, y, w, bar_h), w * 0.5, Color::WHITE.alpha(if wide { 0.5 } else { 0.3 }));
+            self.p().rounded(Rect::new(rr.right() - 2.0 - w, y, w, bar_h), w * 0.5, LIFT().alpha(if wide { 0.5 } else { 0.3 }));
         }
         if rr.contains(self.input.mouse) {
             self.over_ui = true;
@@ -1226,13 +1231,14 @@ impl Ui {
         let r = date_rect(&p, self.size);
         p.opened = (p.opened + self.dt / 0.12).min(1.0);
         let e = 1.0 - (1.0 - p.opened).powi(3);
-        self.p().rounded(r, 8.0, Color::rgba(28, 28, 28, e));
-        self.p().rounded_border(r, 8.0, 1.0, Color::WHITE.alpha(0.1 * e));
+        self.p().shadow(Rect::new(r.x, r.y + 6.0, r.w, r.h), 8.0, 24.0, SHADOW().alpha(e));
+        self.p().rounded(r, 8.0, POPUP().alpha(e));
+        self.p().rounded_border(r, 8.0, 1.0, EDGE().alpha(e));
         let m = self.input.mouse;
         let click = self.input.released;
         // month header with arrows
         let head = Rect::new(r.x + 8.0, r.y + 8.0, r.w - 16.0, 30.0);
-        self.text_in(&format!("{} {}", MONTHS_LONG[p.month as usize - 1], p.year), head, 14.0, Weight::Bold, TEXT, Align::Center);
+        self.text_in(&format!("{} {}", MONTHS_LONG[p.month as usize - 1], p.year), head, 14.0, Weight::Bold, TEXT(), Align::Center);
         let prev = Rect::new(head.x, head.y, 30.0, 30.0);
         let next = Rect::new(head.right() - 30.0, head.y, 30.0, 30.0);
         let py = Rect::new(head.x + 30.0, head.y, 30.0, 30.0);
@@ -1240,10 +1246,10 @@ impl Ui {
         for (b, icon) in [(prev, "chevron_left"), (next, "chevron_right"), (py, "expand_more"), (ny, "expand_less")] {
             let h = b.contains(m);
             if h {
-                self.p().rounded(b, 6.0, Color::WHITE.alpha(0.08));
+                self.p().rounded(b, 6.0, LIFT().alpha(0.08));
                 self.cursor = winit::window::CursorIcon::Pointer;
             }
-            self.icon(icon, b.center(), 20.0, if h { ACCENT } else { TEXT_DIM });
+            self.icon(icon, b.center(), 20.0, if h { ACCENT() } else { TEXT_DIM() });
         }
         if click && prev.contains(m) {
             if p.month == 1 {
@@ -1269,7 +1275,7 @@ impl Ui {
         }
         let cw = (r.w - 16.0) / 7.0;
         for (k, d) in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].iter().enumerate() {
-            self.text_in(d, Rect::new(r.x + 8.0 + cw * k as f32, r.y + 42.0, cw, 18.0), 11.0, Weight::Bold, if k >= 5 { ACCENT.alpha(0.8) } else { TEXT_FAINT }, Align::Center);
+            self.text_in(d, Rect::new(r.x + 8.0 + cw * k as f32, r.y + 42.0, cw, 18.0), 11.0, Weight::Bold, if k >= 5 { ACCENT().alpha(0.8) } else { TEXT_FAINT() }, Align::Center);
         }
         let first = weekday(p.year, p.month, 1);
         let days = days_in_month(p.year, p.month);
@@ -1281,11 +1287,11 @@ impl Ui {
             let h = cell.contains(m);
             let is_chosen = chosen == Some((p.year, p.month, d));
             if is_chosen {
-                self.p().rounded(cell, 7.0, ACCENT);
+                self.p().rounded(cell, 7.0, ACCENT());
             } else if h {
-                self.p().rounded(cell, 7.0, Color::WHITE.alpha(0.09));
+                self.p().rounded(cell, 7.0, LIFT().alpha(0.09));
             }
-            self.text_in(&d.to_string(), cell, 12.5, Weight::Medium, if is_chosen { Color::rgba(20, 16, 8, 1.0) } else { TEXT }, Align::Center);
+            self.text_in(&d.to_string(), cell, 12.5, Weight::Medium, if is_chosen { ON_ACCENT() } else { TEXT() }, Align::Center);
             if h {
                 self.cursor = winit::window::CursorIcon::Pointer;
                 if click {

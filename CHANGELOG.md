@@ -4,6 +4,13 @@ Every push to `main` is released as `MAJOR.MINOR.COMMIT` (see
 [docs/VERSIONING.md](docs/VERSIONING.md)); the downloads are on the
 [Releases](https://github.com/openOMSI-Project/openOMSI/releases) page.
 
+## Unreleased
+
+### Launcher
+- A new home page with a top bar, a row of picture cards and three looks to choose from: Midnight, Ersatzverkehr and Classic.
+- A bus gallery, a livery studio and a line editor: stops are clicked on the map and the way between them is found over the roads.
+- An intro on start, pages that come in one after the other, and the designer's mark; the new pages are in German too.
+
 ## 0.2.3 - 2026-10-06
 
 ### Bug Fixes & Improvements

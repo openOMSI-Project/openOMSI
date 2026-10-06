@@ -1822,6 +1822,8 @@ pub fn settings_from_text(text: Option<&str>) -> Value {
     v["voice_chat"] = json!(true);
     // the launcher gives the graphics card up while a game runs (off: it stays drawn)
     v["launcher_rest"] = json!(true);
+    // the launcher's look (see the launcher's `theme`)
+    v["launcher_theme"] = json!("midnight");
     // the window's size in pixels, "auto" to fit the screen (#904)
     v["resolution"] = json!("auto");
     // the game's information bar along the top, as the last session left it (#1164)
@@ -1886,6 +1888,7 @@ pub fn settings_from_text(text: Option<&str>) -> Value {
             "ai_max_humans" => v[&k] = json!(val.parse::<f64>().map(|x| x.max(1.0) as i64).unwrap_or(200)),
             "drive_keys" | "navigator_corner" | "boarding" | "render_scale" | "pax_voices" => v[&k] = json!(val),
             "ctrl_off" => v[&k] = json!(val),
+            "launcher_theme" => v[&k] = json!(val.to_ascii_lowercase()),
             "metar_station" => v[&k] = json!(val.chars().filter(|c| c.is_ascii_alphabetic()).take(4).collect::<String>().to_ascii_uppercase()),
             "discord_app_id" => v[&k] = json!(val),
             "resolution" | "window_size" => v["resolution"] = json!(resolution_text(val)),
@@ -2254,6 +2257,7 @@ pub fn settings_to_text(v: &Value, old: Option<&str>) -> String {
     text.push_str(&format!("triple_screen={}\ntriple_span={}\n", b("triple_screen", false), b("triple_span", true)));
     text.push_str(&format!("triple_width_mm={}\ntriple_distance_mm={}\ntriple_bezel_mm={}\n", f("triple_width_mm", 600.0).clamp(200.0, 2000.0), f("triple_distance_mm", 650.0).clamp(200.0, 3000.0), f("triple_bezel_mm", 0.0).clamp(0.0, 100.0)));
     text.push_str(&format!("info_bar={}\n", b("info_bar", false)));
+    text.push_str(&format!("launcher_theme={}\n", v.get("launcher_theme").and_then(|x| x.as_str()).unwrap_or("midnight")));
     text.push_str(&format!("windy_trees={}\n", b("windy_trees", true)));
     text.push_str(&format!("triple_left_angle_deg={}\ntriple_right_angle_deg={}\ntriple_eye_height_mm={}\n", f("triple_left_angle_deg", 45.0).clamp(0.0, 90.0), f("triple_right_angle_deg", 45.0).clamp(0.0, 90.0), f("triple_eye_height_mm", 0.0).clamp(-500.0, 500.0)));
     let written: Vec<String> = text.lines().filter_map(|l| l.split_once('=')).map(|(k, _)| k.trim().to_ascii_lowercase()).collect();

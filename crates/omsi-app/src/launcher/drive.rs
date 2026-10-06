@@ -13,7 +13,7 @@ use super::Launcher;
 use glam::{DVec2, Vec2};
 use omsi_launcher_lib::{display_bus_name, vehicle_type_label, WeatherInfo};
 use omsi_ui::paint::Align;
-use omsi_ui::{Color, Rect, Weight};
+use omsi_ui::{Rect, Weight};
 
 #[derive(Clone)]
 struct BusVariant {
@@ -82,6 +82,21 @@ fn write_favourites(f: &std::collections::BTreeSet<String>) {
     if let Err(e) = std::fs::write(favourites_file(), text) {
         log::warn!("favourite buses not saved: {e}");
     }
+}
+
+/// The starred buses (by file, lower case, '/'), read once (the gallery shares them).
+pub(super) fn favourites(d: &mut DriveView) -> std::collections::BTreeSet<String> {
+    d.favourites.get_or_insert_with(read_favourites).clone()
+}
+
+/// A bus starred, or its star taken away again.
+pub(super) fn toggle_favourite(d: &mut DriveView, file: &str) {
+    let f = d.favourites.get_or_insert_with(read_favourites);
+    let k = fav_key(file);
+    if !f.remove(&k) {
+        f.insert(k);
+    }
+    write_favourites(f);
 }
 
 /// The three steps, in the order a player decides: what to drive, the day it is driven on,
@@ -154,7 +169,7 @@ pub fn draw(l: &mut Launcher, area: Rect) {
     } else {
         l.preview_full(lay.view, 0.5);
     }
-    l.ui.p().rounded_border(lay.view, RADIUS, 1.0, EDGE);
+    l.ui.p().rounded_border(lay.view, RADIUS, 1.0, EDGE());
 
     steps(l, lay.steps);
     l.ui.panel(lay.panel);
@@ -208,9 +223,9 @@ fn weather_icon_of(w: &WeatherInfo) -> &'static str {
 /// gone to at any time - the order is only the one that reads best.
 fn steps(l: &mut Launcher, r: Rect) {
     let w = r.w / STEPS.len() as f32;
-    l.ui.p().rect(Rect::new(r.x, r.bottom() - 1.0, r.w, 1.0), EDGE);
+    l.ui.p().rect(Rect::new(r.x, r.bottom() - 1.0, r.w, 1.0), EDGE());
     let sel = l.ui.anim(id_of("drive-tab"), l.drive.tab as f32, 0.08);
-    l.ui.p().rect(Rect::new(r.x + w * sel, r.bottom() - 2.0, w, 2.0), ACCENT);
+    l.ui.p().rect(Rect::new(r.x + w * sel, r.bottom() - 2.0, w, 2.0), ACCENT());
     for (k, name) in STEPS.iter().enumerate() {
         let cell = Rect::new(r.x + w * k as f32, r.y, w, r.h - 2.0);
         l.ui.solid(cell);
@@ -219,10 +234,10 @@ fn steps(l: &mut Launcher, r: Rect) {
             l.drive.tab = k;
         }
         let on = l.drive.tab == k;
-        let c = if on { TEXT } else if h { TEXT_SOFT } else { TEXT_DIM };
+        let c = if on { TEXT() } else if h { TEXT_SOFT() } else { TEXT_DIM() };
         let dot = Vec2::new(cell.x + 14.0, cell.center().y);
-        l.ui.p().circle(dot, 10.0, if on { ACCENT } else { Color::rgba(52, 52, 52, 1.0) });
-        l.ui.text_in(&format!("{}", k + 1), Rect::new(dot.x - 10.0, dot.y - 10.0, 20.0, 20.0), 11.5, Weight::Bold, if on { Color::rgba(18, 14, 8, 1.0) } else { TEXT_SOFT }, Align::Center);
+        l.ui.p().circle(dot, 10.0, if on { ACCENT() } else { TRACK() });
+        l.ui.text_in(&format!("{}", k + 1), Rect::new(dot.x - 10.0, dot.y - 10.0, 20.0, 20.0), 11.5, Weight::Bold, if on { ON_ACCENT() } else { TEXT_SOFT() }, Align::Center);
         l.ui.text_in(name, Rect::new(cell.x + 30.0, cell.y, (cell.w - 34.0).max(20.0), cell.h), 12.5, if on { Weight::Bold } else { Weight::Medium }, c, Align::Left);
     }
 }
@@ -237,9 +252,9 @@ fn duty_panel(l: &mut Launcher, body: Rect) {
         l.ui.label(Rect::new(body.x, y, 62.0, ROW), "Map");
         let fr = Rect::new(body.x + 62.0, y, body.w - 62.0, ROW);
         l.ui.solid(fr);
-        l.ui.p().rounded(fr, RADIUS, FIELD);
-        l.ui.icon("lock", Vec2::new(fr.x + 16.0, fr.center().y), 15.0, TEXT_DIM);
-        l.ui.text_in(&format!("{m} · {name}"), Rect::new(fr.x + 32.0, fr.y, fr.w - 40.0, fr.h), 12.5, Weight::Regular, TEXT_SOFT, Align::Left);
+        l.ui.p().rounded(fr, RADIUS, FIELD());
+        l.ui.icon("lock", Vec2::new(fr.x + 16.0, fr.center().y), 15.0, TEXT_DIM());
+        l.ui.text_in(&format!("{m} · {name}"), Rect::new(fr.x + 32.0, fr.y, fr.w - 40.0, fr.h), 12.5, Weight::Regular, TEXT_SOFT(), Align::Left);
         y += ROW + 8.0;
         // (on a server: which one, and the way back to driving alone)
         let leave = Rect::new(body.x, y, body.w, ROW);
@@ -272,7 +287,7 @@ fn duty_panel(l: &mut Launcher, body: Rect) {
     let start_y = body.bottom() - ROW;
     entry_select(l, body, start_y, free);
     if free {
-        l.ui.paragraph("Free driving: the bus starts where you chose, with the traffic and the timetable's buses around it, but no line of your own. Pick the place below or click an entry point on the map.", Vec2::new(body.x, y), body.w, 12.5, Weight::Regular, TEXT_DIM);
+        l.ui.paragraph("Free driving: the bus starts where you chose, with the traffic and the timetable's buses around it, but no line of your own. Pick the place below or click an entry point on the map.", Vec2::new(body.x, y), body.w, 12.5, Weight::Regular, TEXT_DIM());
         return;
     }
     // what the two lists share: the lines take about two fifths, the tours the rest
@@ -303,7 +318,7 @@ fn duty_panel(l: &mut Launcher, body: Rect) {
     let list = Rect::new(body.x - 4.0, y, body.w + 8.0, lines_h);
     l.ui.scroll_area("line-list", list, &mut |ui, v| {
         if lines.is_empty() {
-            ui.text_in(if loading { "Reading the timetable…" } else { "No lines on this date." }, Rect::new(v.x + 10.0, v.y + 6.0, v.w, 34.0), 12.5, Weight::Regular, TEXT_DIM, Align::Left);
+            ui.text_in(if loading { "Reading the timetable…" } else { "No lines on this date." }, Rect::new(v.x + 10.0, v.y + 6.0, v.w, 34.0), 12.5, Weight::Regular, TEXT_DIM(), Align::Left);
         }
         for (k, (name, termini, tours)) in lines.iter().enumerate() {
             let rr = Rect::new(v.x + 4.0, v.y + k as f32 * LINE_H, v.w - 12.0, LINE_H - 4.0);
@@ -319,12 +334,12 @@ fn duty_panel(l: &mut Launcher, body: Rect) {
             let cw = ui.width(&count, 11.5, Weight::Bold) + 8.0;
             let bw = (ui.width(name, 12.5, Weight::Bold) + 14.0).clamp(34.0, (rr.w - cw - 40.0).max(34.0));
             let badge = Rect::new(rr.x + 10.0, rr.y + 6.0, bw, 20.0);
-            ui.p().rounded(badge, 4.0, if on { ACCENT } else { Color::rgba(56, 56, 56, 1.0) });
-            ui.text_in(name, badge.pad(6.0, 0.0), 12.0, Weight::Bold, if on { Color::rgba(18, 14, 8, 1.0) } else { TEXT }, Align::Center);
-            ui.icon("event", Vec2::new(rr.right() - cw - 10.0, badge.center().y), 13.0, TEXT_FAINT);
-            ui.text_in(&count, Rect::new(rr.right() - cw - 2.0, badge.y, cw, badge.h), 11.5, Weight::Bold, TEXT_DIM, Align::Right);
+            ui.p().rounded(badge, 4.0, if on { ACCENT() } else { TRACK() });
+            ui.text_in(name, badge.pad(6.0, 0.0), 12.0, Weight::Bold, if on { ON_ACCENT() } else { TEXT() }, Align::Center);
+            ui.icon("event", Vec2::new(rr.right() - cw - 10.0, badge.center().y), 13.0, TEXT_FAINT());
+            ui.text_in(&count, Rect::new(rr.right() - cw - 2.0, badge.y, cw, badge.h), 11.5, Weight::Bold, TEXT_DIM(), Align::Right);
             ui.tooltip(Rect::new(rr.right() - cw - 18.0, badge.y, cw + 18.0, badge.h), "Tours of this line on the chosen day");
-            ui.text_in(termini, Rect::new(rr.x + 10.0, rr.y + 29.0, rr.w - 20.0, 14.0), 11.0, Weight::Regular, TEXT_DIM, Align::Left);
+            ui.text_in(termini, Rect::new(rr.x + 10.0, rr.y + 29.0, rr.w - 20.0, 14.0), 11.0, Weight::Regular, TEXT_DIM(), Align::Left);
         }
         lines.len() as f32 * LINE_H + 4.0
     });
@@ -341,7 +356,7 @@ fn duty_panel(l: &mut Launcher, body: Rect) {
     l.ui.heading(heading, "Tour", None);
     y += 28.0;
     let Some(line) = l.state.line().cloned() else {
-        l.ui.paragraph("Pick a line first. As in OMSI, the start time and date then say where in the tour the bus is: the trip under way, or the next to leave.", Vec2::new(body.x, y), body.w, 12.5, Weight::Regular, TEXT_DIM);
+        l.ui.paragraph("Pick a line first. As in OMSI, the start time and date then say where in the tour the bus is: the trip under way, or the next to leave.", Vec2::new(body.x, y), body.w, 12.5, Weight::Regular, TEXT_DIM());
         return;
     };
     l.ui.text_input("tour-filter", Rect::new(body.x, y, body.w, 34.0), &mut l.drive.tour_filter, "Filter tours: number, route, stop…", Some("search"));
@@ -393,7 +408,7 @@ fn duty_panel(l: &mut Launcher, body: Rect) {
     l.ui.scroll_area("tour-list", list, &mut |ui, v| {
         if tours.is_empty() {
             let why = if searching { "No tour has a trip still to come that matches." } else { "No tour left at this time: show the ended tours, or start earlier." };
-            ui.text_in(why, Rect::new(v.x + 10.0, v.y + 6.0, v.w, 34.0), 12.5, Weight::Regular, TEXT_DIM, Align::Left);
+            ui.text_in(why, Rect::new(v.x + 10.0, v.y + 6.0, v.w, 34.0), 12.5, Weight::Regular, TEXT_DIM(), Align::Left);
         }
         for (k, (num, trips, days, runs, next, trip, from, terminus, ended)) in tours.iter().enumerate() {
             let rr = Rect::new(v.x + 4.0, v.y + k as f32 * TOUR_H, v.w - 12.0, TOUR_H - 4.0);
@@ -405,19 +420,19 @@ fn duty_panel(l: &mut Launcher, body: Rect) {
                 pick = Some((num.clone(), *runs, next.clone(), trip.clone()));
             }
             let live = *runs && !*ended;
-            let c = if live { TEXT } else { TEXT_FAINT };
+            let c = if live { TEXT() } else { TEXT_FAINT() };
             // (the tour's name as the map writes it and OMSI lists it: "1", "Mo-Fr 1"),
             // the trip a start now would take on the right
             ui.text_in(num, Rect::new(rr.x + 10.0, rr.y + 6.0, rr.w - 120.0, 18.0), 13.5, Weight::Bold, c, Align::Left);
             if let Some(x) = trip {
-                ui.text_in(&format!("{} - {}", hhmm(x.departure), hhmm(x.arrival)), Rect::new(rr.right() - 112.0, rr.y + 6.0, 102.0, 18.0), 12.0, Weight::Medium, if live { ACCENT } else { TEXT_FAINT }, Align::Right);
+                ui.text_in(&format!("{} - {}", hhmm(x.departure), hhmm(x.arrival)), Rect::new(rr.right() - 112.0, rr.y + 6.0, 102.0, 18.0), 12.0, Weight::Medium, if live { ACCENT() } else { TEXT_FAINT() }, Align::Right);
             }
             let route = match trip {
                 Some(x) if searching => format!("{} · {} → {}", x.name, x.from, x.terminus),
                 _ if from.is_empty() && terminus.is_empty() => String::new(),
                 _ => format!("{from} → {terminus}"),
             };
-            ui.text_in(&route, Rect::new(rr.x + 10.0, rr.y + 26.0, rr.w - 20.0, 16.0), 11.5, Weight::Medium, if live { TEXT_SOFT } else { TEXT_FAINT }, Align::Left);
+            ui.text_in(&route, Rect::new(rr.x + 10.0, rr.y + 26.0, rr.w - 20.0, 16.0), 11.5, Weight::Medium, if live { TEXT_SOFT() } else { TEXT_FAINT() }, Align::Left);
             let mut sub = format!("{trips} trips · {days}");
             if let Some(x) = trip {
                 sub = format!("{sub} · {} {}", trip_duration(x.departure, x.arrival), omsi_ui::tr("a trip"));
@@ -431,7 +446,7 @@ fn duty_panel(l: &mut Launcher, body: Rect) {
                     None => format!("{trips} trips · never within a year"),
                 };
             }
-            ui.text_in(&sub, Rect::new(rr.x + 10.0, rr.y + 45.0, rr.w - 20.0, 16.0), 11.0, Weight::Regular, TEXT_DIM, Align::Left);
+            ui.text_in(&sub, Rect::new(rr.x + 10.0, rr.y + 45.0, rr.w - 20.0, 16.0), 11.0, Weight::Regular, TEXT_DIM(), Align::Left);
         }
         tours.len() as f32 * TOUR_H + 4.0
     });
@@ -483,7 +498,7 @@ fn entry_select(l: &mut Launcher, body: Rect, y: f32, free: bool) {
     labels.extend(m.entry_points.iter().map(|e| if e.name.is_empty() { format!("entry {}", e.index + 1) } else { e.name.clone() }));
     // (the choice is the entry's place in the list; 0 = automatic here)
     let mut es = if l.state.choice.entry < 0 { 0 } else { (l.state.choice.entry as usize + 1).min(labels.len() - 1) };
-    l.ui.p().rect(Rect::new(body.x, y - 14.0, body.w, 1.0), EDGE);
+    l.ui.p().rect(Rect::new(body.x, y - 14.0, body.w, 1.0), EDGE());
     l.ui.label(Rect::new(body.x, y, 70.0, ROW), "Start at");
     if l.ui.select("entry", Rect::new(body.x + 70.0, y, body.w - 70.0, ROW), &mut es, &labels) {
         l.state.choice.entry = es as i32 - 1;
@@ -579,7 +594,7 @@ fn foot(l: &mut Launcher, f: Rect, tab: usize) {
         return;
     }
     let icon = ["directions_bus", "partly_cloudy_day", "map"][tab];
-    l.ui.icon(icon, Vec2::new(f.x + pad + 12.0, f.center().y), 22.0, TEXT_DIM);
+    l.ui.icon(icon, Vec2::new(f.x + pad + 12.0, f.center().y), 22.0, TEXT_DIM());
     let tx = f.x + pad + 34.0;
     let tw = (text_w - 34.0).max(0.0);
     let (title, sub) = if tab < 2 {
@@ -594,10 +609,10 @@ fn foot(l: &mut Launcher, f: Rect, tab: usize) {
     let warn = l.state.bus().filter(|b| !b.missing_packs.is_empty()).map(|b| omsi_ui::tr("Parts missing: needs %{packs}").replace("%{packs}", &b.missing_packs.join(", ")));
     let lines = 2 + (warn.is_some() || running > 0) as usize;
     let y0 = f.center().y - lines as f32 * 9.5;
-    l.ui.text_in(&title, Rect::new(tx, y0, tw, 20.0), 13.5, Weight::Bold, TEXT, Align::Left);
-    l.ui.text_in(&sub, Rect::new(tx, y0 + 20.0, tw, 18.0), 11.5, Weight::Regular, TEXT_DIM, Align::Left);
+    l.ui.text_in(&title, Rect::new(tx, y0, tw, 20.0), 13.5, Weight::Bold, TEXT(), Align::Left);
+    l.ui.text_in(&sub, Rect::new(tx, y0 + 20.0, tw, 18.0), 11.5, Weight::Regular, TEXT_DIM(), Align::Left);
     if let Some(w) = warn {
-        l.ui.text_in(&w, Rect::new(tx, y0 + 38.0, tw, 18.0), 11.5, Weight::Medium, WARN, Align::Left);
+        l.ui.text_in(&w, Rect::new(tx, y0 + 38.0, tw, 18.0), 11.5, Weight::Medium, WARN(), Align::Left);
     } else if running > 0 {
         let note = format!("{running} game{} running - see Sessions", if running > 1 { "s" } else { "" });
         let nr = Rect::new(tx, y0 + 38.0, l.ui.width(&note, 11.5, Weight::Medium).min(tw), 18.0);
@@ -605,7 +620,7 @@ fn foot(l: &mut Launcher, f: Rect, tab: usize) {
         if clicked {
             l.go(super::Page::Sessions);
         }
-        l.ui.text_in(&note, nr, 11.5, Weight::Medium, if h { TEXT } else { OK }, Align::Left);
+        l.ui.text_in(&note, nr, 11.5, Weight::Medium, if h { TEXT() } else { OK() }, Align::Left);
     }
 }
 
@@ -677,8 +692,8 @@ fn legend(l: &mut Launcher, map: Rect) -> Option<Rect> {
     let w = (l.ui.width(&t, 11.0, Weight::Regular) + 20.0).min(map.w - 24.0);
     let bar = Rect::new(map.x + 12.0, map.bottom() - 32.0, w, 22.0);
     l.ui.solid(bar);
-    l.ui.p().rounded(bar, 5.0, Color::rgba(0, 0, 0, 0.6));
-    l.ui.text_in(&t, bar.pad(10.0, 0.0), 11.0, Weight::Regular, TEXT_SOFT, Align::Left);
+    l.ui.p().rounded(bar, 5.0, SHADE().alpha(0.85));
+    l.ui.text_in(&t, bar.pad(10.0, 0.0), 11.0, Weight::Regular, TEXT_SOFT(), Align::Left);
     Some(bar)
 }
 
@@ -699,8 +714,8 @@ fn map_labels(l: &mut Launcher, map: Rect, avoid: &[Rect]) {
                 let right = Rect::new(at.x + 12.0, at.y - 28.0, w, 20.0);
                 let rr = if inside(&right) { right } else { Rect::new(at.x - 12.0 - w, at.y - 28.0, w, 20.0) };
                 if inside(&rr) {
-                    l.ui.p().rounded(rr, 4.0, ACCENT);
-                    l.ui.text_in(&name, rr.pad(7.0, 0.0), 11.5, Weight::Bold, Color::rgba(18, 14, 8, 1.0), Align::Left);
+                    l.ui.p().rounded(rr, 4.0, ACCENT());
+                    l.ui.text_in(&name, rr.pad(7.0, 0.0), 11.5, Weight::Bold, ON_ACCENT(), Align::Left);
                     taken.push(rr);
                 }
             }
@@ -722,10 +737,10 @@ fn map_labels(l: &mut Launcher, map: Rect, avoid: &[Rect]) {
         let right = Rect::new(at.x + 9.0, at.y - 9.0, w, 18.0);
         let left = Rect::new(at.x - 9.0 - w, at.y - 9.0, w, 18.0);
         let Some(rr) = [right, left].into_iter().find(|r| inside(r) && !taken.iter().any(|t| hits(t, r))) else { continue };
-        l.ui.p().rounded(rr, 4.0, Color::rgba(10, 10, 10, 0.84));
+        l.ui.p().rounded(rr, 4.0, RAIL().alpha(0.88));
         let tw = l.ui.width(&time, 11.0, Weight::Bold);
-        l.ui.text_in(&time, Rect::new(rr.x + 6.0, rr.y, tw + 2.0, rr.h), 11.0, Weight::Bold, ACCENT, Align::Left);
-        l.ui.text_in(&st.name, Rect::new(rr.x + 12.0 + tw, rr.y, rr.w - tw - 16.0, rr.h), 11.0, Weight::Medium, TEXT_SOFT, Align::Left);
+        l.ui.text_in(&time, Rect::new(rr.x + 6.0, rr.y, tw + 2.0, rr.h), 11.0, Weight::Bold, ACCENT(), Align::Left);
+        l.ui.text_in(&st.name, Rect::new(rr.x + 12.0 + tw, rr.y, rr.w - tw - 16.0, rr.h), 11.0, Weight::Medium, TEXT_SOFT(), Align::Left);
         taken.push(rr);
     }
 }
@@ -865,7 +880,7 @@ fn step_bus(l: &mut Launcher, r: Rect) {
 
     let visible: Vec<&BusManufacturer> = models.iter().filter(|m| manufacturer_matches(m, &q) && (!only || m.variants.iter().any(|v| is_fav(&v.file)))).collect();
     let count = format!("{} {}", visible.len(), omsi_ui::tr(if visible.len() == 1 { "manufacturer" } else { "manufacturers" }));
-    l.ui.text_in(&count, Rect::new(r.x, search.bottom() + 6.0, r.w, 20.0), 11.5, Weight::Regular, TEXT_DIM, Align::Left);
+    l.ui.text_in(&count, Rect::new(r.x, search.bottom() + 6.0, r.w, 20.0), 11.5, Weight::Regular, TEXT_DIM(), Align::Left);
     let mut only_now = l.drive.only_favourites;
     let fav_w = l.ui.width(&omsi_ui::tr("Favourites only"), 13.0, Weight::Regular) + 50.0;
     if l.ui.toggle("bus-only-favourites", Rect::new(r.right() - fav_w, search.bottom() + 4.0, fav_w, 22.0), &mut only_now, "Favourites only") {
@@ -875,8 +890,8 @@ fn step_bus(l: &mut Launcher, r: Rect) {
     let list_y = search.bottom() + 32.0;
     let settings_h = if l.drive.vehicle_settings_open { 164.0 } else { 0.0 };
     let list = Rect::new(r.x, list_y, r.w, (r.bottom() - list_y - 132.0 - settings_h).max(100.0));
-    l.ui.p().rounded(list, RADIUS, FIELD);
-    l.ui.p().rounded_border(list, RADIUS, 1.0, EDGE);
+    l.ui.p().rounded(list, RADIUS, FIELD());
+    l.ui.p().rounded_border(list, RADIUS, 1.0, EDGE());
     if !l.drive.bus_list_initialized && !models.is_empty() {
         if let Some(index) = models.iter().position(|m| m.variants.iter().any(|v| v.file == chosen)) {
             let model = &models[index];
@@ -897,7 +912,7 @@ fn step_bus(l: &mut Launcher, r: Rect) {
     l.ui.scroll_area("bus-model-list", list, &mut |ui, view| {
         let mut y = view.y + 6.0;
         if visible.is_empty() {
-            ui.text_in(if loading { "Reading the buses…" } else { "No buses found. Try another search." }, Rect::new(view.x + 12.0, y, view.w - 24.0, 50.0), 12.5, Weight::Regular, TEXT_DIM, Align::Left);
+            ui.text_in(if loading { "Reading the buses…" } else { "No buses found. Try another search." }, Rect::new(view.x + 12.0, y, view.w - 24.0, 50.0), 12.5, Weight::Regular, TEXT_DIM(), Align::Left);
         }
         for model in &visible {
             let open = model.variants.len() > 1 && expanded.as_deref() == Some(model.key.as_str());
@@ -913,9 +928,9 @@ fn step_bus(l: &mut Launcher, r: Rect) {
                 if model.variants.len() == 1 { pick = Some(model.variants[0].file.clone()); }
                 else { toggle = Some(model.key.clone()); }
             }
-            ui.icon("directions_bus", Vec2::new(row.x + 20.0, row.y + 23.0), 20.0, if selected.is_some() { ACCENT } else { TEXT_DIM });
+            ui.icon("directions_bus", Vec2::new(row.x + 20.0, row.y + 23.0), 20.0, if selected.is_some() { ACCENT() } else { TEXT_DIM() });
             let title = Rect::new(row.x + 42.0, row.y + 7.0, row.w - 78.0, 20.0);
-            ui.text_in(&model.name, title, 13.0, Weight::Medium, TEXT, Align::Left);
+            ui.text_in(&model.name, title, 13.0, Weight::Medium, TEXT(), Align::Left);
             ui.tooltip(title, &model.name);
             let subtitle = if model.variants.len() == 1 { format!("{} · {}", omsi_ui::tr(&model.variants[0].variant), liveries_text(model.variants[0].paints)) }
             else if let Some(v) = selected { format!("{} · {} {}", omsi_ui::tr(&v.variant), model.variants.len(), omsi_ui::tr("models")) }
@@ -923,8 +938,8 @@ fn step_bus(l: &mut Launcher, r: Rect) {
             let subtitle = if selected.is_some_and(|v| v.incomplete) { format!("{subtitle} · {}", omsi_ui::tr("PARTS MISSING")) }
             else if selected.is_some_and(|v| v.fresh) { format!("{subtitle} · {}", omsi_ui::tr("NEW")) }
             else if selected.is_some_and(|v| v.installed) { format!("{subtitle} · {}", omsi_ui::tr("MOD")) } else { subtitle };
-            ui.text_in(&subtitle, Rect::new(title.x, row.y + 29.0, title.w, 17.0), 11.5, Weight::Regular, TEXT_DIM, Align::Left);
-            ui.icon(if model.variants.len() == 1 { if selected.is_some() { "check" } else { "chevron_right" } } else if open { "expand_less" } else { "expand_more" }, Vec2::new(row.right() - 18.0, row.center().y), 18.0, if selected.is_some() { ACCENT } else { TEXT_DIM });
+            ui.text_in(&subtitle, Rect::new(title.x, row.y + 29.0, title.w, 17.0), 11.5, Weight::Regular, TEXT_DIM(), Align::Left);
+            ui.icon(if model.variants.len() == 1 { if selected.is_some() { "check" } else { "chevron_right" } } else if open { "expand_less" } else { "expand_more" }, Vec2::new(row.right() - 18.0, row.center().y), 18.0, if selected.is_some() { ACCENT() } else { TEXT_DIM() });
             // the star: a bus of its own is starred here, a family's types in its list below
             let starred = model.variants.iter().any(|v| is_fav(&v.file));
             let sr = Rect::new(row.right() - 62.0, row.center().y - 13.0, 26.0, 26.0);
@@ -933,10 +948,10 @@ fn step_bus(l: &mut Launcher, r: Rect) {
                 if cs {
                     star = Some(model.variants[0].file.clone());
                 }
-                ui.icon("star", sr.center(), 16.0, if starred { ACCENT } else if hs { TEXT_SOFT } else { Color::WHITE.alpha(0.16) });
+                ui.icon("star", sr.center(), 16.0, if starred { ACCENT() } else if hs { TEXT_SOFT() } else { LIFT().alpha(0.16) });
                 ui.tooltip(sr, if starred { "Remove from the favourites" } else { "Add to the favourites" });
             } else if starred {
-                ui.icon("star", sr.center(), 14.0, ACCENT.alpha(0.8));
+                ui.icon("star", sr.center(), 14.0, ACCENT().alpha(0.8));
             }
             y += 58.0;
             if open {
@@ -959,7 +974,7 @@ fn step_bus(l: &mut Launcher, r: Rect) {
                     if cs {
                         star = Some(variant.file.clone());
                     }
-                    ui.icon("star", sr.center(), 18.0, if on { ACCENT } else if hs { TEXT_SOFT } else { Color::WHITE.alpha(0.2) });
+                    ui.icon("star", sr.center(), 18.0, if on { ACCENT() } else if hs { TEXT_SOFT() } else { LIFT().alpha(0.2) });
                     ui.tooltip(sr, if on { "Remove from the favourites" } else { "Add to the favourites" });
                 }
                 if let Some(variant) = selected {
@@ -993,7 +1008,7 @@ fn step_bus(l: &mut Launcher, r: Rect) {
         let paints: Vec<String> = std::iter::once(default_livery_label(&vehicle).to_string()).chain(vehicle.paints.iter().cloned()).collect();
         let mut paint_sel = vehicle.paints.iter().position(|p| *p == l.state.choice.paint).map(|i| i + 1).unwrap_or(0);
         l.ui.label(Rect::new(r.x, y, r.w, 22.0), "Livery");
-        if paints.len() > 1 { l.ui.text_in(&format!("{} / {}", paint_sel + 1, paints.len()), Rect::new(r.right() - 70.0, y, 70.0, 22.0), 11.5, Weight::Regular, TEXT_DIM, Align::Right); }
+        if paints.len() > 1 { l.ui.text_in(&format!("{} / {}", paint_sel + 1, paints.len()), Rect::new(r.right() - 70.0, y, 70.0, 22.0), 11.5, Weight::Regular, TEXT_DIM(), Align::Right); }
         y += 28.0;
         let has_arrows = paints.len() > 1;
         let selector = Rect::new(r.x, y, r.w - if has_arrows { 88.0 } else { 0.0 }, ROW);
@@ -1013,8 +1028,8 @@ fn step_bus(l: &mut Launcher, r: Rect) {
         y += ROW + 14.0;
         let settings = Rect::new(r.x, y, r.w, 32.0);
         if l.ui.row("vehicle-settings-toggle", settings, false) { l.drive.vehicle_settings_open = !l.drive.vehicle_settings_open; }
-        l.ui.icon(if l.drive.vehicle_settings_open { "expand_less" } else { "expand_more" }, Vec2::new(settings.x + 12.0, settings.center().y), 18.0, TEXT_DIM);
-        l.ui.text_in("Vehicle settings & details", Rect::new(settings.x + 30.0, settings.y, settings.w - 30.0, settings.h), 12.5, Weight::Medium, TEXT_DIM, Align::Left);
+        l.ui.icon(if l.drive.vehicle_settings_open { "expand_less" } else { "expand_more" }, Vec2::new(settings.x + 12.0, settings.center().y), 18.0, TEXT_DIM());
+        l.ui.text_in("Vehicle settings & details", Rect::new(settings.x + 30.0, settings.y, settings.w - 30.0, settings.h), 12.5, Weight::Medium, TEXT_DIM(), Align::Left);
         y += 38.0;
         if l.drive.vehicle_settings_open {
             let details = Rect::new(r.x, y, r.w, (r.bottom() - y).max(0.0));
@@ -1043,11 +1058,11 @@ fn step_bus(l: &mut Launcher, r: Rect) {
                 plate_changed = ui.text_input("plate", Rect::new(view.x + 110.0, y, field_w - 110.0, ROW), &mut plate, "Automatic", Some("badge"));
                 y += ROW + 16.0;
                 if !vehicle.missing_packs.is_empty() {
-                    y += ui.paragraph(&omsi_ui::tr("Parts missing: needs %{packs}").replace("%{packs}", &vehicle.missing_packs.join(", ")), Vec2::new(view.x, y), field_w, 12.5, Weight::Regular, WARN) + 12.0;
+                    y += ui.paragraph(&omsi_ui::tr("Parts missing: needs %{packs}").replace("%{packs}", &vehicle.missing_packs.join(", ")), Vec2::new(view.x, y), field_w, 12.5, Weight::Regular, WARN()) + 12.0;
                 }
                 let description = vehicle.description.replace('\t', " ").lines().map(str::trim).collect::<Vec<_>>().join("\n").trim().to_string();
-                if !description.is_empty() { y += ui.paragraph(&description, Vec2::new(view.x, y), field_w, 12.0, Weight::Regular, TEXT_DIM) + 12.0; }
-                y += ui.paragraph(&vehicle.file, Vec2::new(view.x, y), field_w, 10.5, Weight::Regular, TEXT_FAINT);
+                if !description.is_empty() { y += ui.paragraph(&description, Vec2::new(view.x, y), field_w, 12.0, Weight::Regular, TEXT_DIM()) + 12.0; }
+                y += ui.paragraph(&vehicle.file, Vec2::new(view.x, y), field_w, 10.5, Weight::Regular, TEXT_FAINT());
                 y - view.y + 8.0
             });
             if let Some(sel) = hof_pick {
@@ -1099,11 +1114,11 @@ fn step_time(l: &mut Launcher, r: Rect) {
         y += 36.0;
         let rows = [("Time", info.as_ref().map(|i| i.time.clone()).unwrap_or_default()), ("Weather", info.as_ref().map(|i| if i.weather.is_empty() { "the map's".to_string() } else { i.weather.clone() }).unwrap_or_default())];
         for (k, v) in rows {
-            l.ui.text_in(k, Rect::new(r.x, y, 110.0, 22.0), 13.0, Weight::Regular, TEXT_DIM, Align::Left);
-            l.ui.text_in(&v, Rect::new(r.x + 110.0, y, r.w - 110.0, 22.0), 13.0, Weight::Regular, TEXT, Align::Left);
+            l.ui.text_in(k, Rect::new(r.x, y, 110.0, 22.0), 13.0, Weight::Regular, TEXT_DIM(), Align::Left);
+            l.ui.text_in(&v, Rect::new(r.x + 110.0, y, r.w - 110.0, 22.0), 13.0, Weight::Regular, TEXT(), Align::Left);
             y += 26.0;
         }
-        l.ui.paragraph("On a server the map, the time, the date and the weather are the same for everybody: the server keeps the world's clock. You choose your bus and your duty.", Vec2::new(r.x, y + 8.0), r.w, 12.5, Weight::Regular, TEXT_DIM);
+        l.ui.paragraph("On a server the map, the time, the date and the weather are the same for everybody: the server keeps the world's clock. You choose your bus and your duty.", Vec2::new(r.x, y + 8.0), r.w, 12.5, Weight::Regular, TEXT_DIM());
         return;
     }
     let col = (r.w - 12.0) * 0.5;
@@ -1372,14 +1387,14 @@ fn step_time(l: &mut Launcher, r: Rect) {
                 pick = Some(file.clone());
             }
             let t = ui.anim(id, if h { 1.0 } else { 0.0 }, 0.08);
-            ui.p().rounded(rr, 6.0, if on { SELECTED } else { FIELD.mix(HOVER, t) });
-            ui.p().rounded_border(rr, 6.0, 1.0, if on { ACCENT.alpha(0.6) } else { EDGE });
-            ui.icon(icon, Vec2::new(rr.x + 24.0, rr.center().y), 22.0, if on { TEXT } else { TEXT_DIM });
-            let tw = ui.text_in(name, Rect::new(rr.x + 46.0, rr.y + 10.0, rr.w - 56.0, 20.0), 13.0, Weight::Bold, TEXT, Align::Left);
+            ui.p().rounded(rr, 6.0, if on { SELECTED() } else { FIELD().mix(HOVER(), t) });
+            ui.p().rounded_border(rr, 6.0, 1.0, if on { ACCENT().alpha(0.6) } else { EDGE() });
+            ui.icon(icon, Vec2::new(rr.x + 24.0, rr.center().y), 22.0, if on { TEXT() } else { TEXT_DIM() });
+            let tw = ui.text_in(name, Rect::new(rr.x + 46.0, rr.y + 10.0, rr.w - 56.0, 20.0), 13.0, Weight::Bold, TEXT(), Align::Left);
             if *fresh {
-                ui.badge(Vec2::new(rr.x + 50.0 + tw, rr.y + 12.0), "NEW", OK);
+                ui.badge(Vec2::new(rr.x + 50.0 + tw, rr.y + 12.0), "NEW", OK());
             }
-            ui.text_in(meta, Rect::new(rr.x + 46.0, rr.y + 33.0, rr.w - 56.0, 18.0), 11.0, Weight::Regular, TEXT_DIM, Align::Left);
+            ui.text_in(meta, Rect::new(rr.x + 46.0, rr.y + 33.0, rr.w - 56.0, 18.0), 11.0, Weight::Regular, TEXT_DIM(), Align::Left);
         }
         ((items.len() + 1) / 2) as f32 * (ch + 8.0) + 4.0
     });
@@ -1392,13 +1407,13 @@ fn step_time(l: &mut Launcher, r: Rect) {
 fn step_roadbook(l: &mut Launcher, r: Rect) {
     let (Some(line), Some(tour), false) = (l.state.line().cloned(), l.state.tour().cloned(), l.state.choice.free) else {
         let map = l.state.map().map(|m| if m.friendly.is_empty() { m.name.clone() } else { m.friendly.clone() }).unwrap_or_default();
-        l.ui.paragraph(&format!("No duty chosen: free driving on {map}. Pick a line and a tour under Route to see the roadbook here."), Vec2::new(r.x, r.y), r.w, 13.0, Weight::Regular, TEXT_DIM);
+        l.ui.paragraph(&format!("No duty chosen: free driving on {map}. Pick a line and a tour under Route to see the roadbook here."), Vec2::new(r.x, r.y), r.w, 13.0, Weight::Regular, TEXT_DIM());
         ibis_box(l, Rect::new(r.x, r.y + 60.0, r.w, 160.0));
         return;
     };
     let from = l.state.first_trip().unwrap_or(0);
-    l.ui.text_in(&format!("Line {} · tour {} · from {}", line.name, tour.number, hhmm(l.state.choice.time as f64 * 60.0)), Rect::new(r.x, r.y, r.w, 22.0), 14.0, Weight::Bold, TEXT, Align::Left);
-    l.ui.text_in("Click a trip to start the tour there.", Rect::new(r.x, r.y + 20.0, r.w, 16.0), 11.5, Weight::Regular, TEXT_DIM, Align::Left);
+    l.ui.text_in(&format!("Line {} · tour {} · from {}", line.name, tour.number, hhmm(l.state.choice.time as f64 * 60.0)), Rect::new(r.x, r.y, r.w, 22.0), 14.0, Weight::Bold, TEXT(), Align::Left);
+    l.ui.text_in("Click a trip to start the tour there.", Rect::new(r.x, r.y + 20.0, r.w, 16.0), 11.5, Weight::Regular, TEXT_DIM(), Align::Left);
     let trips: Vec<omsi_launcher_lib::TripInfo> = tour.trips.clone();
     let ibis_h = 150.0;
     let list = Rect::new(r.x - 4.0, r.y + 40.0, r.w + 8.0, r.h - 40.0 - ibis_h - 10.0);
@@ -1417,19 +1432,19 @@ fn step_roadbook(l: &mut Launcher, r: Rect) {
                 if ui.row(&format!("roadbook-trip-{i}"), head, false) {
                     start_at = Some((t.index, t.departure));
                 }
-                ui.text_in(&format!("{} · {} → {}", omsi_ui::tr("Earlier"), if t.from.is_empty() { "?" } else { &t.from }, t.terminus), Rect::new(head.x + 10.0, head.y + 4.0, head.w - 20.0, 20.0), 13.0, Weight::Bold, TEXT_FAINT, Align::Left);
-                ui.text_in(&format!("{} - {} · {}", hhmm(t.departure), hhmm(t.arrival), if t.line.is_empty() { "depot run".to_string() } else { format!("line {}", t.line) }), Rect::new(head.x + 10.0, head.y + 24.0, head.w - 20.0, 18.0), 11.0, Weight::Regular, TEXT_FAINT, Align::Left);
+                ui.text_in(&format!("{} · {} → {}", omsi_ui::tr("Earlier"), if t.from.is_empty() { "?" } else { &t.from }, t.terminus), Rect::new(head.x + 10.0, head.y + 4.0, head.w - 20.0, 20.0), 13.0, Weight::Bold, TEXT_FAINT(), Align::Left);
+                ui.text_in(&format!("{} - {} · {}", hhmm(t.departure), hhmm(t.arrival), if t.line.is_empty() { "depot run".to_string() } else { format!("line {}", t.line) }), Rect::new(head.x + 10.0, head.y + 24.0, head.w - 20.0, 18.0), 11.0, Weight::Regular, TEXT_FAINT(), Align::Left);
                 y += 52.0;
                 continue;
             }
             let k = i - from;
             if k == 0 {
-                ui.p().rounded(head, 6.0, SELECTED);
+                ui.p().rounded(head, 6.0, SELECTED());
             } else if ui.row(&format!("roadbook-trip-{i}"), head, false) {
                 start_at = Some((t.index, t.departure));
             }
-            ui.text_in(&format!("{} · {} → {}", if k == 0 { "Your first trip" } else { "Then" }, if t.from.is_empty() { "?" } else { &t.from }, t.terminus), Rect::new(head.x + 10.0, head.y + 4.0, head.w - 20.0, 20.0), 13.0, Weight::Bold, TEXT, Align::Left);
-            ui.text_in(&format!("{} - {} · {:.1} km · {}{}", hhmm(t.departure), hhmm(t.arrival), t.km, if t.line.is_empty() { "depot run".to_string() } else { format!("line {}", t.line) }, format!(" · {}", t.name)), Rect::new(head.x + 10.0, head.y + 24.0, head.w - 20.0, 18.0), 11.0, Weight::Regular, TEXT_DIM, Align::Left);
+            ui.text_in(&format!("{} · {} → {}", if k == 0 { "Your first trip" } else { "Then" }, if t.from.is_empty() { "?" } else { &t.from }, t.terminus), Rect::new(head.x + 10.0, head.y + 4.0, head.w - 20.0, 20.0), 13.0, Weight::Bold, TEXT(), Align::Left);
+            ui.text_in(&format!("{} - {} · {:.1} km · {}{}", hhmm(t.departure), hhmm(t.arrival), t.km, if t.line.is_empty() { "depot run".to_string() } else { format!("line {}", t.line) }, format!(" · {}", t.name)), Rect::new(head.x + 10.0, head.y + 24.0, head.w - 20.0, 18.0), 11.0, Weight::Regular, TEXT_DIM(), Align::Left);
             y += 52.0;
             let n = t.stops.len();
             for (s, st) in t.stops.iter().enumerate() {
@@ -1437,14 +1452,14 @@ fn step_roadbook(l: &mut Launcher, r: Rect) {
                 // the timeline: a line with a dot per stop
                 let cx = rr.x + 60.0;
                 if s + 1 < n {
-                    ui.p().rect(Rect::new(cx - 1.0, rr.center().y, 2.0, 24.0), Color::WHITE.alpha(0.12));
+                    ui.p().rect(Rect::new(cx - 1.0, rr.center().y, 2.0, 24.0), LIFT().alpha(0.12));
                 }
                 let end = s == 0 || s + 1 == n;
-                ui.p().circle(Vec2::new(cx, rr.center().y), if end { 4.0 } else { 3.0 }, if end { TEXT } else { TEXT_FAINT });
-                ui.text_in(&hhmm(st.arr), Rect::new(rr.x + 6.0, rr.y, 42.0, rr.h), 12.0, Weight::Condensed, if end { TEXT } else { TEXT_SOFT }, Align::Left);
-                ui.text_in(&st.name, Rect::new(cx + 14.0, rr.y, rr.w - 140.0, rr.h), 12.5, if end { Weight::Bold } else { Weight::Regular }, TEXT, Align::Left);
+                ui.p().circle(Vec2::new(cx, rr.center().y), if end { 4.0 } else { 3.0 }, if end { TEXT() } else { TEXT_FAINT() });
+                ui.text_in(&hhmm(st.arr), Rect::new(rr.x + 6.0, rr.y, 42.0, rr.h), 12.0, Weight::Condensed, if end { TEXT() } else { TEXT_SOFT() }, Align::Left);
+                ui.text_in(&st.name, Rect::new(cx + 14.0, rr.y, rr.w - 140.0, rr.h), 12.5, if end { Weight::Bold } else { Weight::Regular }, TEXT(), Align::Left);
                 if s == 0 {
-                    ui.text_in(&format!("dep {}", hhmm(st.dep)), Rect::new(rr.right() - 80.0, rr.y, 76.0, rr.h), 11.0, Weight::Medium, TEXT_DIM, Align::Right);
+                    ui.text_in(&format!("dep {}", hhmm(st.dep)), Rect::new(rr.right() - 80.0, rr.y, 76.0, rr.h), 11.0, Weight::Medium, TEXT_DIM(), Align::Right);
                 }
                 y += 24.0;
             }
@@ -1459,18 +1474,18 @@ fn step_roadbook(l: &mut Launcher, r: Rect) {
 }
 
 pub(super) fn ibis_box(l: &mut Launcher, r: Rect) {
-    l.ui.p().rounded(r, 6.0, FIELD);
+    l.ui.p().rounded(r, 6.0, FIELD());
     let inner = l.ui.heading(Rect::new(r.x + 12.0, r.y + 10.0, r.w - 24.0, r.h - 20.0), "IBIS", Some("keyboard"));
     let Some((_, info)) = l.state.ibis.clone() else {
-        l.ui.paragraph("Pick a line to see what to type into the IBIS. Shift+U in the game types it for you and puts the bus into service.", Vec2::new(inner.x, inner.y - 4.0), inner.w, 12.0, Weight::Regular, TEXT_DIM);
+        l.ui.paragraph("Pick a line to see what to type into the IBIS. Shift+U in the game types it for you and puts the bus into service.", Vec2::new(inner.x, inner.y - 4.0), inner.w, 12.0, Weight::Regular, TEXT_DIM());
         return;
     };
     match info {
         Err(e) => {
-            l.ui.paragraph(&e, Vec2::new(inner.x, inner.y - 4.0), inner.w, 12.0, Weight::Regular, DANGER);
+            l.ui.paragraph(&e, Vec2::new(inner.x, inner.y - 4.0), inner.w, 12.0, Weight::Regular, DANGER());
         }
         Ok(i) if i.routes.is_empty() => {
-            l.ui.paragraph(&format!("Depot file {} has no entries for this line. Type line {} and the terminus code by hand, or press Shift+U.", i.hof, i.line_code), Vec2::new(inner.x, inner.y - 4.0), inner.w, 12.0, Weight::Regular, TEXT_DIM);
+            l.ui.paragraph(&format!("Depot file {} has no entries for this line. Type line {} and the terminus code by hand, or press Shift+U.", i.hof, i.line_code), Vec2::new(inner.x, inner.y - 4.0), inner.w, 12.0, Weight::Regular, TEXT_DIM());
         }
         Ok(i) => {
             let mut y = inner.y - 2.0;
@@ -1478,19 +1493,19 @@ pub(super) fn ibis_box(l: &mut Launcher, r: Rect) {
                 let code = rt.code.clone();
                 let (lc, rc) = if code.len() > 2 { (code[..code.len() - 2].to_string(), code[code.len() - 2..].to_string()) } else { (i.line_code.clone(), code.clone()) };
                 let name = if rt.name.is_empty() { rt.terminus.clone() } else { rt.name.clone() };
-                l.ui.text_in(&name, Rect::new(inner.x, y, inner.w - 170.0, 22.0), 12.5, Weight::Medium, TEXT, Align::Left);
+                l.ui.text_in(&name, Rect::new(inner.x, y, inner.w - 170.0, 22.0), 12.5, Weight::Medium, TEXT(), Align::Left);
                 let mut x = inner.right() - 160.0;
                 for (label, v) in [("line", lc), ("route", rc)] {
-                    l.ui.text_in(label, Rect::new(x, y, 34.0, 22.0), 11.0, Weight::Regular, TEXT_DIM, Align::Left);
+                    l.ui.text_in(label, Rect::new(x, y, 34.0, 22.0), 11.0, Weight::Regular, TEXT_DIM(), Align::Left);
                     let cw = l.ui.width(&v, 13.0, Weight::Black) + 12.0;
                     let cr = Rect::new(x + 34.0, y + 2.0, cw, 18.0);
-                    l.ui.p().rounded(cr, 4.0, SELECTED);
-                    l.ui.text_in(&v, cr, 12.5, Weight::Bold, TEXT, Align::Center);
+                    l.ui.p().rounded(cr, 4.0, SELECTED());
+                    l.ui.text_in(&v, cr, 12.5, Weight::Bold, TEXT(), Align::Center);
                     x += 80.0;
                 }
                 y += 26.0;
             }
-            l.ui.text_in(&format!("Depot file {} · Shift+U in the game types it for you", i.hof), Rect::new(inner.x, y + 2.0, inner.w, 18.0), 11.0, Weight::Regular, TEXT_FAINT, Align::Left);
+            l.ui.text_in(&format!("Depot file {} · Shift+U in the game types it for you", i.hof), Rect::new(inner.x, y + 2.0, inner.w, 18.0), 11.0, Weight::Regular, TEXT_FAINT(), Align::Left);
         }
     }
 }

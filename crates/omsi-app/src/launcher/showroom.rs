@@ -48,6 +48,27 @@ struct Shown {
     length: f32,
     weather: omsi_content::weather::Weather,
     lighting: Lighting,
+    /// The paint scheme the bus wears (its `.cti` item; None: the model's own textures).
+    scheme: Option<usize>,
+}
+
+/// What the livery studio paints on: the bus's parts (the front one first, then a rear
+/// section) and the scheme they wear.
+pub struct PaintTarget {
+    pub look: Look,
+    pub scheme: Option<usize>,
+    pub parts: Vec<PaintPart>,
+}
+
+/// One part of the bus: its type, and for each of its meshes' material slots the texture the
+/// scene draws it with.
+pub struct PaintPart {
+    pub vt: Arc<omsi_sim::VehicleType>,
+    /// (mesh of `vt.meshes`, material slot, the scene's texture)
+    pub slots: Vec<(usize, usize, omsi_render::TextureId)>,
+    /// Per mesh of `vt.meshes`: where the scene puts its vertices (the bus at rest at the
+    /// origin, facing +y).
+    pub xf: Vec<glam::Mat4>,
 }
 
 pub struct Showroom {
@@ -299,7 +320,7 @@ impl Showroom {
         }
         let lighting = lighting_for(&args, &weather);
         log::info!("showroom: {} ({} meshes, {:.1} m long) placed in {:.2} s", r.look.bus, render.instances.len(), length, t0.elapsed().as_secs_f64());
-        Shown { look: r.look, scene, world: Some(world), vehicle: Some(vehicle), render: Some(render), trailers, centre, length, weather, lighting }
+        Shown { look: r.look, scene, world: Some(world), vehicle: Some(vehicle), render: Some(render), trailers, centre, length, weather, lighting, scheme: r.scheme }
     }
 
     /// The picture of the bus at `w` x `h` pixels, drawn again when something changed.
@@ -364,6 +385,103 @@ impl Showroom {
         self.shown.as_ref().map(|s| s.vehicle.is_some()).unwrap_or(false) && self.target.is_some()
     }
 
+    /// The camera put where it is to be at once (no easing towards it): a picture taken
+    /// right away shows it from there.
+    pub fn set_view(&mut self, yaw: f32, pitch: f32, zoom: f32) {
+        (self.yaw, self.yaw_to, self.pitch, self.pitch_to, self.zoom, self.zoom_to) = (yaw, yaw, pitch, pitch, zoom, zoom);
+        self.focus_x = 0.5;
+        self.focus_now = 0.5;
+        self.dirty = true;
+    }
+
+    /// The bus in the scene as the livery studio paints it: which texture each of its parts'
+    /// mesh slots is drawn with.
+    pub fn paint_target(&self) -> Option<PaintTarget> {
+        let s = self.shown.as_ref()?;
+        let v = s.vehicle.as_ref()?;
+        let render = s.render.as_ref()?;
+        // (a render's instances are its type's meshes in order, one each)
+        let part = |vt: &Arc<omsi_sim::VehicleType>, r: &scene::VehicleRender| -> Option<PaintPart> {
+            if r.instances.len() != vt.meshes.len() {
+                return None;
+            }
+            let mut slots = Vec::new();
+            let mut xf = vec![glam::Mat4::IDENTITY; vt.meshes.len()];
+            for (mi, &inst) in r.instances.iter().enumerate() {
+                let Some(i) = s.scene.instances.get(inst) else { continue };
+                xf[mi] = glam::Mat4::from_translation(i.origin.as_vec3()) * i.transform;
+                for (slot, &m) in i.materials.iter().enumerate() {
+                    if let Some(t) = s.scene.materials.get(m).and_then(|m| m.texture) {
+                        slots.push((mi, slot, t));
+                    }
+                }
+            }
+            Some(PaintPart { vt: vt.clone(), slots, xf })
+        };
+        let mut parts = vec![part(&v.ty, render)?];
+        parts.extend(v.trailers.iter().zip(&s.trailers).filter_map(|(t, r)| part(&t.ty, r)));
+        Some(PaintTarget { look: s.look.clone(), scheme: s.scheme, parts })
+    }
+
+    /// Draw texture `id` of the scene with this picture from now on (the studio's paint), or
+    /// with the one it had (`img` the original).
+    pub fn set_texture(&mut self, renderer: &Renderer, id: omsi_render::TextureId, img: &image::RgbaImage) {
+        let Some(s) = self.shown.as_mut() else { return };
+        let data = omsi_texture::TextureData { width: img.width(), height: img.height(), format: omsi_texture::PixelFormat::Rgba8, levels: vec![img.as_raw().clone()], has_alpha: true, gpu_mips: true };
+        renderer.replace_texture(&mut s.scene, id, &data);
+        renderer.rebind_textures(&mut s.scene, &[id]);
+        self.dirty = true;
+    }
+
+    /// The camera turned to one of the studio's views at once (eased like a drag).
+    pub fn turn_to(&mut self, yaw: f32, pitch: f32) {
+        // (the shorter way round)
+        let mut d = (yaw - self.yaw_to) % 360.0;
+        if d > 180.0 {
+            d -= 360.0;
+        } else if d < -180.0 {
+            d += 360.0;
+        }
+        self.yaw_to += d;
+        self.pitch_to = pitch;
+        self.idle = 0.0;
+    }
+
+    /// This look is the one in the scene (loaded and placed).
+    pub fn shows(&self, look: &Look) -> bool {
+        self.shown.as_ref().is_some_and(|s| &s.look == look && s.vehicle.is_some())
+    }
+
+    /// This look could not be read (it will not be shown however long one waits).
+    pub fn failed_on(&self, look: &Look) -> bool {
+        self.failed.as_ref() == Some(look) || (self.wanted.is_none() && self.loading.is_none() && self.shown.is_none())
+    }
+
+    /// The bus drawn now at `w` x `h` and read back as a picture (the gallery's cards).
+    pub fn snapshot(&mut self, renderer: &mut Renderer, w: u32, h: u32) -> Option<image::RgbaImage> {
+        self.dirty = true;
+        self.preview(renderer, w, h)?;
+        let (tex, _, w, h) = self.target.as_ref()?;
+        let (w, h) = (*w, *h);
+        let stride = (w * 4).div_ceil(256) * 256;
+        let buf = renderer.device.create_buffer(&wgpu::BufferDescriptor { label: Some("bus picture"), size: (stride * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+        let mut enc = renderer.device.create_command_encoder(&Default::default());
+        enc.copy_texture_to_buffer(tex.as_image_copy(), wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride), rows_per_image: None } }, wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
+        renderer.queue.submit([enc.finish()]);
+        buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        renderer.device.poll(wgpu::PollType::wait_indefinitely()).ok();
+        let data = buf.slice(..).get_mapped_range();
+        let bgra = matches!(renderer.format(), wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Bgra8Unorm);
+        let mut img = image::RgbaImage::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y * stride + x * 4) as usize;
+                let (r, g, b) = if bgra { (data[i + 2], data[i + 1], data[i]) } else { (data[i], data[i + 1], data[i + 2]) };
+                img.put_pixel(x, y, image::Rgba([r, g, b, 255]));
+            }
+        }
+        Some(img)
+    }
 }
 
 /// The light of the look's time and weather, with the sun's shadow under the bus. Always

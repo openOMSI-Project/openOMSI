@@ -251,11 +251,11 @@ impl Launcher {
         let size = self.ui.size;
         let full = Rect::new(0.0, 0.0, size.x, size.y);
         self.ui.solid(full);
-        self.ui.p().rect(full, omsi_ui::Color::rgba(0, 0, 0, 0.72));
+        self.ui.p().rect(full, SHADE());
         let r = Rect::new(24.0, 14.0, size.x - 48.0, size.y - 28.0);
         self.ui.panel(r);
         let inner = Rect::new(r.x + 16.0, r.y + 12.0, r.w - 32.0, r.h - 24.0);
-        self.ui.text_in(b.title(), Rect::new(inner.x, inner.y, inner.w - 130.0, 26.0), 17.0, Weight::Bold, TEXT, Align::Left);
+        self.ui.text_in(b.title(), Rect::new(inner.x, inner.y, inner.w - 130.0, 26.0), 17.0, Weight::Bold, TEXT(), Align::Left);
         let mut close = self.ui.button("browse-cancel", Rect::new(inner.right() - 120.0, inner.y - 2.0, 120.0, 34.0), "Cancel", Some("close"), ButtonKind::Ghost);
         // the places, then the folder we are in
         let mut x = inner.x;
@@ -278,16 +278,16 @@ impl Launcher {
             x += w + 8.0;
         }
         let path_y = y + 42.0;
-        self.ui.icon("folder_open", Vec2::new(inner.x + 10.0, path_y + 11.0), 16.0, TEXT_DIM);
+        self.ui.icon("folder_open", Vec2::new(inner.x + 10.0, path_y + 11.0), 16.0, TEXT_DIM());
         let shown = self.ui.fonts.fit(&b.dir.to_string_lossy(), 12.5, Weight::Medium, inner.w - 30.0);
-        self.ui.text_in(&shown, Rect::new(inner.x + 26.0, path_y, inner.w - 26.0, 22.0), 12.5, Weight::Medium, TEXT_SOFT, Align::Left);
+        self.ui.text_in(&shown, Rect::new(inner.x + 26.0, path_y, inner.w - 26.0, 22.0), 12.5, Weight::Medium, TEXT_SOFT(), Align::Left);
         // what to do with this folder
         let foot_h = 46.0;
         let foot = Rect::new(inner.x, inner.bottom() - foot_h + 6.0, inner.w, foot_h - 6.0);
         let mut chosen: Option<PathBuf> = None;
         match b.purpose {
             Purpose::Root => {
-                let (text, c) = if b.is_root { ("A complete OMSI 2 installation", OK) } else { ("Not an OMSI 2 folder (it needs Omsi.exe, maps and Vehicles)", TEXT_DIM) };
+                let (text, c) = if b.is_root { ("A complete OMSI 2 installation", OK()) } else { ("Not an OMSI 2 folder (it needs Omsi.exe, maps and Vehicles)", TEXT_DIM()) };
                 self.ui.text_in(text, Rect::new(foot.x, foot.y, foot.w - 230.0, foot.h), 12.5, Weight::Medium, c, Align::Left);
                 if self.ui.button("browse-use", Rect::new(foot.right() - 220.0, foot.y, 220.0, foot.h), "Use this folder", Some("check"), if b.is_root { ButtonKind::Primary } else { ButtonKind::Normal }) {
                     chosen = Some(b.dir.clone());
@@ -299,16 +299,16 @@ impl Launcher {
                 }
             }
             Purpose::ModZip => {
-                self.ui.text_in("Tap a .zip, .7z or .rar to install it", Rect::new(foot.x, foot.y, foot.w, foot.h), 12.5, Weight::Regular, TEXT_DIM, Align::Left);
+                self.ui.text_in("Tap a .zip, .7z or .rar to install it", Rect::new(foot.x, foot.y, foot.w, foot.h), 12.5, Weight::Regular, TEXT_DIM(), Align::Left);
             }
         }
         // the folder's contents
         let list = Rect::new(inner.x, path_y + 28.0, inner.w, foot.y - path_y - 36.0);
-        self.ui.p().rounded(list, 6.0, FIELD);
+        self.ui.p().rounded(list, 6.0, FIELD());
         if let Some(e) = b.error.clone() {
-            self.ui.paragraph(&e, Vec2::new(list.x + 12.0, list.y + 12.0), list.w - 24.0, 13.0, Weight::Regular, DANGER);
+            self.ui.paragraph(&e, Vec2::new(list.x + 12.0, list.y + 12.0), list.w - 24.0, 13.0, Weight::Regular, DANGER());
         } else if b.entries.is_empty() {
-            self.ui.text_in("Nothing here", list, 13.0, Weight::Regular, TEXT_FAINT, Align::Center);
+            self.ui.text_in("Nothing here", list, 13.0, Weight::Regular, TEXT_FAINT(), Align::Center);
         }
         let entries = b.entries.clone();
         let mut picked: Option<(String, bool)> = None;
@@ -323,10 +323,10 @@ impl Launcher {
                 if ui.row(&format!("{key}-{k}"), rr, false) {
                     picked = Some((name.clone(), *dir));
                 }
-                ui.icon(if *dir { "folder" } else { "inventory_2" }, Vec2::new(rr.x + 18.0, rr.center().y), 20.0, if *dir { ACCENT } else { TEXT_SOFT });
-                ui.text_in(name, Rect::new(rr.x + 40.0, rr.y, rr.w - 140.0, rr.h), 13.5, Weight::Medium, TEXT, Align::Left);
+                ui.icon(if *dir { "folder" } else { "inventory_2" }, Vec2::new(rr.x + 18.0, rr.center().y), 20.0, if *dir { ACCENT() } else { TEXT_SOFT() });
+                ui.text_in(name, Rect::new(rr.x + 40.0, rr.y, rr.w - 140.0, rr.h), 13.5, Weight::Medium, TEXT(), Align::Left);
                 if !*dir {
-                    ui.text_in(&super::state::fmt_bytes(*bytes), Rect::new(rr.x, rr.y, rr.w - 12.0, rr.h), 12.0, Weight::Regular, TEXT_DIM, Align::Right);
+                    ui.text_in(&super::state::fmt_bytes(*bytes), Rect::new(rr.x, rr.y, rr.w - 12.0, rr.h), 12.0, Weight::Regular, TEXT_DIM(), Align::Right);
                 }
             }
             8.0 + entries.len() as f32 * row_h

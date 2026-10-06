@@ -8,7 +8,7 @@ use super::{Launcher, Page};
 use glam::Vec2;
 use omsi_launcher_lib as core;
 use omsi_ui::paint::Align;
-use omsi_ui::{Color, Rect, Weight};
+use omsi_ui::{Rect, Weight};
 use serde_json::{json, Value};
 
 #[derive(Default)]
@@ -152,23 +152,23 @@ pub fn profile(l: &mut Launcher, area: Rect) {
     let card = Rect::new(left.x, top.bottom() + GAP * 1.5, left.w, left.h - top.h - GAP * 1.5);
     l.ui.panel(card);
     let Some(p) = l.state.profile.clone() else {
-        l.ui.text_in("Create a driver to start a personnel file.", card.pad(20.0, 20.0), 14.0, Weight::Medium, TEXT_DIM, Align::Left);
+        l.ui.text_in("Create a driver to start a personnel file.", card.pad(20.0, 20.0), 14.0, Weight::Medium, TEXT_DIM(), Align::Left);
         return;
     };
     let c = Vec2::new(card.x + 70.0, card.y + 76.0);
     let prev = ((p.level - 1) * (p.level - 1) * 250) as f64;
     let frac = ((p.xp as f64 - prev) / (p.next_level_xp as f64 - prev).max(1.0)).clamp(0.0, 1.0) as f32;
     let shown = l.ui.anim(id_of("xp-ring"), frac, 0.6);
-    l.ui.p().circle(c, 50.0, Color::rgba(28, 31, 37, 1.0));
-    l.ui.p().arc(c, 44.0, 52.0, 0.0, std::f32::consts::TAU, Color::WHITE.alpha(0.08));
+    l.ui.p().circle(c, 50.0, FIELD());
+    l.ui.p().arc(c, 44.0, 52.0, 0.0, std::f32::consts::TAU, LIFT().alpha(0.08));
     let a0 = -std::f32::consts::FRAC_PI_2;
-    l.ui.p().arc(c, 44.0, 52.0, a0, a0 + std::f32::consts::TAU * shown.max(0.01), ACCENT);
-    l.ui.text_in(&p.level.to_string(), Rect::new(c.x - 40.0, c.y - 26.0, 80.0, 40.0), 34.0, Weight::Black, TEXT, Align::Center);
-    l.ui.text_in("LEVEL", Rect::new(c.x - 40.0, c.y + 12.0, 80.0, 16.0), 10.0, Weight::Black, TEXT_DIM, Align::Center);
+    l.ui.p().arc(c, 44.0, 52.0, a0, a0 + std::f32::consts::TAU * shown.max(0.01), ACCENT());
+    l.ui.text_in(&p.level.to_string(), Rect::new(c.x - 40.0, c.y - 26.0, 80.0, 40.0), 34.0, Weight::Black, TEXT(), Align::Center);
+    l.ui.text_in("LEVEL", Rect::new(c.x - 40.0, c.y + 12.0, 80.0, 16.0), 10.0, Weight::Black, TEXT_DIM(), Align::Center);
     let tx = card.x + 142.0;
-    l.ui.text_in(&format!("{}{}", p.name, if p.exists { "" } else { " (no personnel file yet)" }), Rect::new(tx, card.y + 34.0, card.w - 160.0, 30.0), 24.0, Weight::Black, TEXT, Align::Left);
+    l.ui.text_in(&format!("{}{}", p.name, if p.exists { "" } else { " (no personnel file yet)" }), Rect::new(tx, card.y + 34.0, card.w - 160.0, 30.0), 24.0, Weight::Black, TEXT(), Align::Left);
     l.ui.progress(Rect::new(tx, card.y + 76.0, card.w - 170.0, 10.0), shown, false);
-    l.ui.text_in(&format!("{} XP · {} to level {}", p.xp, (p.next_level_xp - p.xp).max(0), p.level + 1), Rect::new(tx, card.y + 94.0, card.w - 160.0, 18.0), 12.5, Weight::Medium, TEXT_DIM, Align::Left);
+    l.ui.text_in(&format!("{} XP · {} to level {}", p.xp, (p.next_level_xp - p.xp).max(0), p.level + 1), Rect::new(tx, card.y + 94.0, card.w - 160.0, 18.0), 12.5, Weight::Medium, TEXT_DIM(), Align::Left);
     let hours = |h: f64| format!("{} h {:02} min", h.floor() as i64, ((h - h.floor()) * 60.0).round() as i64);
     let stats = [
         ("schedule", hours(p.hours), "hours driven"),
@@ -194,10 +194,10 @@ pub fn profile(l: &mut Launcher, area: Rect) {
         if r.bottom() > card.bottom() - 6.0 {
             break;
         }
-        l.ui.p().rounded(r, 10.0, Color::WHITE.alpha(0.04));
-        l.ui.icon(icon, Vec2::new(r.x + 22.0, r.y + 22.0), 18.0, ACCENT);
-        l.ui.text_in(v, Rect::new(r.x + 40.0, r.y + 8.0, r.w - 48.0, 28.0), 18.0, Weight::Black, TEXT, Align::Left);
-        l.ui.text_in(label, Rect::new(r.x + 14.0, r.y + 42.0, r.w - 20.0, 18.0), 11.5, Weight::Medium, TEXT_DIM, Align::Left);
+        l.ui.p().rounded(r, 10.0, LIFT().alpha(0.04));
+        l.ui.icon(icon, Vec2::new(r.x + 22.0, r.y + 22.0), 18.0, ACCENT());
+        l.ui.text_in(v, Rect::new(r.x + 40.0, r.y + 8.0, r.w - 48.0, 28.0), 18.0, Weight::Black, TEXT(), Align::Left);
+        l.ui.text_in(label, Rect::new(r.x + 14.0, r.y + 42.0, r.w - 20.0, 18.0), 11.5, Weight::Medium, TEXT_DIM(), Align::Left);
     }
     // recent runs
     l.ui.panel(right);
@@ -205,22 +205,22 @@ pub fn profile(l: &mut Launcher, area: Rect) {
     let sessions = p.sessions.clone();
     l.ui.scroll_area("runs", Rect::new(inner.x - 6.0, inner.y, inner.w + 12.0, inner.h), &mut |ui, v| {
         if sessions.is_empty() {
-            ui.text_in("No runs yet. Drive a duty and it shows up here.", Rect::new(v.x + 8.0, v.y, v.w, 30.0), 13.0, Weight::Regular, TEXT_DIM, Align::Left);
+            ui.text_in("No runs yet. Drive a duty and it shows up here.", Rect::new(v.x + 8.0, v.y, v.w, 30.0), 13.0, Weight::Regular, TEXT_DIM(), Align::Left);
             return 30.0;
         }
         let rh = 62.0;
         for (k, s) in sessions.iter().enumerate() {
             let r = Rect::new(v.x + 6.0, v.y + k as f32 * rh, v.w - 16.0, rh - 6.0);
-            ui.p().rounded(r, 9.0, Color::WHITE.alpha(0.04));
+            ui.p().rounded(r, 9.0, LIFT().alpha(0.04));
             let title = match &s.line {
                 Some(line) => format!("Line {line}{} · {}", s.tour.as_ref().map(|t| format!(" / {t}")).unwrap_or_default(), short_map(&s.map)),
                 None => format!("Free drive · {}", short_map(&s.map)),
             };
-            ui.text_in(&title, Rect::new(r.x + 12.0, r.y + 6.0, r.w - 130.0, 20.0), 13.0, Weight::Bold, TEXT, Align::Left);
-            ui.text_in(&format!("{} · {:.1} km · {} stops · {} tickets · {} crashes", s.bus.rsplit('/').next().unwrap_or(""), s.metres / 1000.0, s.stops, s.tickets, s.crashes), Rect::new(r.x + 12.0, r.y + 28.0, r.w - 130.0, 18.0), 11.0, Weight::Regular, TEXT_DIM, Align::Left);
+            ui.text_in(&title, Rect::new(r.x + 12.0, r.y + 6.0, r.w - 130.0, 20.0), 13.0, Weight::Bold, TEXT(), Align::Left);
+            ui.text_in(&format!("{} · {:.1} km · {} stops · {} tickets · {} crashes", s.bus.rsplit('/').next().unwrap_or(""), s.metres / 1000.0, s.stops, s.tickets, s.crashes), Rect::new(r.x + 12.0, r.y + 28.0, r.w - 130.0, 18.0), 11.0, Weight::Regular, TEXT_DIM(), Align::Left);
             let when = chrono_like(s.time);
-            ui.text_in(&when, Rect::new(r.right() - 120.0, r.y + 6.0, 110.0, 20.0), 11.5, Weight::Medium, TEXT_SOFT, Align::Right);
-            ui.text_in(&hours_short(s.seconds / 3600.0), Rect::new(r.right() - 120.0, r.y + 28.0, 110.0, 18.0), 11.5, Weight::Medium, ACCENT, Align::Right);
+            ui.text_in(&when, Rect::new(r.right() - 120.0, r.y + 6.0, 110.0, 20.0), 11.5, Weight::Medium, TEXT_SOFT(), Align::Right);
+            ui.text_in(&hours_short(s.seconds / 3600.0), Rect::new(r.right() - 120.0, r.y + 28.0, 110.0, 18.0), 11.5, Weight::Medium, ACCENT(), Align::Right);
         }
         sessions.len() as f32 * rh
     });
@@ -373,15 +373,15 @@ pub fn reset_dialog(l: &mut Launcher) {
     let size = l.ui.size;
     let full = Rect::new(0.0, 0.0, size.x, size.y);
     l.ui.solid(full);
-    l.ui.p().rect(full, omsi_ui::Color::rgba(0, 0, 0, 0.62));
+    l.ui.p().rect(full, SHADE());
     let w = (size.x - 48.0).min(520.0);
     let h = 190.0;
     let r = Rect::new((size.x - w) * 0.5, (size.y - h) * 0.5, w, h);
     l.ui.panel(r);
     let inner = Rect::new(r.x + 24.0, r.y + 20.0, r.w - 48.0, r.h - 40.0);
-    l.ui.icon("restart_alt", Vec2::new(inner.x + 14.0, inner.y + 14.0), 26.0, DANGER);
-    l.ui.text_in("Reset every setting?", Rect::new(inner.x + 38.0, inner.y, inner.w - 38.0, 28.0), 18.0, Weight::Bold, TEXT, Align::Left);
-    l.ui.paragraph("Graphics, sound, controllers and game settings go back to how they came. The language, the drivers, the key bindings and the game folder stay.", Vec2::new(inner.x, inner.y + 40.0), inner.w, 13.0, Weight::Regular, TEXT_DIM);
+    l.ui.icon("restart_alt", Vec2::new(inner.x + 14.0, inner.y + 14.0), 26.0, DANGER());
+    l.ui.text_in("Reset every setting?", Rect::new(inner.x + 38.0, inner.y, inner.w - 38.0, 28.0), 18.0, Weight::Bold, TEXT(), Align::Left);
+    l.ui.paragraph("Graphics, sound, controllers and game settings go back to how they came. The language, the drivers, the key bindings and the game folder stay.", Vec2::new(inner.x, inner.y + 40.0), inner.w, 13.0, Weight::Regular, TEXT_DIM());
     let by = inner.bottom() - 38.0;
     if l.ui.button("reset-no", Rect::new(inner.right() - 250.0, by, 110.0, 38.0), "Cancel", None, ButtonKind::Normal) {
         l.pages.confirm_reset = false;
@@ -510,7 +510,7 @@ fn graphics_profiles_block(ui: &mut Ui, s: &mut Value, dirty: &mut f32, c: &mut 
             };
         }
         if !g.msg.is_empty() {
-            c.y += ui.paragraph(&g.msg, Vec2::new(c.inner.x, c.y), c.inner.w, 12.5, Weight::Regular, TEXT_DIM) + 8.0;
+            c.y += ui.paragraph(&g.msg, Vec2::new(c.inner.x, c.y), c.inner.w, 12.5, Weight::Regular, TEXT_DIM()) + 8.0;
         }
     });
 }
@@ -676,7 +676,7 @@ fn driving_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
     }
     toggle_setting(ui, s, dirty, c.row(), "Force feedback and vibration", "ff_enabled");
     toggle_setting(ui, s, dirty, c.row(), "Invert force feedback by default", "ff_invert");
-    c.y += ui.paragraph("Wheels with a saved direction use their own setting under Controls → Game controllers.", Vec2::new(c.inner.x, c.y), c.inner.w, 12.5, Weight::Regular, TEXT_DIM) + 8.0;
+    c.y += ui.paragraph("Wheels with a saved direction use their own setting under Controls → Game controllers.", Vec2::new(c.inner.x, c.y), c.inner.w, 12.5, Weight::Regular, TEXT_DIM()) + 8.0;
     toggle_setting(ui, s, dirty, c.row(), "Invert force feedback", "ff_invert");
     // what the wheel feels all the time while the bus runs: the road's grain and the
     // engine's buzz, and how long a jolt eases away once it is over
@@ -911,7 +911,7 @@ fn camera_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, co
             sel_setting(ui, s, dirty, "s-vr-scale", c.row(), "Eye resolution", "vr_scale", &[("0.5", "50%"), ("0.65", "65%"), ("0.8", "80%"), ("1", "100%")]);
             sel_setting(ui, s, dirty, "s-vr-head-smoothing", c.row(), "Head tracking smoothing", "vr_head_smoothing_ms", &[("0", "Off"), ("5", "5 ms"), ("10", "10 ms"), ("20", "20 ms"), ("30", "30 ms")]);
             sel_setting(ui, s, dirty, "s-vr-mirror-rate", c.row(), "Bus mirror refresh", "vr_mirror_rate", &[("0", "Off"), ("8", "8/s"), ("16", "16/s"), ("24", "24/s"), ("32", "32/s"), ("48", "48/s"), ("60", "60/s"), ("90", "90/s"), ("120", "120/s"), ("180", "180/s"), ("240", "240/s"), ("360", "360/s"), ("-1", "Every frame")]);
-            c.y += ui.paragraph("The rate is shared by all bus mirrors. Higher rates can reduce game FPS.", Vec2::new(c.inner.x, c.y), c.inner.w, 12.0, Weight::Regular, TEXT_DIM) + 8.0;
+            c.y += ui.paragraph("The rate is shared by all bus mirrors. Higher rates can reduce game FPS.", Vec2::new(c.inner.x, c.y), c.inner.w, 12.0, Weight::Regular, TEXT_DIM()) + 8.0;
             toggle_setting(ui, s, dirty, c.row(), "Show headset picture on monitor", "vr_desktop_mirror");
             // (the VR keys head the Controls page's game list)
             if ui.button("s-go-vr-keys", c.row(), "Change the VR keys", Some("keyboard"), ButtonKind::Normal) {
@@ -951,7 +951,7 @@ thread_local! {
 /// address, removed or added here, saved at once (#857). Returns the column's height.
 fn radio_stations(ui: &mut Ui, r: Rect) -> f32 {
     let mut c = Col::new(ui, r, "Radio stations");
-    c.y += ui.paragraph("A radio's station button n plays the n-th station, a cassette player the first; Shift+R steps through them. An address is an MP3, AAC or Ogg stream or an .m3u/.pls playlist.", Vec2::new(c.inner.x, c.y), c.inner.w, 12.5, Weight::Regular, TEXT_DIM) + 8.0;
+    c.y += ui.paragraph("A radio's station button n plays the n-th station, a cassette player the first; Shift+R steps through them. An address is an MP3, AAC or Ogg stream or an .m3u/.pls playlist.", Vec2::new(c.inner.x, c.y), c.inner.w, 12.5, Weight::Regular, TEXT_DIM()) + 8.0;
     RADIO.with(|cell| {
         let mut cell = cell.borrow_mut();
         let list = cell.get_or_insert_with(crate::radio::own_stations);
@@ -1022,6 +1022,11 @@ fn general_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
         let langs: Vec<(&str, &str)> = core::LANGUAGES.iter().map(|l| (l.0, l.1)).collect();
         sel_setting(ui, s, dirty, "s-lang", c.row(), "Language", "language", &langs);
     }
+    {
+        let looks: Vec<(&str, &str)> = super::theme::THEMES.iter().map(|t| (t.key, t.name)).collect();
+        sel_setting(ui, s, dirty, "s-theme", c.row(), "Look", "launcher_theme", &looks);
+    }
+    super::theme::set(get(s, "launcher_theme").as_str().unwrap_or(""));
     // (the launcher speaks the chosen language at once)
     crate::ui_language(get(s, "language").as_str().unwrap_or("ENG"));
     // (texts nobody has translated: translated on this machine, see `mt`)
@@ -1033,7 +1038,7 @@ fn general_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
     }
     let st = crate::mt::status();
     if now && !st.is_empty() && st != "Ready" {
-        ui.text_in(&st, Rect::new(c.inner.x + 12.0, c.y - 6.0, c.inner.w - 24.0, 16.0), 11.5, omsi_ui::Weight::Regular, TEXT_FAINT, omsi_ui::paint::Align::Left);
+        ui.text_in(&st, Rect::new(c.inner.x + 12.0, c.y - 6.0, c.inner.w - 24.0, 16.0), 11.5, omsi_ui::Weight::Regular, TEXT_FAINT(), omsi_ui::paint::Align::Left);
         c.y += 14.0;
     }
     toggle_setting(ui, s, dirty, c.row(), "The launcher rests while a game runs (gives the graphics card to the game)", "launcher_rest");
@@ -1044,7 +1049,7 @@ fn general_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
         c.inner.w - 24.0,
         11.5,
         omsi_ui::Weight::Regular,
-        TEXT_FAINT,
+        TEXT_FAINT(),
     );
     c.y += help_height + 3.0;
     toggle_setting(ui, s, dirty, c.row(), "Voice chat through GreenTeaSpeak (multiplayer)", "voice_chat");
@@ -1054,7 +1059,7 @@ fn general_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
         c.inner.w - 24.0,
         11.5,
         omsi_ui::Weight::Regular,
-        TEXT_FAINT,
+        TEXT_FAINT(),
     );
     c.y += help_height + 3.0;
     // (the texts over the picture, the menu, the timetable and the navigator: larger for
@@ -1092,8 +1097,8 @@ fn general_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
     let r = Rect::new(c.inner.x, c.y, c.inner.w, 70.0);
     ui.label(Rect::new(r.x, r.y, r.w * 0.45, 24.0), "Corner");
     let screen = Rect::new(r.x + r.w * 0.45, r.y, 110.0, 64.0);
-    ui.p().rounded(screen, 6.0, Color::WHITE.alpha(0.05));
-    ui.p().rounded_border(screen, 6.0, 1.0, Color::WHITE.alpha(0.12));
+    ui.p().rounded(screen, 6.0, LIFT().alpha(0.05));
+    ui.p().rounded_border(screen, 6.0, 1.0, LIFT().alpha(0.12));
     let cur = get(s, "navigator_corner").as_str().unwrap_or("bottom-left").to_string();
     for (name, x, yy) in [("top-left", 0.0, 0.0), ("top-right", 1.0, 0.0), ("bottom-left", 0.0, 1.0), ("bottom-right", 1.0, 1.0)] {
         let cell = Rect::new(screen.x + 5.0 + x * (screen.w * 0.5), screen.y + 5.0 + yy * (screen.h * 0.5), screen.w * 0.5 - 10.0, screen.h * 0.5 - 10.0);
@@ -1103,13 +1108,13 @@ fn general_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
             *dirty = 0.3;
         }
         let on = cur == name;
-        ui.p().rounded(cell, 3.0, if on { ACCENT } else { Color::WHITE.alpha(if h { 0.2 } else { 0.08 }) });
+        ui.p().rounded(cell, 3.0, if on { ACCENT() } else { LIFT().alpha(if h { 0.2 } else { 0.08 }) });
     }
     // (dragged somewhere else in the game, #940: that place, until a corner is chosen)
     if let Some(a) = crate::navigator::placed_at(&cur) {
         let (cw, ch) = (screen.w * 0.5 - 10.0, screen.h * 0.5 - 10.0);
         let cell = Rect::new(screen.x + 5.0 + a[0] * (screen.w - 10.0 - cw), screen.y + 5.0 + a[1] * (screen.h - 10.0 - ch), cw, ch);
-        ui.p().rounded(cell, 3.0, ACCENT);
+        ui.p().rounded(cell, 3.0, ACCENT());
     }
     c.y += 74.0;
     let left = c.used();
@@ -1133,7 +1138,7 @@ fn general_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
             Status::Failed(_) => "The last check failed".to_string(),
             _ => format!("This is openOMSI {}", crate::updater::current_version()),
         };
-        ui.text_in(&text, Rect::new(r.x + 162.0, r.y, r.w - 162.0, r.h), 12.5, omsi_ui::Weight::Regular, TEXT_DIM, omsi_ui::paint::Align::Left);
+        ui.text_in(&text, Rect::new(r.x + 162.0, r.y, r.w - 162.0, r.h), 12.5, omsi_ui::Weight::Regular, TEXT_DIM(), omsi_ui::paint::Align::Left);
     }
     if ui.button("s-upd-github", c.row(), "github.com/openOmsi-project/openOMSI", Some("open_in_new"), ButtonKind::Ghost) {
         crate::updater::open_url(crate::updater::REPO_URL);
@@ -1287,10 +1292,10 @@ pub fn controls(l: &mut Launcher, area: Rect) {
         let tw = body.w - bw - 70.0;
         let th = l.ui.paragraph_height(&text, tw, 12.5, Weight::Medium);
         let bar = Rect::new(body.x, body.y, body.w, (th + 22.0).max(54.0));
-        l.ui.p().rounded(bar, 8.0, ACCENT.alpha(0.1));
-        l.ui.p().rounded_border(bar, 8.0, 1.0, ACCENT.alpha(0.45));
-        l.ui.icon("info", Vec2::new(bar.x + 22.0, bar.center().y), 20.0, ACCENT);
-        l.ui.paragraph(&text, Vec2::new(bar.x + 42.0, bar.center().y - th * 0.5), tw, 12.5, Weight::Medium, TEXT_SOFT);
+        l.ui.p().rounded(bar, 8.0, HOVER());
+        l.ui.p().rounded_border(bar, 8.0, 1.0, ACCENT().alpha(0.7));
+        l.ui.icon("info", Vec2::new(bar.x + 22.0, bar.center().y), 20.0, ACCENT());
+        l.ui.paragraph(&text, Vec2::new(bar.x + 42.0, bar.center().y - th * 0.5), tw, 12.5, Weight::Medium, TEXT_SOFT());
         if l.ui.button("kb-use-custom", Rect::new(bar.right() - bw - 10.0, bar.center().y - 18.0, bw, 36.0), "Use these keys", Some("keyboard"), ButtonKind::Primary) {
             use_custom_keys(l);
         }
@@ -1305,7 +1310,7 @@ pub fn controls(l: &mut Launcher, area: Rect) {
         let r = Rect::new(body.x + sec as f32 * (half + GAP * 2.0), body.y, half, body.h);
         l.ui.panel(r);
         let inner = l.ui.heading(Rect::new(r.x + 18.0, r.y + 14.0, r.w - 36.0, r.h - 28.0), title, Some(if sec == 0 { "directions_bus" } else { "sports_esports" }));
-        l.ui.text_in(sub, Rect::new(inner.x, inner.y - 6.0, inner.w, 18.0), 12.0, Weight::Regular, TEXT_DIM, Align::Left);
+        l.ui.text_in(sub, Rect::new(inner.x, inner.y - 6.0, inner.w, 18.0), 12.0, Weight::Regular, TEXT_DIM(), Align::Left);
         let mut filter = std::mem::take(&mut l.pages.kb_filter[sec]);
         let event_w = if sec == 0 { 138.0 } else { 0.0 };
         let filter_w = if sec == 0 { (inner.w - event_w - GAP).max(120.0) } else { inner.w };
@@ -1395,14 +1400,14 @@ pub fn controls(l: &mut Launcher, area: Rect) {
                 if rr.bottom() < v.y - 50.0 {
                     continue;
                 }
-                ui.p().rounded(rr, 8.0, Color::WHITE.alpha(0.03));
-                ui.text_in(label, Rect::new(rr.x + 12.0, rr.y, rr.w - 240.0, rr.h), 13.0, Weight::Medium, TEXT_SOFT, Align::Left);
+                ui.p().rounded(rr, 8.0, LIFT().alpha(0.03));
+                ui.text_in(label, Rect::new(rr.x + 12.0, rr.y, rr.w - 240.0, rr.h), 13.0, Weight::Medium, TEXT_SOFT(), Align::Left);
                 // another key for the same action (OMSI's file may give one action
                 // several [entry]s; several actions on one key need nothing more than the
                 // same key pressed for each)
                 let pr = Rect::new(rr.right() - 222.0, rr.y + 5.0, 26.0, rr.h - 10.0);
                 let (hp, _, cp) = ui.interact(id_of(&format!("kb-{sec}-{i}-more")), pr);
-                ui.icon("add", pr.center(), 16.0, if hp { ACCENT } else { TEXT_FAINT });
+                ui.icon("add", pr.center(), 16.0, if hp { ACCENT() } else { TEXT_FAINT() });
                 if cp {
                     more = Some(*i);
                 }
@@ -1413,13 +1418,13 @@ pub fn controls(l: &mut Launcher, area: Rect) {
                 if c {
                     clicked = Some((*i, false));
                 }
-                let base = if waiting { ACCENT.alpha(0.25 + 0.15 * (time * 6.0).sin().abs()) } else if *clash { DANGER.alpha(0.22) } else { Color::WHITE.alpha(if h { 0.12 } else { 0.07 }) };
+                let base = if waiting { SELECTED().lighten(0.05 + 0.15 * (time * 6.0).sin().abs()) } else if *clash { DANGER().alpha(0.22) } else { LIFT().alpha(if h { 0.12 } else { 0.07 }) };
                 ui.p().rounded(kr, 6.0, base);
-                ui.p().rounded_border(kr, 6.0, 1.0, if waiting { ACCENT } else if *clash { DANGER } else { Color::WHITE.alpha(0.1) });
-                ui.text_in(if waiting { "press a key…" } else { keyn }, kr, 12.0, Weight::Bold, if *clash { DANGER.lighten(0.3) } else { TEXT }, Align::Center);
+                ui.p().rounded_border(kr, 6.0, 1.0, if waiting { ACCENT() } else if *clash { DANGER() } else { LIFT().alpha(0.1) });
+                ui.text_in(if waiting { "press a key…" } else { keyn }, kr, 12.0, Weight::Bold, if *clash { DANGER().lighten(0.3) } else { TEXT() }, Align::Center);
                 let xr = Rect::new(rr.right() - 32.0, rr.y + 5.0, 26.0, rr.h - 10.0);
                 let (hx, _, cx) = ui.interact(id ^ 1, xr);
-                ui.icon("close", xr.center(), 16.0, if hx { DANGER } else { TEXT_FAINT });
+                ui.icon("close", xr.center(), 16.0, if hx { DANGER() } else { TEXT_FAINT() });
                 if cx {
                     clicked = Some((*i, true));
                 }
@@ -1453,7 +1458,7 @@ pub fn controls(l: &mut Launcher, area: Rect) {
     }
     if !l.state.keybindings_error.is_empty() {
         let e = l.state.keybindings_error.clone();
-        l.ui.text_in(&e, Rect::new(body.x, body.bottom() + 4.0, body.w, 18.0), 12.0, Weight::Medium, DANGER, Align::Left);
+        l.ui.text_in(&e, Rect::new(body.x, body.bottom() + 4.0, body.w, 18.0), 12.0, Weight::Medium, DANGER(), Align::Left);
     }
 }
 
@@ -1491,7 +1496,7 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
     let devices = pv.devices.get_or_insert_with(Vec::new);
     let mut body = body;
     if !l.state.settings.get("momentary_gears").and_then(|v| v.as_bool()).unwrap_or(false) && crate::hpattern::has_held_bindings(devices) {
-        let height = l.ui.paragraph("H-pattern gears are assigned. Enable return to neutral under Settings → Driving → Game controllers if your shifter has no neutral button.", Vec2::new(body.x + 12.0, body.y + 8.0), body.w - 24.0, 12.5, Weight::Regular, TEXT_DIM);
+        let height = l.ui.paragraph("H-pattern gears are assigned. Enable return to neutral under Settings → Driving → Game controllers if your shifter has no neutral button.", Vec2::new(body.x + 12.0, body.y + 8.0), body.w - 24.0, 12.5, Weight::Regular, TEXT_DIM());
         body.y += height + 20.0;
         body.h -= height + 20.0;
     }
@@ -1518,11 +1523,11 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
                 if ui.row(&format!("pad-{i}"), r, sel == i) {
                     sel = i;
                 }
-                ui.text_in(&d.name, Rect::new(r.x + 12.0, r.y, r.w - 40.0, r.h), 13.0, Weight::Medium, if on { TEXT } else { TEXT_DIM }, Align::Left);
+                ui.text_in(&d.name, Rect::new(r.x + 12.0, r.y, r.w - 40.0, r.h), 13.0, Weight::Medium, if on { TEXT() } else { TEXT_DIM() }, Align::Left);
                 if switched_off {
-                    ui.text_in("off", Rect::new(r.right() - 40.0, r.y, 30.0, r.h), 11.5, Weight::Bold, TEXT_FAINT, Align::Right);
+                    ui.text_in("off", Rect::new(r.right() - 40.0, r.y, 30.0, r.h), 11.5, Weight::Bold, TEXT_FAINT(), Align::Right);
                 } else {
-                    ui.icon(if on { "check_circle" } else { "remove" }, Vec2::new(r.right() - 18.0, r.center().y), 16.0, if on { OK } else { TEXT_FAINT });
+                    ui.icon(if on { "check_circle" } else { "remove" }, Vec2::new(r.right() - 18.0, r.center().y), 16.0, if on { OK() } else { TEXT_FAINT() });
                 }
                 y += 48.0;
             }
@@ -1534,7 +1539,7 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
                 y += 44.0;
             }
             if devices.is_empty() && connected.is_empty() {
-                y += 4.0 + ui.paragraph("No game controller is connected, and none is set up. Connect a wheel, pedals or a joystick; a gamepad works without setting up (left stick steers, the triggers are the pedals).", Vec2::new(v.x + 6.0, y + 4.0), v.w - 12.0, 13.0, Weight::Regular, TEXT_DIM);
+                y += 4.0 + ui.paragraph("No game controller is connected, and none is set up. Connect a wheel, pedals or a joystick; a gamepad works without setting up (left stick steers, the triggers are the pedals).", Vec2::new(v.x + 6.0, y + 4.0), v.w - 12.0, 13.0, Weight::Regular, TEXT_DIM());
             }
             y - v.y
         });
@@ -1691,10 +1696,10 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
             let r = Rect::new(x0, y, w, ROW);
             ui.label(Rect::new(r.x, r.y, lab_w, r.h), AXES[a]);
             let bar = Rect::new(r.x + lab_w + GAP, r.y + 12.0, bar_w, r.h - 24.0);
-            ui.p().rounded(bar, 4.0, Color::WHITE.alpha(0.06));
+            ui.p().rounded(bar, 4.0, LIFT().alpha(0.06));
             if let Some((_, v)) = live.iter().find(|(k, _)| *k == a) {
                 let x = bar.x + (v.clamp(-1.0, 1.0) + 1.0) * 0.5 * bar.w;
-                ui.p().rounded(Rect::new(x - 2.0, bar.y - 3.0, 4.0, bar.h + 6.0), 2.0, ACCENT);
+                ui.p().rounded(Rect::new(x - 2.0, bar.y - 3.0, 4.0, bar.h + 6.0), 2.0, ACCENT());
             }
             let mut sel = (Func::code(d.axes[a].map(|x| x.0)) + 1) as usize;
             if ui.select(&format!("pad-axis-{a}"), Rect::new(bar.right() + GAP, r.y, sel_w, r.h), &mut sel, &funcs) {
@@ -1722,7 +1727,7 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
         }
         // buttons: their key actions
         y += 10.0;
-        ui.text_in("Buttons", Rect::new(x0, y, w, 20.0), 14.0, Weight::Bold, TEXT, Align::Left);
+        ui.text_in("Buttons", Rect::new(x0, y, w, 20.0), 14.0, Weight::Bold, TEXT(), Align::Left);
         y += 26.0;
         buttons_start_y = y - v.y;
         let cols = if w < 560.0 { 1usize } else { 2 };
@@ -1738,7 +1743,7 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
                 None => format!("Button {}", b + 1),
             };
             if lit == Some(b) {
-                ui.p().rounded(Rect::new(r.x - 4.0, r.y - 2.0, r.w + 8.0, r.h + 4.0), 6.0, ACCENT.alpha(0.28));
+                ui.p().rounded(Rect::new(r.x - 4.0, r.y - 2.0, r.w + 8.0, r.h + 4.0), 6.0, SELECTED());
             }
             ui.label(Rect::new(r.x, r.y, 90.0, r.h), &label);
             // (a latching switch - a turn signal lever, a lit hazard button - also switches
@@ -1836,22 +1841,22 @@ const WIZARD_STEPS: [(&str, &str); 5] = [
 /// when the player gave up.
 fn wizard(ui: &mut Ui, r: Rect, w: &mut Wizard, d: &mut crate::controllers::DeviceCfg, live: &[(usize, f32)], connected: bool, feedback: bool) -> Option<bool> {
     let (title, text) = WIZARD_STEPS[w.step];
-    ui.text_in(&format!("Step {} of {}: {title}", w.step + 1, WIZARD_STEPS.len()), Rect::new(r.x, r.y, r.w, 26.0), 17.0, Weight::Bold, TEXT, Align::Left);
+    ui.text_in(&format!("Step {} of {}: {title}", w.step + 1, WIZARD_STEPS.len()), Rect::new(r.x, r.y, r.w, 26.0), 17.0, Weight::Bold, TEXT(), Align::Left);
     let mut y = r.y + 34.0;
-    y += ui.paragraph(text, Vec2::new(r.x, y), r.w, 13.5, Weight::Regular, TEXT_SOFT) + 10.0;
+    y += ui.paragraph(text, Vec2::new(r.x, y), r.w, 13.5, Weight::Regular, TEXT_SOFT()) + 10.0;
     if !connected {
-        y += ui.paragraph("The device is not connected: plug it in (the list on the left marks it green).", Vec2::new(r.x, y), r.w, 13.0, Weight::Medium, DANGER);
+        y += ui.paragraph("The device is not connected: plug it in (the list on the left marks it green).", Vec2::new(r.x, y), r.w, 13.0, Weight::Medium, DANGER());
     }
     if let Some(e) = &w.error {
-        y += ui.paragraph(e, Vec2::new(r.x, y), r.w, 13.0, Weight::Medium, DANGER) + 6.0;
+        y += ui.paragraph(e, Vec2::new(r.x, y), r.w, 13.0, Weight::Medium, DANGER()) + 6.0;
     }
     // the axes as they stand, so that the player sees the device answer
     for (k, v) in live {
         let bar = Rect::new(r.x + 90.0, y + 8.0, (r.w - 100.0).max(40.0), 8.0);
-        ui.text_in(["X", "Y", "Z", "Rx", "Ry", "Rz", "Slider 1", "Slider 2"][*k], Rect::new(r.x, y, 84.0, 24.0), 12.0, Weight::Medium, TEXT_DIM, Align::Left);
-        ui.p().rounded(bar, 4.0, Color::WHITE.alpha(0.06));
+        ui.text_in(["X", "Y", "Z", "Rx", "Ry", "Rz", "Slider 1", "Slider 2"][*k], Rect::new(r.x, y, 84.0, 24.0), 12.0, Weight::Medium, TEXT_DIM(), Align::Left);
+        ui.p().rounded(bar, 4.0, LIFT().alpha(0.06));
         let x = bar.x + (v.clamp(-1.0, 1.0) + 1.0) * 0.5 * bar.w;
-        ui.p().rounded(Rect::new(x - 2.0, bar.y - 4.0, 4.0, bar.h + 8.0), 2.0, ACCENT);
+        ui.p().rounded(Rect::new(x - 2.0, bar.y - 4.0, 4.0, bar.h + 8.0), 2.0, ACCENT());
         y += 26.0;
     }
     let now = |live: &[(usize, f32)]| {
@@ -1912,18 +1917,18 @@ fn feedback_setup(
 ) -> Option<bool> {
     let axes = wizard_result(&w.rest, &w.at);
     let axis = axes.iter().position(|a| matches!(a, Some((crate::controllers::Func::Steering, _))));
-    ui.text_in("Force feedback direction", Rect::new(r.x, r.y, r.w, 26.0), 17.0, Weight::Bold, TEXT, Align::Left);
+    ui.text_in("Force feedback direction", Rect::new(r.x, r.y, r.w, 26.0), 17.0, Weight::Bold, TEXT(), Align::Left);
     let warning = "INJURY RISK: TAKE YOUR HANDS OFF THE WHEEL. Keep hands and fingers clear before starting and throughout the test.";
     let warning_height = ui.paragraph_height(warning, r.w - 58.0, 14.5, Weight::Bold) + 20.0;
     let warning_rect = Rect::new(r.x, r.y + 34.0, r.w, warning_height);
-    ui.p().rounded(warning_rect, 6.0, DANGER.alpha(0.15));
-    ui.p().rounded_border(warning_rect, 6.0, 1.5, DANGER);
-    ui.icon("warning", Vec2::new(warning_rect.x + 22.0, warning_rect.center().y), 26.0, DANGER);
-    ui.paragraph(warning, Vec2::new(warning_rect.x + 44.0, warning_rect.y + 10.0), warning_rect.w - 58.0, 14.5, Weight::Bold, DANGER);
+    ui.p().rounded(warning_rect, 6.0, DANGER().alpha(0.15));
+    ui.p().rounded_border(warning_rect, 6.0, 1.5, DANGER());
+    ui.icon("warning", Vec2::new(warning_rect.x + 22.0, warning_rect.center().y), 26.0, DANGER());
+    ui.paragraph(warning, Vec2::new(warning_rect.x + 44.0, warning_rect.y + 10.0), warning_rect.w - 58.0, 14.5, Weight::Bold, DANGER());
     let body_y = warning_rect.bottom() + 12.0;
     ui.scroll_area("wiz-ff-body", Rect::new(r.x, body_y, r.w, r.bottom() - 56.0 - body_y), &mut |ui, r| {
         let mut y = r.y;
-        y += ui.paragraph("The test applies two short forces in opposite directions. Finish and press Save to keep the detected direction for this wheel.", Vec2::new(r.x, y), r.w, 13.5, Weight::Regular, TEXT_SOFT) + 16.0;
+        y += ui.paragraph("The test applies two short forces in opposite directions. Finish and press Save to keep the detected direction for this wheel.", Vec2::new(r.x, y), r.w, 13.5, Weight::Regular, TEXT_SOFT()) + 16.0;
         if let Some((started, test)) = w.calibration.as_mut() {
             if *active {
                 let position = axis.and_then(|a| live.iter().find(|(k, _)| *k == a).map(|(_, x)| *x));
@@ -1940,10 +1945,10 @@ fn feedback_setup(
                 }
             }
             let (message, color) = match test.result {
-                Some(Ok(false)) => ("Direction detected: normal", OK),
-                Some(Ok(true)) => ("Direction detected: inverted", OK),
-                Some(Err(message)) => (message, DANGER),
-                None => ("Testing: keep your hands off the wheel…", TEXT_SOFT),
+                Some(Ok(false)) => ("Direction detected: normal", OK()),
+                Some(Ok(true)) => ("Direction detected: inverted", OK()),
+                Some(Err(message)) => (message, DANGER()),
+                None => ("Testing: keep your hands off the wheel…", TEXT_SOFT()),
             };
             y += ui.paragraph(message, Vec2::new(r.x, y), r.w, 13.0, Weight::Medium, color) + 12.0;
         }
@@ -1952,7 +1957,7 @@ fn feedback_setup(
                       crate::ffb_calibration::PULSE_FORCE, crate::ffb_calibration::MAX_PULSE_FORCE, 0.01,
                       "Test strength", &|v| format!("{:.0}%", v * 100.0));
             y += ROW + 8.0;
-            y += ui.paragraph("If the wheel barely moves, increase Test strength and retry. Keep your hands clear.", Vec2::new(r.x, y), r.w, 13.0, Weight::Regular, TEXT_DIM) + 10.0;
+            y += ui.paragraph("If the wheel barely moves, increase Test strength and retry. Keep your hands clear.", Vec2::new(r.x, y), r.w, 13.0, Weight::Regular, TEXT_DIM()) + 10.0;
             if ui.button("wiz-ff-test", Rect::new(r.x, y, 180.0, 36.0), "Start test", Some("play_arrow"), ButtonKind::Primary) {
                 if device.is_none() || axis.is_none() {
                     w.error = Some("The wheel is unavailable. Reconnect it and try again.".into());
@@ -1971,10 +1976,10 @@ fn feedback_setup(
                 w.ff_choice = Some(invert);
             }
             y += ROW + 8.0;
-            y += ui.paragraph("If detection is inconclusive, retry or choose the direction manually. You can change it later on this device's page.", Vec2::new(r.x, y), r.w, 13.0, Weight::Regular, TEXT_DIM) + 8.0;
+            y += ui.paragraph("If detection is inconclusive, retry or choose the direction manually. You can change it later on this device's page.", Vec2::new(r.x, y), r.w, 13.0, Weight::Regular, TEXT_DIM()) + 8.0;
         }
         if let Some(error) = &w.error {
-            y += ui.paragraph(error, Vec2::new(r.x, y), r.w, 13.0, Weight::Medium, DANGER) + 8.0;
+            y += ui.paragraph(error, Vec2::new(r.x, y), r.w, 13.0, Weight::Medium, DANGER()) + 8.0;
         }
         y - r.y
     });
@@ -2107,8 +2112,8 @@ pub fn sessions(l: &mut Launcher, area: Rect) {
     if list.is_empty() {
         let r = Rect::new(body.x, body.y, body.w.min(720.0), 120.0);
         l.ui.panel(r);
-        l.ui.icon("sports_esports", Vec2::new(r.x + 40.0, r.center().y), 36.0, TEXT_FAINT);
-        l.ui.paragraph("No game is running. Start a duty on the Drive page; to drive with friends, turn on hosting on the Multiplayer page and give them the code shown here.", Vec2::new(r.x + 76.0, r.y + 30.0), r.w - 100.0, 13.5, Weight::Regular, TEXT_DIM);
+        l.ui.icon("sports_esports", Vec2::new(r.x + 40.0, r.center().y), 36.0, TEXT_FAINT());
+        l.ui.paragraph("No game is running. Start a duty on the Drive page; to drive with friends, turn on hosting on the Multiplayer page and give them the code shown here.", Vec2::new(r.x + 76.0, r.y + 30.0), r.w - 100.0, 13.5, Weight::Regular, TEXT_DIM());
         return;
     }
     let names: std::collections::HashMap<String, String> = l.state.vehicles.iter().map(|v| (v.file.clone(), v.name.clone())).collect();
@@ -2146,19 +2151,19 @@ pub fn sessions(l: &mut Launcher, area: Rect) {
         let c = Vec2::new(r.x + 24.0, r.y + 28.0);
         if running {
             let pulse = (l.ui.time * 3.0).sin() * 0.5 + 0.5;
-            l.ui.p().circle(c, 6.0 + 3.0 * pulse, OK.alpha(0.25));
+            l.ui.p().circle(c, 6.0 + 3.0 * pulse, OK().alpha(0.25));
         }
-        l.ui.p().circle(c, 6.0, if running { OK } else { TEXT_FAINT });
+        l.ui.p().circle(c, 6.0, if running { OK() } else { TEXT_FAINT() });
         let duty = i.line.as_ref().map(|ln| format!(" · line {ln}{}", i.tour.as_ref().map(|t| format!(" / {t}")).unwrap_or_default())).unwrap_or_default();
-        l.ui.text_in(&format!("{} · {}{duty}", short_map(&i.map), short_bus(&i.bus)), Rect::new(r.x + 42.0, r.y + 16.0, r.w - 260.0, 24.0), 16.0, Weight::Black, TEXT, Align::Left);
+        l.ui.text_in(&format!("{} · {}{duty}", short_map(&i.map), short_bus(&i.bus)), Rect::new(r.x + 42.0, r.y + 16.0, r.w - 260.0, 24.0), 16.0, Weight::Black, TEXT(), Align::Left);
         let status = if running {
             if l.state.stopping.contains(&i.pid) || i.stopping.is_some() { "stopping - saving the run…".to_string() } else { format!("running for {}", ago(i.started)) }
         } else {
             let how = if i.exit_code == Some(0) { String::new() } else if i.killed { " (killed - it did not end by itself, the run is not saved)".into() } else { i.exit_code.map(|c| format!(" (exit code {c})")).unwrap_or_default() };
             format!("ended{how}")
         };
-        l.ui.text_in(&format!("{status} · driver {}", i.profile), Rect::new(r.x + 42.0, r.y + 42.0, r.w - 60.0, 18.0), 12.0, Weight::Regular, TEXT_DIM, Align::Left);
-        l.ui.text_in(&i.last_line, Rect::new(r.x + 42.0, r.y + 62.0, r.w - 60.0, 18.0), 11.5, Weight::Regular, TEXT_FAINT, Align::Left);
+        l.ui.text_in(&format!("{status} · driver {}", i.profile), Rect::new(r.x + 42.0, r.y + 42.0, r.w - 60.0, 18.0), 12.0, Weight::Regular, TEXT_DIM(), Align::Left);
+        l.ui.text_in(&i.last_line, Rect::new(r.x + 42.0, r.y + 62.0, r.w - 60.0, 18.0), 11.5, Weight::Regular, TEXT_FAINT(), Align::Left);
         // buttons
         let bw = 110.0;
         if running {
@@ -2174,11 +2179,11 @@ pub fn sessions(l: &mut Launcher, area: Rect) {
         if role == "host" {
             let code = lan.get("code").and_then(|x| x.as_str()).unwrap_or("").to_string();
             let box_r = Rect::new(r.x + 20.0, yy, r.w - 40.0, 84.0);
-            l.ui.p().rounded(box_r, 10.0, ACCENT.alpha(0.10));
-            l.ui.p().rounded_border(box_r, 10.0, 1.0, ACCENT.alpha(0.5));
-            l.ui.text_in("SESSION CODE", Rect::new(box_r.x + 16.0, box_r.y + 8.0, 200.0, 16.0), 10.5, Weight::Black, ACCENT, Align::Left);
-            l.ui.text_in(&code, Rect::new(box_r.x + 16.0, box_r.y + 26.0, box_r.w - 170.0, 30.0), 20.0, Weight::Condensed, TEXT, Align::Left);
-            l.ui.text_in("Your friends paste it into Multiplayer → Connect by Code.", Rect::new(box_r.x + 16.0, box_r.y + 58.0, box_r.w - 170.0, 18.0), 11.5, Weight::Regular, TEXT_DIM, Align::Left);
+            l.ui.p().rounded(box_r, 10.0, HOVER());
+            l.ui.p().rounded_border(box_r, 10.0, 1.0, ACCENT().alpha(0.7));
+            l.ui.text_in("SESSION CODE", Rect::new(box_r.x + 16.0, box_r.y + 8.0, 200.0, 16.0), 10.5, Weight::Black, ACCENT(), Align::Left);
+            l.ui.text_in(&code, Rect::new(box_r.x + 16.0, box_r.y + 26.0, box_r.w - 170.0, 30.0), 20.0, Weight::Condensed, TEXT(), Align::Left);
+            l.ui.text_in("Your friends paste it into Multiplayer → Connect by Code.", Rect::new(box_r.x + 16.0, box_r.y + 58.0, box_r.w - 170.0, 18.0), 11.5, Weight::Regular, TEXT_DIM(), Align::Left);
             if l.ui.button(&format!("copy-{}", i.pid), Rect::new(box_r.right() - 146.0, box_r.y + 24.0, 130.0, 36.0), "Copy code", Some("content_copy"), ButtonKind::Primary) {
                 copy = Some(code.clone());
             }
@@ -2192,39 +2197,39 @@ pub fn sessions(l: &mut Launcher, area: Rect) {
             } else {
                 "connecting…".to_string()
             };
-            l.ui.text_in(&format!("Multiplayer: {text}"), Rect::new(r.x + 42.0, yy, r.w - 60.0, 20.0), 12.5, Weight::Medium, if connected { OK } else { WARN }, Align::Left);
+            l.ui.text_in(&format!("Multiplayer: {text}"), Rect::new(r.x + 42.0, yy, r.w - 60.0, 20.0), 12.5, Weight::Medium, if connected { OK() } else { WARN() }, Align::Left);
             yy += 24.0;
         }
         if !players.is_empty() {
-            l.ui.text_in("PLAYERS", Rect::new(r.x + 42.0, yy, 200.0, 18.0), 10.5, Weight::Black, TEXT_FAINT, Align::Left);
+            l.ui.text_in("PLAYERS", Rect::new(r.x + 42.0, yy, 200.0, 18.0), 10.5, Weight::Black, TEXT_FAINT(), Align::Left);
             yy += 22.0;
             for p in &players {
                 let s = |k: &str| p.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
                 let pax = p.get("passengers").and_then(|x| x.as_i64()).unwrap_or(0);
                 let dest = if s("destination").is_empty() { String::new() } else { format!(" · {} → {}", s("line"), s("destination")) };
-                l.ui.text_in(&format!("{} · {}{dest}{} · {}", s("name"), short_bus(&s("bus")), if pax > 0 { format!(" · {pax} passengers") } else { String::new() }, s("where")), Rect::new(r.x + 42.0, yy, r.w - 60.0, 18.0), 12.5, Weight::Medium, TEXT_SOFT, Align::Left);
+                l.ui.text_in(&format!("{} · {}{dest}{} · {}", s("name"), short_bus(&s("bus")), if pax > 0 { format!(" · {pax} passengers") } else { String::new() }, s("where")), Rect::new(r.x + 42.0, yy, r.w - 60.0, 18.0), 12.5, Weight::Medium, TEXT_SOFT(), Align::Left);
                 yy += 20.0;
             }
         }
         if !chat.is_empty() {
-            l.ui.text_in("CHAT  (V in the game to write)", Rect::new(r.x + 42.0, yy + 4.0, 300.0, 18.0), 10.5, Weight::Black, TEXT_FAINT, Align::Left);
+            l.ui.text_in("CHAT  (V in the game to write)", Rect::new(r.x + 42.0, yy + 4.0, 300.0, 18.0), 10.5, Weight::Black, TEXT_FAINT(), Align::Left);
             yy += 26.0;
             for c in chat.iter().rev().take(6).rev() {
-                l.ui.text_in(c, Rect::new(r.x + 42.0, yy, r.w - 60.0, 18.0), 12.0, Weight::Regular, TEXT_SOFT, Align::Left);
+                l.ui.text_in(c, Rect::new(r.x + 42.0, yy, r.w - 60.0, 18.0), 12.0, Weight::Regular, TEXT_SOFT(), Align::Left);
                 yy += 18.0;
             }
         }
         for w in &warnings {
-            l.ui.icon("warning", Vec2::new(r.x + 50.0, yy + 9.0), 15.0, WARN);
-            l.ui.text_in(w, Rect::new(r.x + 64.0, yy, r.w - 80.0, 18.0), 12.0, Weight::Medium, WARN, Align::Left);
+            l.ui.icon("warning", Vec2::new(r.x + 50.0, yy + 9.0), 15.0, WARN());
+            l.ui.text_in(w, Rect::new(r.x + 64.0, yy, r.w - 80.0, 18.0), 12.0, Weight::Medium, WARN(), Align::Left);
             yy += 20.0;
         }
         if log_open {
             let lr = Rect::new(r.x + 20.0, yy + 6.0, r.w - 40.0, 204.0);
-            l.ui.p().rounded(lr, 8.0, Color::rgba(6, 8, 10, 0.9));
+            l.ui.p().rounded(lr, 8.0, RAIL().alpha(0.9));
             let text: Vec<String> = log_lines.iter().rev().take(11).rev().cloned().collect();
             for (k, line) in text.iter().enumerate() {
-                l.ui.text_in(line, Rect::new(lr.x + 10.0, lr.y + 6.0 + k as f32 * 18.0, lr.w - 20.0, 18.0), 11.0, Weight::Regular, if line.contains("ERROR") { DANGER } else if line.contains("WARN") { WARN } else { TEXT_DIM }, Align::Left);
+                l.ui.text_in(line, Rect::new(lr.x + 10.0, lr.y + 6.0 + k as f32 * 18.0, lr.w - 20.0, 18.0), 11.0, Weight::Regular, if line.contains("ERROR") { DANGER() } else if line.contains("WARN") { WARN() } else { TEXT_DIM() }, Align::Left);
             }
         }
         y += h + GAP;
@@ -2295,7 +2300,7 @@ pub fn mods(l: &mut Launcher, area: Rect) {
     let drop = Rect::new(inner.x, y, inner.w, 110.0);
     let hot = l.pages.drop_hover;
     let t = l.ui.anim(id_of("drop"), if hot { 1.0 } else { 0.0 }, 0.1);
-    l.ui.p().rounded(drop, 12.0, ACCENT.alpha(0.05 + 0.12 * t));
+    l.ui.p().rounded(drop, 12.0, FIELD().mix(SELECTED(), t));
     // a dashed edge
     let per = 2.0 * (drop.w + drop.h);
     let n = (per / 14.0) as usize;
@@ -2310,22 +2315,22 @@ pub fn mods(l: &mut Launcher, area: Rect) {
         } else {
             Vec2::new(drop.x, drop.bottom() - (s - 2.0 * drop.w - drop.h))
         };
-        l.ui.p().circle(p, 1.3, ACCENT.alpha(0.35 + 0.5 * t));
+        l.ui.p().circle(p, 1.3, ACCENT().alpha(0.35 + 0.5 * t));
     }
-    l.ui.icon("upload", Vec2::new(drop.center().x, drop.y + 38.0), 30.0, ACCENT.alpha(0.6 + 0.4 * t));
-    l.ui.text_in("…or drop a mod folder or .zip, .7z or .rar onto this window", Rect::new(drop.x, drop.y + 62.0, drop.w, 30.0), 12.5, Weight::Medium, TEXT_SOFT, Align::Center);
+    l.ui.icon("upload", Vec2::new(drop.center().x, drop.y + 38.0), 30.0, ACCENT().alpha(0.6 + 0.4 * t));
+    l.ui.text_in("…or drop a mod folder or .zip, .7z or .rar onto this window", Rect::new(drop.x, drop.y + 62.0, drop.w, 30.0), 12.5, Weight::Medium, TEXT_SOFT(), Align::Center);
     y += 122.0;
     if !l.state.mod_path.is_empty() {
         let p = l.state.mod_path.clone();
-        y += l.ui.paragraph(&p, Vec2::new(inner.x, y), inner.w, 11.5, Weight::Regular, TEXT_FAINT);
+        y += l.ui.paragraph(&p, Vec2::new(inner.x, y), inner.w, 11.5, Weight::Regular, TEXT_FAINT());
         match l.state.mod_info.clone() {
             Some(Ok(i)) if i.is_archive => {
                 let fit = if i.fits { format!("fits ({} free)", fmt_bytes(i.free_bytes)) } else { format!("does not fit: needs {}, {} free", fmt_bytes(i.needed_bytes), fmt_bytes(i.free_bytes)) };
                 let place = if i.in_place_ok { "can be used in place".to_string() } else { i.in_place.clone() };
-                y += l.ui.paragraph(&format!("{} archive, {} files, {} unpacked - {fit}; {place}", fmt_bytes(i.archive_bytes), i.files, fmt_bytes(i.unpacked_bytes)), Vec2::new(inner.x, y), inner.w, 12.0, Weight::Regular, if i.fits { TEXT_DIM } else { WARN });
+                y += l.ui.paragraph(&format!("{} archive, {} files, {} unpacked - {fit}; {place}", fmt_bytes(i.archive_bytes), i.files, fmt_bytes(i.unpacked_bytes)), Vec2::new(inner.x, y), inner.w, 12.0, Weight::Regular, if i.fits { TEXT_DIM() } else { WARN() });
             }
             Some(Err(e)) => {
-                y += l.ui.paragraph(&e, Vec2::new(inner.x, y), inner.w, 12.0, Weight::Regular, DANGER);
+                y += l.ui.paragraph(&e, Vec2::new(inner.x, y), inner.w, 12.0, Weight::Regular, DANGER());
             }
             _ => {}
         }
@@ -2334,9 +2339,9 @@ pub fn mods(l: &mut Launcher, area: Rect) {
     if let Some(m) = l.state.mods.clone() {
         l.ui.heading(Rect::new(inner.x, y, inner.w, 28.0), "The Mods folder", None);
         y += 30.0;
-        y += l.ui.paragraph(&format!("Anything put into {} is installed by itself once it has finished copying.", m.inbox), Vec2::new(inner.x, y), inner.w, 12.0, Weight::Regular, TEXT_DIM);
+        y += l.ui.paragraph(&format!("Anything put into {} is installed by itself once it has finished copying.", m.inbox), Vec2::new(inner.x, y), inner.w, 12.0, Weight::Regular, TEXT_DIM());
         if !m.inbox_items.is_empty() {
-            l.ui.paragraph(&format!("In it now: {}", m.inbox_items.join(", ")), Vec2::new(inner.x, y + 4.0), inner.w, 12.0, Weight::Regular, TEXT_SOFT);
+            l.ui.paragraph(&format!("In it now: {}", m.inbox_items.join(", ")), Vec2::new(inner.x, y + 4.0), inner.w, 12.0, Weight::Regular, TEXT_SOFT());
         }
     }
     // installs
@@ -2351,7 +2356,7 @@ pub fn mods(l: &mut Launcher, area: Rect) {
     let mut cancel = None;
     l.ui.scroll_area("jobs", Rect::new(inner.x - 6.0, inner.y, inner.w + 12.0, inner.h), &mut |ui, v| {
         if jobs.is_empty() {
-            ui.paragraph("Nothing installed since the launcher started. Big archives are checked against the free disk space before anything is unpacked; a cancelled or failed install leaves nothing behind.", Vec2::new(v.x + 6.0, v.y), v.w - 12.0, 12.5, Weight::Regular, TEXT_DIM);
+            ui.paragraph("Nothing installed since the launcher started. Big archives are checked against the free disk space before anything is unpacked; a cancelled or failed install leaves nothing behind.", Vec2::new(v.x + 6.0, v.y), v.w - 12.0, 12.5, Weight::Regular, TEXT_DIM());
             return 60.0;
         }
         let mut y = v.y;
@@ -2360,25 +2365,25 @@ pub fn mods(l: &mut Launcher, area: Rect) {
             let msg_h = ui.paragraph_height(&j.message, v.w - 40.0, 12.0, Weight::Regular);
             let h = 50.0 + msg_h + if running { 44.0 } else { 0.0 } + j.warnings.len() as f32 * 18.0;
             let r = Rect::new(v.x + 6.0, y, v.w - 16.0, h);
-            ui.p().rounded(r, 10.0, Color::WHITE.alpha(0.04));
-            ui.text_in(&j.name, Rect::new(r.x + 12.0, r.y + 8.0, r.w - 120.0, 20.0), 13.5, Weight::Bold, TEXT, Align::Left);
+            ui.p().rounded(r, 10.0, LIFT().alpha(0.04));
+            ui.text_in(&j.name, Rect::new(r.x + 12.0, r.y + 8.0, r.w - 120.0, 20.0), 13.5, Weight::Bold, TEXT(), Align::Left);
             let sc = match j.state.as_str() {
-                "done" => OK,
-                "failed" => DANGER,
-                "cancelled" => TEXT_DIM,
-                _ => ACCENT,
+                "done" => OK(),
+                "failed" => DANGER(),
+                "cancelled" => TEXT_DIM(),
+                _ => ACCENT(),
             };
             ui.badge(Vec2::new(r.right() - 90.0, r.y + 10.0), &j.state.to_uppercase(), sc);
             let mut yy = r.y + 34.0;
             if running {
                 let frac = if j.bytes_total > 0 { j.bytes_done as f32 / j.bytes_total as f32 } else if j.files_total > 0 { j.files_done as f32 / j.files_total as f32 } else { 0.0 };
                 ui.progress(Rect::new(r.x + 12.0, yy, r.w - 24.0, 8.0), frac, true);
-                ui.text_in(&format!("{} / {} files · {} / {}", j.files_done, j.files_total, fmt_bytes(j.bytes_done), fmt_bytes(j.bytes_total)), Rect::new(r.x + 12.0, yy + 10.0, r.w - 24.0, 16.0), 11.0, Weight::Regular, TEXT_DIM, Align::Left);
+                ui.text_in(&format!("{} / {} files · {} / {}", j.files_done, j.files_total, fmt_bytes(j.bytes_done), fmt_bytes(j.bytes_total)), Rect::new(r.x + 12.0, yy + 10.0, r.w - 24.0, 16.0), 11.0, Weight::Regular, TEXT_DIM(), Align::Left);
                 yy += 30.0;
             }
-            yy += ui.paragraph(&j.message, Vec2::new(r.x + 12.0, yy), r.w - 24.0, 12.0, Weight::Regular, if j.state == "failed" { DANGER } else { TEXT_SOFT });
+            yy += ui.paragraph(&j.message, Vec2::new(r.x + 12.0, yy), r.w - 24.0, 12.0, Weight::Regular, if j.state == "failed" { DANGER() } else { TEXT_SOFT() });
             for w in &j.warnings {
-                ui.text_in(&format!("⚠ {w}"), Rect::new(r.x + 12.0, yy, r.w - 24.0, 16.0), 11.0, Weight::Regular, WARN, Align::Left);
+                ui.text_in(&format!("⚠ {w}"), Rect::new(r.x + 12.0, yy, r.w - 24.0, 16.0), 11.0, Weight::Regular, WARN(), Align::Left);
                 yy += 18.0;
             }
             if running && ui.button(&format!("cancel-{}", j.id), Rect::new(r.x + 12.0, r.bottom() - 34.0, 100.0, 28.0), "Cancel", None, ButtonKind::Danger) {
@@ -2397,18 +2402,18 @@ pub fn mods(l: &mut Launcher, area: Rect) {
     l.ui.panel(c2);
     let inner = l.ui.heading(Rect::new(c2.x + 18.0, c2.y + 14.0, c2.w - 36.0, c2.h - 28.0), "Content folder", Some("folder_open"));
     let Some(m) = l.state.mods.clone() else {
-        l.ui.text_in("Reading…", Rect::new(inner.x, inner.y, inner.w, 20.0), 12.5, Weight::Regular, TEXT_DIM, Align::Left);
+        l.ui.text_in("Reading…", Rect::new(inner.x, inner.y, inner.w, 20.0), 12.5, Weight::Regular, TEXT_DIM(), Align::Left);
         return;
     };
     let mut y = inner.y;
-    y += l.ui.paragraph(&m.content_dir, Vec2::new(inner.x, y), inner.w, 12.0, Weight::Medium, TEXT_SOFT);
+    y += l.ui.paragraph(&m.content_dir, Vec2::new(inner.x, y), inner.w, 12.0, Weight::Medium, TEXT_SOFT());
     y += 6.0;
-    l.ui.text_in(&format!("{} free on this disk", fmt_bytes(m.free_bytes)), Rect::new(inner.x, y, inner.w, 20.0), 13.0, Weight::Bold, ACCENT, Align::Left);
+    l.ui.text_in(&format!("{} free on this disk", fmt_bytes(m.free_bytes)), Rect::new(inner.x, y, inner.w, 20.0), 13.0, Weight::Bold, ACCENT(), Align::Left);
     y += 30.0;
     for (f, n) in &m.folders {
-        l.ui.icon("folder_open", Vec2::new(inner.x + 9.0, y + 10.0), 16.0, TEXT_DIM);
-        l.ui.text_in(f, Rect::new(inner.x + 26.0, y, inner.w * 0.6, 20.0), 12.5, Weight::Medium, TEXT, Align::Left);
-        l.ui.text_in(&format!("{n} {}", if *n == 1 { "entry" } else { "entries" }), Rect::new(inner.x, y, inner.w, 20.0), 12.0, Weight::Regular, TEXT_DIM, Align::Right);
+        l.ui.icon("folder_open", Vec2::new(inner.x + 9.0, y + 10.0), 16.0, TEXT_DIM());
+        l.ui.text_in(f, Rect::new(inner.x + 26.0, y, inner.w * 0.6, 20.0), 12.5, Weight::Medium, TEXT(), Align::Left);
+        l.ui.text_in(&format!("{n} {}", if *n == 1 { "entry" } else { "entries" }), Rect::new(inner.x, y, inner.w, 20.0), 12.0, Weight::Regular, TEXT_DIM(), Align::Right);
         y += 24.0;
     }
     if !m.archives.is_empty() {
@@ -2416,7 +2421,7 @@ pub fn mods(l: &mut Launcher, area: Rect) {
         l.ui.heading(Rect::new(inner.x, y, inner.w, 28.0), "Archives used in place", None);
         y += 30.0;
         for (n, b) in &m.archives {
-            l.ui.text_in(&format!("{n}  ({})", fmt_bytes(*b)), Rect::new(inner.x, y, inner.w, 20.0), 12.0, Weight::Regular, TEXT_SOFT, Align::Left);
+            l.ui.text_in(&format!("{n}  ({})", fmt_bytes(*b)), Rect::new(inner.x, y, inner.w, 20.0), 12.0, Weight::Regular, TEXT_SOFT(), Align::Left);
             y += 22.0;
         }
     }
@@ -2425,7 +2430,7 @@ pub fn mods(l: &mut Launcher, area: Rect) {
         l.ui.heading(Rect::new(inner.x, y, inner.w, 28.0), "Waiting for their bus", None);
         y += 30.0;
         for w in &m.waiting {
-            l.ui.text_in(w, Rect::new(inner.x, y, inner.w, 20.0), 12.0, Weight::Regular, TEXT_DIM, Align::Left);
+            l.ui.text_in(w, Rect::new(inner.x, y, inner.w, 20.0), 12.0, Weight::Regular, TEXT_DIM(), Align::Left);
             y += 22.0;
         }
     }
@@ -2456,7 +2461,7 @@ pub fn setup(l: &mut Launcher, area: Rect) {
     y += ROW + 10.0;
     if core::IN_PROCESS_GAMES {
         // (a phone: the game is this app itself)
-        y += l.ui.paragraph("Copy the whole OMSI 2 folder (with maps and Vehicles in it) onto the phone - by cable, from a PC or a USB stick - for example as openOMSI/OMSI 2 in the internal storage, then choose it here with Browse. Mods go into openOMSI/Mods or are installed from the Mods page.", Vec2::new(inner.x, y), inner.w, 12.5, Weight::Regular, TEXT_DIM);
+        y += l.ui.paragraph("Copy the whole OMSI 2 folder (with maps and Vehicles in it) onto the phone - by cable, from a PC or a USB stick - for example as openOMSI/OMSI 2 in the internal storage, then choose it here with Browse. Mods go into openOMSI/Mods or are installed from the Mods page.", Vec2::new(inner.x, y), inner.w, 12.5, Weight::Regular, TEXT_DIM());
     } else {
         l.ui.label(Rect::new(inner.x, y, 150.0, ROW), "Game binary");
         if l.ui.text_input("cfg-game", Rect::new(inner.x + 150.0, y, inner.w - 150.0 - 110.0, ROW), &mut game, "openomsi", Some("terminal")) {
@@ -2468,7 +2473,7 @@ pub fn setup(l: &mut Launcher, area: Rect) {
             }
         }
         y += ROW + 16.0;
-        y += l.ui.paragraph("The OMSI 2 folder is the one with maps and Vehicles in it (any complete installation). The game binary is the openomsi program; it is found by itself when it sits next to the launcher.", Vec2::new(inner.x, y), inner.w, 12.5, Weight::Regular, TEXT_DIM);
+        y += l.ui.paragraph("The OMSI 2 folder is the one with maps and Vehicles in it (any complete installation). The game binary is the openomsi program; it is found by itself when it sits next to the launcher.", Vec2::new(inner.x, y), inner.w, 12.5, Weight::Regular, TEXT_DIM());
     }
     y += 12.0;
     if l.ui.button("cfg-save", Rect::new(inner.x, y, 180.0, 42.0), "Save", Some("save"), ButtonKind::Primary) {
@@ -2499,7 +2504,7 @@ pub fn tutorials(l: &mut Launcher, area: Rect) {
     static LIST: std::sync::OnceLock<Vec<(usize, String, String)>> = std::sync::OnceLock::new();
     let list = LIST.get_or_init(omsi_launcher_lib::tutorials);
     if list.is_empty() {
-        l.ui.paragraph("No tutorials were found in the OMSI 2 folder (Tutorials).", Vec2::new(body.x, body.y), body.w, 13.0, Weight::Regular, TEXT_DIM);
+        l.ui.paragraph("No tutorials were found in the OMSI 2 folder (Tutorials).", Vec2::new(body.x, body.y), body.w, 13.0, Weight::Regular, TEXT_DIM());
         return;
     }
     let cols = 2;
@@ -2509,9 +2514,9 @@ pub fn tutorials(l: &mut Launcher, area: Rect) {
     for (k, (n, title, text)) in list.iter().enumerate() {
         let r = Rect::new(body.x + (k % cols) as f32 * (cw + GAP * 2.0), body.y + (k / cols) as f32 * (ch + GAP * 2.0), cw, ch);
         l.ui.panel(r);
-        l.ui.text_in(title, Rect::new(r.x + 18.0, r.y + 14.0, r.w - 36.0, 26.0), 17.0, Weight::Bold, TEXT, Align::Left);
+        l.ui.text_in(title, Rect::new(r.x + 18.0, r.y + 14.0, r.w - 36.0, 26.0), 17.0, Weight::Bold, TEXT(), Align::Left);
         l.ui.push_clip(Rect::new(r.x + 18.0, r.y + 46.0, r.w - 36.0, r.h - 110.0), 0.0);
-        l.ui.paragraph(text, Vec2::new(r.x + 18.0, r.y + 46.0), r.w - 36.0, 12.5, Weight::Regular, TEXT_DIM);
+        l.ui.paragraph(text, Vec2::new(r.x + 18.0, r.y + 46.0), r.w - 36.0, 12.5, Weight::Regular, TEXT_DIM());
         l.ui.pop_clip();
         if l.ui.button(&format!("tut-{n}"), Rect::new(r.x + 18.0, r.bottom() - 58.0, 200.0, 40.0), "Start the lesson", Some("play_arrow"), ButtonKind::Primary) {
             start = Some(*n);
@@ -2705,7 +2710,7 @@ mod settings_tests {
             "s-maint", "set-collision_vehicles", "set-collision_objects", "set-collision_pedestrians", "set-use_real_time", "set-use_real_date", "set-time_sync", "set-metar_sync", "s-timespeed",
         ];
         let general = vec![
-            "s-lang", "set-machine_translation", "set-launcher_rest", "set-discord_status", "set-voice_chat", "s-uiscale", "set-ui_scale_window", "s-uiop", "set-tooltips", "set-show_fps", "set-notes", "set-chat", "s-chatsize", "set-name_tags",
+            "s-lang", "s-theme", "set-machine_translation", "set-launcher_rest", "set-discord_status", "set-voice_chat", "s-uiscale", "set-ui_scale_window", "s-uiop", "set-tooltips", "set-show_fps", "set-notes", "set-chat", "s-chatsize", "set-name_tags",
             "set-navigator", "set-nav_arrows", "set-nav_ai", "corner-top-left", "corner-top-right", "corner-bottom-left", "corner-bottom-right",
             "set-update_check", "set-update_auto", "set-update_notify", "set-presence", "s-upd-check", "s-upd-github", "s-reset",
         ];

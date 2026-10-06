@@ -22376,6 +22376,7 @@ _version: 2
   zh-tw: "首先選擇一條路線。"
 
 "Done":
+  de: "Fertig"
   ca: "Fet"
   pt: "Concluir"
   pt-pt: "Concluir"
@@ -25320,6 +25321,7 @@ _version: 2
   pt: "Procurando o servidor…"
   pt-pt: "À procura do servidor…"
 "Name":
+  de: "Name"
   ca: "Nom"
   fr: "Nom"
   zh-tw: "名稱"
@@ -25604,3 +25606,347 @@ _version: 2
   it: "l’host ti ha escluso da questa sessione"
   nl: "de host heeft je uit deze sessie gestuurd"
   tr: "ev sahibi seni bu oturumdan attı"
+
+# The launcher's home cards, bus gallery, livery studio and line editor
+
+"Good morning":
+  de: "Guten Morgen"
+
+"Good afternoon":
+  de: "Guten Tag"
+
+"Good evening":
+  de: "Guten Abend"
+
+"Good night":
+  de: "Gute Nacht"
+
+"How do you want to drive today?":
+  de: "Wie möchtest du heute fahren?"
+
+"Drive a duty":
+  de: "Dienst fahren"
+
+"A line and a tour from the timetable, its times kept stop by stop.":
+  de: "Eine Linie und ein Umlauf aus dem Fahrplan, pünktlich von Haltestelle zu Haltestelle."
+
+"Only a map and a bus: go where the road takes you, nothing is booked.":
+  de: "Nur eine Karte und ein Bus: fahr, wohin die Straße führt, nichts ist gebucht."
+
+"Drive with friends by a code, or join a server that is always on.":
+  de: "Mit Freunden per Code fahren oder einem Server beitreten, der immer läuft."
+
+"The map's lines, their tours and when the buses go.":
+  de: "Die Linien der Karte, ihre Umläufe und wann die Busse fahren."
+
+"Bus gallery":
+  de: "Bus-Galerie"
+
+"Every bus you have, pictured: pick one and look at it from all sides.":
+  de: "Jeder Bus, den du hast, im Bild: wähle einen und sieh ihn dir von allen Seiten an."
+
+"Line editor":
+  de: "Linien-Editor"
+
+"Lines of your own: click the stops, the way is found over the roads.":
+  de: "Eigene Linien: Haltestellen anklicken, der Weg wird über die Straßen gefunden."
+
+"Livery studio":
+  de: "Lackier-Studio"
+
+"Paint a bus: colours, stripes, a name and a logo, seen on the model.":
+  de: "Einen Bus lackieren: Farben, Streifen, ein Name und ein Logo, direkt am Modell."
+
+"Create a driver":
+  de: "Fahrer anlegen"
+
+"Buses":
+  de: "Busse"
+
+"Every bus you have, pictured by the game's own renderer. Choose one to drive it or to paint it.":
+  de: "Jeder Bus, den du hast, vom Renderer des Spiels abgebildet. Wähle einen, um ihn zu fahren oder zu lackieren."
+
+"Drive it":
+  de: "Losfahren"
+
+"Paint it":
+  de: "Lackieren"
+
+"Look at it":
+  de: "Ansehen"
+
+"Laying the body texture out…":
+  de: "Die Karosserie-Textur wird ausgelegt …"
+
+"Painting…":
+  de: "Wird lackiert …"
+
+"Choose a bus first":
+  de: "Wähle zuerst einen Bus"
+
+"Before / after":
+  de: "Vorher / nachher"
+
+"Fill":
+  de: "Füllen"
+
+"Stripe":
+  de: "Streifen"
+
+"Text":
+  de: "Text"
+
+"Image":
+  de: "Bild"
+
+"Mirror":
+  de: "Spiegeln"
+
+"Names and logos on both sides of the bus":
+  de: "Namen und Logos auf beiden Seiten des Busses"
+
+"Undo":
+  de: "Rückgängig"
+
+"Redo":
+  de: "Wiederholen"
+
+"Name of the livery":
+  de: "Name der Lackierung"
+
+"Save to game":
+  de: "Ins Spiel speichern"
+
+"Livery saved into":
+  de: "Lackierung gespeichert in"
+
+"Layers":
+  de: "Ebenen"
+
+"No layers yet. Pick a colour and a stripe on the right, or a tool above.":
+  de: "Noch keine Ebenen. Wähle rechts eine Farbe und einen Streifen oder oben ein Werkzeug."
+
+"Move up":
+  de: "Nach oben"
+
+"Move down":
+  de: "Nach unten"
+
+"Duplicate":
+  de: "Duplizieren"
+
+"Quick livery":
+  de: "Schnell-Lackierung"
+
+"Body":
+  de: "Karosserie"
+
+"From the bus":
+  de: "Vom Bus"
+
+"Used last":
+  de: "Zuletzt benutzt"
+
+"Skirt band":
+  de: "Sockelband"
+
+"Window band":
+  de: "Fensterband"
+
+"Roof band":
+  de: "Dachband"
+
+"Slanted":
+  de: "Schräg"
+
+"Wave":
+  de: "Welle"
+
+"Two-tone":
+  de: "Zweifarbig"
+
+"Front face":
+  de: "Front"
+
+"Rear face":
+  de: "Heck"
+
+"Base colour":
+  de: "Grundfarbe"
+
+"Name on the bus":
+  de: "Name auf dem Bus"
+
+"Logo":
+  de: "Logo"
+
+"Choose a logo…":
+  de: "Logo wählen …"
+
+"A logo (PNG, JPG)":
+  de: "Ein Logo (PNG, JPG)"
+
+"The logo cannot be read":
+  de: "Das Logo kann nicht gelesen werden"
+
+"Drag on the bus to turn it, the wheel zooms. A layer chosen on the left shows its settings here.":
+  de: "Auf dem Bus ziehen dreht ihn, das Mausrad zoomt. Eine links gewählte Ebene zeigt hier ihre Einstellungen."
+
+"Along":
+  de: "Entlang"
+
+"Height":
+  de: "Höhe"
+
+"Size":
+  de: "Größe"
+
+"Width":
+  de: "Breite"
+
+"Slope":
+  de: "Neigung"
+
+"Front":
+  de: "Front"
+
+"Rear":
+  de: "Heck"
+
+"Roof":
+  de: "Dach"
+
+"Angled":
+  de: "Schräg von vorn"
+
+"The bus is still being laid out":
+  de: "Der Bus wird noch ausgelegt"
+
+"This bus's body texture is not one its repaints replace: it cannot be saved as a livery":
+  de: "Die Karosserie-Textur dieses Busses wird von Repaints nicht ersetzt: als Lackierung speichern geht hier nicht"
+
+"Give the livery a name first":
+  de: "Gib der Lackierung zuerst einen Namen"
+
+"The content folder lies inside the OMSI 2 folder: the livery is not written there":
+  de: "Der Content-Ordner liegt im OMSI-2-Ordner: dort wird die Lackierung nicht gespeichert"
+
+"The bus's [CTC] folder is outside the game's folders":
+  de: "Der [CTC]-Ordner des Busses liegt außerhalb der Spielordner"
+
+"Click the stops in order: the way between them is found over the roads. The way back is made from the stops across the road.":
+  de: "Klicke die Haltestellen der Reihe nach an: der Weg dazwischen wird über die Straßen gefunden. Der Rückweg entsteht aus den Haltestellen gegenüber."
+
+"Reading the maps…":
+  de: "Die Karten werden gelesen …"
+
+"Your lines":
+  de: "Deine Linien"
+
+"New line":
+  de: "Neue Linie"
+
+"Number":
+  de: "Nummer"
+
+"Driven by the buses of":
+  de: "Gefahren von den Bussen von"
+
+"Not saved yet":
+  de: "Noch nicht gespeichert"
+
+"Save line":
+  de: "Linie speichern"
+
+"Delete line":
+  de: "Linie löschen"
+
+"Line deleted:":
+  de: "Linie gelöscht:"
+
+"Line saved:":
+  de: "Linie gespeichert:"
+
+"Displays":
+  de: "Anzeigen"
+
+"Outbound":
+  de: "Hinweg"
+
+"Return":
+  de: "Rückweg"
+
+"Click the line's first stop on the map.":
+  de: "Klicke die erste Haltestelle der Linie auf der Karte an."
+
+"Click the stops of the way back, or leave them: saved, the way back is made from the stops across the road.":
+  de: "Klicke die Haltestellen des Rückwegs an oder lass es: beim Speichern entsteht der Rückweg aus den Haltestellen gegenüber."
+
+"Make the way back":
+  de: "Rückweg erzeugen"
+
+"Remove the stop":
+  de: "Haltestelle entfernen"
+
+"No road joins some of the stops: they are joined straight":
+  de: "Zwischen einigen Haltestellen gibt es keine Straße: sie sind gerade verbunden"
+
+"This map's timetable names no bus stops":
+  de: "Der Fahrplan dieser Karte nennt keine Haltestellen"
+
+"Destination":
+  de: "Ziel"
+
+"Via":
+  de: "Über"
+
+"Line text":
+  de: "Linientext"
+
+"Mon – Fri":
+  de: "Mo – Fr"
+
+"Saturday":
+  de: "Samstag"
+
+"Sunday":
+  de: "Sonntag"
+
+"First":
+  de: "Erste"
+
+"Last":
+  de: "Letzte"
+
+"Every":
+  de: "Alle"
+
+"trips":
+  de: "Fahrten"
+
+"trips in all, each way":
+  de: "Fahrten insgesamt, je Richtung"
+
+"Begun from the chosen livery":
+  de: "Begonnen mit der gewählten Lackierung"
+
+"Begun from the model's own":
+  de: "Begonnen mit der Lackierung des Modells"
+
+"texels/m":
+  de: "Texel/m"
+
+"bus":
+  de: "Bus"
+
+"buses":
+  de: "Busse"
+
+"Stops":
+  de: "Haltestellen"
+
+"Design by":
+  de: "Design von"
+
+"the looks, the Home page, the bus gallery, the livery studio and the line editor":
+  de: "die Designs, die Startseite, die Bus-Galerie, das Lackier-Studio und der Linien-Editor"

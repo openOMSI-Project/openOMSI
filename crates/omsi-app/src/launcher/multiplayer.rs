@@ -54,7 +54,7 @@ fn by_code(l: &mut Launcher, r: Rect) {
     l.ui.heading(Rect::new(host.x + 18.0, y, host.w - 36.0, 28.0), "Host a game", Some("wifi_tethering"));
     y += 36.0;
     let hosting = l.state.choice.lan_mode == "host";
-    let h = l.ui.paragraph("Your next duty opens a session. Give the code to your friends: it works at home and over the internet.", Vec2::new(host.x + 18.0, y), host.w - 36.0, 12.5, Weight::Regular, TEXT_DIM);
+    let h = l.ui.paragraph("Your next duty opens a session. Give the code to your friends: it works at home and over the internet.", Vec2::new(host.x + 18.0, y), host.w - 36.0, 12.5, Weight::Regular, TEXT_DIM());
     y += h + 12.0;
     let mut on = hosting;
     if l.ui.toggle("mp-host", Rect::new(host.x + 18.0, y, host.w - 36.0, 32.0), &mut on, "Host my next duty") {
@@ -78,8 +78,8 @@ fn by_code(l: &mut Launcher, r: Rect) {
             y += 22.0;
             let cr = Rect::new(host.x + 18.0, y, host.w - 36.0 - 44.0, ROW);
             l.ui.solid(cr);
-            l.ui.p().rounded(cr, RADIUS, FIELD);
-            l.ui.text_in(&code, Rect::new(cr.x + 10.0, cr.y, cr.w - 20.0, cr.h), 13.0, Weight::Medium, TEXT, Align::Left);
+            l.ui.p().rounded(cr, RADIUS, FIELD());
+            l.ui.text_in(&code, Rect::new(cr.x + 10.0, cr.y, cr.w - 20.0, cr.h), 13.0, Weight::Medium, TEXT(), Align::Left);
             if l.ui.icon_button("mp-copy", Vec2::new(cr.right() + 22.0, cr.center().y), 16.0, "content_copy", "Copy the code") {
                 l.ui.clipboard_out = Some(code.clone());
                 l.state.set_status("Session code copied", false);
@@ -89,11 +89,11 @@ fn by_code(l: &mut Launcher, r: Rect) {
                 Some(_) => "Friends can join from anywhere".to_string(),
                 None => "Getting ready for friends on the internet…".to_string(),
             };
-            l.ui.text_in(&line, Rect::new(host.x + 18.0, y, host.w - 36.0, 18.0), 11.5, Weight::Regular, TEXT_FAINT, Align::Left);
+            l.ui.text_in(&line, Rect::new(host.x + 18.0, y, host.w - 36.0, 18.0), 11.5, Weight::Regular, TEXT_FAINT(), Align::Left);
         }
         None => {
             let t = if hosting { "Start a duty on the Drive page: the code appears here." } else { "Turn on hosting, then start a duty on the Drive page." };
-            l.ui.text_in(t, Rect::new(host.x + 18.0, y, host.w - 36.0, 20.0), 12.5, Weight::Regular, TEXT_SOFT, Align::Left);
+            l.ui.text_in(t, Rect::new(host.x + 18.0, y, host.w - 36.0, 20.0), 12.5, Weight::Regular, TEXT_SOFT(), Align::Left);
         }
     }
     if l.ui.button("mp-go-drive", Rect::new(host.x + 18.0, host.bottom() - 18.0 - ROW, 200.0, ROW), "Go to Drive", Some("directions_bus"), ButtonKind::Normal) {
@@ -105,7 +105,7 @@ fn by_code(l: &mut Launcher, r: Rect) {
     let mut y = join.y + 18.0;
     l.ui.heading(Rect::new(join.x + 18.0, y, join.w - 36.0, 28.0), "Connect by Code", Some("link"));
     y += 36.0;
-    let h = l.ui.paragraph("Paste the code your friend's game shows. The map, time and weather are the host's; you choose your bus.", Vec2::new(join.x + 18.0, y), join.w - 36.0, 12.5, Weight::Regular, TEXT_DIM);
+    let h = l.ui.paragraph("Paste the code your friend's game shows. The map, time and weather are the host's; you choose your bus.", Vec2::new(join.x + 18.0, y), join.w - 36.0, 12.5, Weight::Regular, TEXT_DIM());
     y += h + 12.0;
     let mut a = if l.state.choice.lan_mode == "join" && l.state.joined_server.is_none() { l.state.choice.lan_addr.clone() } else { String::new() };
     if l.ui.text_input("mp-code", Rect::new(join.x + 18.0, y, join.w - 36.0, ROW), &mut a, "OMSI-XXXX-XXXX-…", Some("link")) {
@@ -118,8 +118,8 @@ fn by_code(l: &mut Launcher, r: Rect) {
     if l.state.choice.lan_mode == "join" && l.state.joined_server.is_none() {
         l.state.check_join();
         let (ok, text) = l.state.join.clone();
-        l.ui.icon(if ok { "check_circle" } else { "error" }, Vec2::new(join.x + 26.0, y + 9.0), 15.0, if ok { OK } else { DANGER });
-        l.ui.paragraph(&text, Vec2::new(join.x + 40.0, y - 2.0), join.w - 58.0, 12.0, Weight::Regular, if ok { TEXT_DIM } else { DANGER });
+        l.ui.icon(if ok { "check_circle" } else { "error" }, Vec2::new(join.x + 26.0, y + 9.0), 15.0, if ok { OK() } else { DANGER() });
+        l.ui.paragraph(&text, Vec2::new(join.x + 40.0, y - 2.0), join.w - 58.0, 12.0, Weight::Regular, if ok { TEXT_DIM() } else { DANGER() });
     }
     let can = l.state.choice.lan_mode == "join" && l.state.joined_server.is_none() && l.state.join.0 && !l.state.choice.lan_addr.is_empty();
     if l.ui.button("mp-join", Rect::new(join.x + 18.0, join.bottom() - 18.0 - ROW, 200.0, ROW), "Choose a bus and join", Some("exit_to_app"), if can { ButtonKind::Primary } else { ButtonKind::Normal }) {
@@ -166,8 +166,8 @@ fn servers(l: &mut Launcher, r: Rect) {
     }
     if entries.is_empty() {
         l.ui.panel(Rect::new(list.x, list.y, list.w, 110.0));
-        l.ui.icon("dns", Vec2::new(list.x + 44.0, list.y + 55.0), 30.0, TEXT_FAINT);
-        l.ui.paragraph("No servers yet. Add a server by the address its owner gives you.", Vec2::new(list.x + 80.0, list.y + 32.0), list.w - 110.0, 13.0, Weight::Regular, TEXT_DIM);
+        l.ui.icon("dns", Vec2::new(list.x + 44.0, list.y + 55.0), 30.0, TEXT_FAINT());
+        l.ui.paragraph("No servers yet. Add a server by the address its owner gives you.", Vec2::new(list.x + 80.0, list.y + 32.0), list.w - 110.0, 13.0, Weight::Regular, TEXT_DIM());
     }
     let row_h = 84.0;
     let mut join: Option<String> = None;
@@ -187,9 +187,9 @@ fn servers(l: &mut Launcher, r: Rect) {
         match l.icons.get(&e.address) {
             Some(tex) => l.ui.image(ir, *tex, 8.0),
             None => {
-                l.ui.p().rounded(ir, 8.0, FIELD);
+                l.ui.p().rounded(ir, 8.0, FIELD());
                 let letter = e.name.chars().chain(info.as_ref().and_then(|i| i.as_ref().ok()).map(|i| i.name.clone()).unwrap_or_default().chars()).next().unwrap_or('S').to_uppercase().to_string();
-                l.ui.text_in(&letter, ir, 26.0, Weight::Bold, TEXT_DIM, Align::Center);
+                l.ui.text_in(&letter, ir, 26.0, Weight::Bold, TEXT_DIM(), Align::Center);
             }
         }
         if let Some(Ok(i)) = info.as_ref() {
@@ -201,21 +201,21 @@ fn servers(l: &mut Launcher, r: Rect) {
         }
         let x = ir.right() + 14.0;
         let title = if !e.name.is_empty() { e.name.clone() } else { info.as_ref().and_then(|i| i.as_ref().ok()).map(|i| i.name.clone()).unwrap_or_else(|| e.address.clone()) };
-        l.ui.text_in(&title, Rect::new(x, rr.y + 10.0, rr.w - 320.0, 22.0), 15.0, Weight::Medium, TEXT, Align::Left);
+        l.ui.text_in(&title, Rect::new(x, rr.y + 10.0, rr.w - 320.0, 22.0), 15.0, Weight::Medium, TEXT(), Align::Left);
         match info.as_ref() {
             Some(Ok(i)) => {
-                l.ui.text_in(&i.motd, Rect::new(x, rr.y + 32.0, rr.w - 320.0, 18.0), 12.5, Weight::Regular, TEXT_SOFT, Align::Left);
+                l.ui.text_in(&i.motd, Rect::new(x, rr.y + 32.0, rr.w - 320.0, 18.0), 12.5, Weight::Regular, TEXT_SOFT(), Align::Left);
                 let map = std::path::Path::new(&i.map.replace('\\', "/")).parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| i.map.clone());
-                l.ui.text_in(&format!("{map} · {} · {}", i.time, if i.weather.is_empty() { "the map's weather" } else { i.weather.as_str() }), Rect::new(x, rr.y + 52.0, rr.w - 320.0, 18.0), 11.5, Weight::Regular, TEXT_FAINT, Align::Left);
-                l.ui.text_in(&format!("{}/{}", i.players, i.max_players), Rect::new(rr.right() - 300.0, rr.y + 10.0, 80.0, 22.0), 14.0, Weight::Medium, OK, Align::Right);
-                l.ui.icon("signal_cellular_alt", Vec2::new(rr.right() - 206.0, rr.y + 21.0), 16.0, OK);
+                l.ui.text_in(&format!("{map} · {} · {}", i.time, if i.weather.is_empty() { "the map's weather" } else { i.weather.as_str() }), Rect::new(x, rr.y + 52.0, rr.w - 320.0, 18.0), 11.5, Weight::Regular, TEXT_FAINT(), Align::Left);
+                l.ui.text_in(&format!("{}/{}", i.players, i.max_players), Rect::new(rr.right() - 300.0, rr.y + 10.0, 80.0, 22.0), 14.0, Weight::Medium, OK(), Align::Right);
+                l.ui.icon("signal_cellular_alt", Vec2::new(rr.right() - 206.0, rr.y + 21.0), 16.0, OK());
             }
             Some(Err(err)) => {
-                l.ui.text_in(&format!("Can't reach the server: {err}"), Rect::new(x, rr.y + 32.0, rr.w - 320.0, 18.0), 12.0, Weight::Regular, DANGER, Align::Left);
-                l.ui.text_in(&e.address, Rect::new(x, rr.y + 52.0, rr.w - 320.0, 18.0), 11.5, Weight::Regular, TEXT_FAINT, Align::Left);
+                l.ui.text_in(&format!("Can't reach the server: {err}"), Rect::new(x, rr.y + 32.0, rr.w - 320.0, 18.0), 12.0, Weight::Regular, DANGER(), Align::Left);
+                l.ui.text_in(&e.address, Rect::new(x, rr.y + 52.0, rr.w - 320.0, 18.0), 11.5, Weight::Regular, TEXT_FAINT(), Align::Left);
             }
             None => {
-                l.ui.text_in("Asking the server…", Rect::new(x, rr.y + 32.0, rr.w - 320.0, 18.0), 12.0, Weight::Regular, TEXT_DIM, Align::Left);
+                l.ui.text_in("Asking the server…", Rect::new(x, rr.y + 32.0, rr.w - 320.0, 18.0), 12.0, Weight::Regular, TEXT_DIM(), Align::Left);
             }
         }
         if l.ui.button(&format!("srv-join-{k}"), Rect::new(rr.right() - 180.0, rr.y + 24.0, 120.0, 36.0), "Join", Some("exit_to_app"), ButtonKind::Primary) {
@@ -245,7 +245,7 @@ fn servers(l: &mut Launcher, r: Rect) {
         }
     }
     // how Join connects: UDP goes straight to the game port and needs no status answer
-    l.ui.text_in("Join via", Rect::new(r.x + 170.0, r.bottom() - ROW, 70.0, ROW), 12.5, Weight::Regular, TEXT_DIM, Align::Left);
+    l.ui.text_in("Join via", Rect::new(r.x + 170.0, r.bottom() - ROW, 70.0, ROW), 12.5, Weight::Regular, TEXT_DIM(), Align::Left);
     let mut proto = l.mp.proto;
     if l.ui.segmented("mp-proto", Rect::new(r.x + 244.0, r.bottom() - ROW, 330.0, ROW), &mut proto, &["Auto", "UDP", "WebSocket"]) {
         l.mp.proto = proto;

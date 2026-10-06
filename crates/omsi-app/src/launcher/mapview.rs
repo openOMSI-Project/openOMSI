@@ -30,16 +30,11 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::time::Instant;
 
-// The map is drawn with the game's own city map palette and order (see `navigator`): every
-// road's dark casing first, then every road's surface over every casing, then the chosen
-// line's route in the map's own red - so the two maps are the same picture.
-use crate::navigator::{ROAD, ROAD_CASING, ROAD_MAIN, ROUTE};
-const STOP: Color = Color::rgba(240, 240, 240, 1.0);
-/// Entry points wear the launcher's own amber; the one under the mouse a grey ring, the
-/// chosen one a white (a click on the map takes the place of a name in a list of seventy).
-const ENTRY: Color = Color::rgba(232, 160, 48, 1.0);
-const ENTRY_HOVER: Color = Color::rgba(160, 160, 160, 1.0);
-const ENTRY_HERE: Color = Color::rgba(255, 255, 255, 1.0);
+// The map is drawn in the game's own city map order (see `navigator`): every road's dark
+// casing first, then every road's surface over every casing, then the chosen line's route
+// in the map's own red.
+use crate::navigator::ROUTE;
+use super::theme::{ACCENT, ROAD, ROAD_CASING, ROAD_MAIN, TEXT, TEXT_DIM};
 /// A road is at least this wide on the screen when the map is far out, its own metres when
 /// it is near (the toolkit takes both: `Painter::ribbon`); the route, the dots and the rings
 /// have no metres of their own. The first two match the game's city map.
@@ -48,9 +43,6 @@ const ROAD_PX: f32 = 1.4;
 const ROUTE_PX: f32 = 5.0;
 const STOP_PX: f32 = 2.8;
 const ENTRY_PX: f32 = 3.4;
-/// The map's own background: the dark the window is cleared to, so the rail, the panels and
-/// the map meet without a seam.
-const BACKDROP: wgpu::Color = wgpu::Color { r: 0.0056, g: 0.0056, b: 0.0056, a: 1.0 };
 /// The closest the map goes in, in metres a pixel.
 const MPP_MIN: f64 = 0.15;
 /// A press that travelled less than this many pixels is a click on what stands under it.
@@ -125,6 +117,8 @@ struct Roads {
     entries: Vec<Entry>,
     /// Every placed object's world place: the trip's stops are found here.
     objects: HashMap<i64, DVec2>,
+    /// The map's bus stops (`TTData/Busstops.cfg`) where their objects stand: name, place.
+    stops: Vec<(String, DVec2)>,
 }
 
 /// What a worker read.
@@ -151,6 +145,8 @@ struct Key {
     trip: String,
     /// The simplification the plan was built with, as the bit pattern of its metres.
     tolerance: u32,
+    /// The look its colours are of.
+    theme: usize,
 }
 
 /// The map: what it shows, where it is looking, and the texture it is drawn into.
@@ -185,6 +181,10 @@ pub struct MapView {
     /// among the drawn markers; `take_clicked` turns the second into the choice's own number.
     hover: Option<usize>,
     clicked: Option<usize>,
+    /// Where a click (a press that did not drag) landed this frame, in world metres.
+    click_at: Option<DVec2>,
+    /// The entry points are drawn (the line editor's map has no use for them).
+    pub show_entries: bool,
 
     /// The plan and the markers (buffers 0 and 1); the markers are built every frame, the
     /// plan only when its key changes.
@@ -199,6 +199,12 @@ pub struct MapView {
     rect: Rect,
     window: Rect,
     scale: f32,
+}
+
+impl Default for MapView {
+    fn default() -> Self {
+        MapView::new()
+    }
 }
 
 impl MapView {
@@ -222,6 +228,8 @@ impl MapView {
             last: None,
             hover: None,
             clicked: None,
+            click_at: None,
+            show_entries: true,
             plan: None,
             gpu: None,
             target: None,
@@ -315,6 +323,36 @@ impl MapView {
         Some(self.roads.as_deref()?.entries.get(drawn)?.index)
     }
 
+    /// The entry point nearest to a world point, as its place in `global.cfg`'s list.
+    pub fn nearest_entry(&self, p: DVec2) -> Option<usize> {
+        let r = self.roads.as_deref()?;
+        r.entries.iter().min_by(|a, b| (a.at - p).length_squared().total_cmp(&(b.at - p).length_squared())).map(|e| e.index)
+    }
+
+    /// Where the last click landed on the map (world metres), taken once.
+    pub fn take_click(&mut self) -> Option<DVec2> {
+        self.click_at.take()
+    }
+
+    /// The map's bus stops: name and place.
+    pub fn bus_stops(&self) -> &[(String, DVec2)] {
+        self.roads.as_deref().map(|r| r.stops.as_slice()).unwrap_or(&[])
+    }
+
+    /// The point of a street nearest to `p`, if one is within `reach` metres.
+    pub fn on_road(&self, p: DVec2, reach: f64) -> Option<DVec2> {
+        let net = &self.roads.as_deref()?.net;
+        let (l, k) = nearest_street(net, p)?;
+        let q = net.lanes[l].points[k].truncate();
+        ((q - p).length() <= reach).then_some(q)
+    }
+
+    /// The way a bus drives from `a` to `b` over the map's roads (on its own side of them),
+    /// as the points of the lanes it takes; None when no road joins them.
+    pub fn route(&self, a: DVec2, b: DVec2) -> Option<Vec<DVec2>> {
+        route_over(&self.roads.as_deref()?.net, a, b)
+    }
+
     /// Where a world point lies in the picture (interface pixels, `rect`'s own coordinates).
     pub fn project(&self, p: DVec2) -> Vec2 {
         let a = self.anchor();
@@ -391,6 +429,7 @@ impl MapView {
             // a press that stayed where it was is a click on the entry point under it
             if self.panning && self.travelled < CLICK_SLOP {
                 self.clicked = self.hit(p.at);
+                self.click_at = Some(self.world_at(p.at));
             }
             self.panning = false;
         }
@@ -580,7 +619,7 @@ impl MapView {
         }
         let roads = self.roads.clone()?;
         let tolerance = self.tolerance();
-        let key = Key { global: self.shown.as_ref().map(|s| s.global.clone()).unwrap_or_default(), trip: self.trip_name(), tolerance: tolerance.to_bits() };
+        let key = Key { global: self.shown.as_ref().map(|s| s.global.clone()).unwrap_or_default(), trip: self.trip_name(), tolerance: tolerance.to_bits(), theme: super::theme::current() };
         if self.plan_is_stale(&key) {
             let (verts, points) = self.build(&roads, tolerance);
             let count = verts.len() as u32;
@@ -609,7 +648,7 @@ impl MapView {
             Draw { buffer: 1, range: 0..marks_len, layer: 0, texture: 0 },
         ];
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("launcher map") });
-        gpu.render(device, queue, &mut enc, &target, (w, h), Some(BACKDROP), &[layer], &draws);
+        gpu.render(device, queue, &mut enc, &target, (w, h), Some(super::theme::backdrop()), &[layer], &draws);
         queue.submit([enc.finish()]);
         Some(target)
     }
@@ -678,9 +717,9 @@ impl MapView {
         for pass in 0..2 {
             for r in &roads.roads {
                 if pass == 0 {
-                    band(&mut p, &r.points, r.width + 2.0, CASING_PX * k, ROAD_CASING);
+                    band(&mut p, &r.points, r.width + 2.0, CASING_PX * k, ROAD_CASING());
                 } else {
-                    band(&mut p, &r.points, r.width, ROAD_PX * k, if r.main { ROAD_MAIN } else { ROAD });
+                    band(&mut p, &r.points, r.width, ROAD_PX * k, if r.main { ROAD_MAIN() } else { ROAD() });
                 }
             }
         }
@@ -707,17 +746,17 @@ impl MapView {
         let at = |q: DVec2| Vec3::new((q.x - roads.origin.x) as f32, (q.y - roads.origin.y) as f32, 0.0);
         let mut p = Painter::new();
         for (q, _) in &self.stops {
-            p.world_disc(at(*q), 0.0, STOP_PX * k, STOP);
+            p.world_disc(at(*q), 0.0, STOP_PX * k, TEXT());
         }
         let chosen = self.chosen();
-        for (i, e) in roads.entries.iter().enumerate() {
-            p.world_disc(at(e.at), 0.0, ENTRY_PX * k, ENTRY);
+        for (i, e) in roads.entries.iter().enumerate().filter(|_| self.show_entries) {
+            p.world_disc(at(e.at), 0.0, ENTRY_PX * k, ACCENT());
             if self.hover == Some(i) {
-                ring(&mut p, at(e.at), (ENTRY_PX + 3.0) * k, 2.0 * k, ENTRY_HOVER, mpp);
+                ring(&mut p, at(e.at), (ENTRY_PX + 3.0) * k, 2.0 * k, TEXT_DIM(), mpp);
             }
             // (the choice counts `global.cfg`'s list, which the marker's own place names)
             if chosen == e.index as i32 {
-                ring(&mut p, at(e.at), (ENTRY_PX + 6.5) * k, 2.0 * k, ENTRY_HERE, mpp);
+                ring(&mut p, at(e.at), (ENTRY_PX + 6.5) * k, 2.0 * k, TEXT(), mpp);
             }
         }
         p.verts
@@ -734,6 +773,189 @@ impl Roads {
         }
         self.splines.get(&(piece.tile_x, piece.tile_y, piece.spline)).cloned().unwrap_or_default()
     }
+}
+
+/// The street lanes passing within `reach` metres of `p`: each with its point nearest to it
+/// and how far that is.
+fn streets_near(net: &Network, p: DVec2, reach: f64) -> Vec<(usize, usize, f64)> {
+    let mut out = Vec::new();
+    for (i, l) in net.lanes.iter().enumerate() {
+        if l.kind != omsi_sim::traffic::LaneKind::Street || l.points.len() < 2 {
+            continue;
+        }
+        let best = l.points.iter().enumerate().map(|(k, q)| (k, (q.truncate() - p).length())).min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((k, d)) = best.filter(|b| b.1 <= reach) {
+            out.push((i, k, d));
+        }
+    }
+    out
+}
+
+/// The street lane nearest to `p` and the point of it nearest (the road a stop stands at).
+fn nearest_street(net: &Network, p: DVec2) -> Option<(usize, usize)> {
+    let mut best: Option<(f64, usize, usize)> = None;
+    for (i, l) in net.lanes.iter().enumerate() {
+        if l.kind != omsi_sim::traffic::LaneKind::Street || l.points.len() < 2 {
+            continue;
+        }
+        for (k, q) in l.points.iter().enumerate() {
+            let d = (q.truncate() - p).length_squared();
+            if best.map(|b| d < b.0).unwrap_or(true) {
+                best = Some((d, i, k));
+            }
+        }
+    }
+    best.map(|b| (b.1, b.2))
+}
+
+/// The shortest way over the street lanes from a stop at `a` to one at `b` (Dijkstra over
+/// the lanes, each costing its length): the points it runs through. Every lane passing a
+/// stop may be the one the bus is on (a stop at a dead end is left the other way round).
+pub(crate) fn route_over(net: &Network, a: DVec2, b: DVec2) -> Option<Vec<DVec2>> {
+    let near_a = streets_near(net, a, 25.0);
+    let near_b = streets_near(net, b, 25.0);
+    let (near_a, near_b) = match (near_a.is_empty(), near_b.is_empty()) {
+        (false, false) => (near_a, near_b),
+        _ => {
+            let (la, ia) = nearest_street(net, a)?;
+            let (lb, ib) = nearest_street(net, b)?;
+            (vec![(la, ia, 0.0)], vec![(lb, ib, 0.0)])
+        }
+    };
+    let pts = |l: usize, from: usize, to: usize| -> Vec<DVec2> { net.lanes[l].points[from..=to.max(from)].iter().map(|q| q.truncate()).collect() };
+    // a stop after the other on the same lane: along it
+    for &(la, ia, _) in &near_a {
+        if let Some(&(_, ib, _)) = near_b.iter().find(|x| x.0 == la && x.1 > ia) {
+            return Some(pts(la, ia, ib));
+        }
+    }
+    // what leads on from a lane: its own links, and every street lane that starts where it
+    // ends (within half a metre - the links stop at some tiles' and crossings' seams)
+    let cell = |p: DVec3| ((p.x * 2.0).floor() as i64, (p.y * 2.0).floor() as i64);
+    let coarse = |p: DVec3| ((p.x / 10.0).floor() as i64, (p.y / 10.0).floor() as i64);
+    let mut starts: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let mut coarse_starts: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, l) in net.lanes.iter().enumerate() {
+        if l.kind == omsi_sim::traffic::LaneKind::Street && l.points.len() >= 2 {
+            starts.entry(cell(l.start())).or_default().push(i);
+            coarse_starts.entry(coarse(l.start())).or_default().push(i);
+        }
+    }
+    let onward = |l: usize| -> Vec<usize> {
+        let end = net.lanes[l].end();
+        let (cx, cy) = cell(end);
+        let mut out: Vec<usize> = net.lanes[l].next.iter().copied().filter(|n| net.lanes[*n].kind == omsi_sim::traffic::LaneKind::Street).collect();
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for &n in starts.get(&(cx + dx, cy + dy)).into_iter().flatten() {
+                    if n != l && (net.lanes[n].start() - end).truncate().length() < 0.5 && !out.contains(&n) {
+                        out.push(n);
+                    }
+                }
+            }
+        }
+        // a dead end (a turning loop the links do not reach, the map's edge): on from the
+        // nearest lane starting within 20 m - the bus turns there
+        if out.is_empty() {
+            let (gx, gy) = coarse(end);
+            let mut best: Option<(f64, usize)> = None;
+            for dx in -2..=2 {
+                for dy in -2..=2 {
+                    for &n in coarse_starts.get(&(gx + dx, gy + dy)).into_iter().flatten() {
+                        let d = (net.lanes[n].start() - end).truncate().length();
+                        if n != l && d < 20.0 && best.map(|b| d < b.0).unwrap_or(true) {
+                            best = Some((d, n));
+                        }
+                    }
+                }
+            }
+            out.extend(best.map(|b| b.1));
+        }
+        out
+    };
+    let len = |l: usize| net.lanes[l].length() as f64;
+    let rest = |l: usize, k: usize| (len(l) - net.lanes[l].dist[k] as f64).max(0.0);
+    // the cost of reaching a lane's start; a first lane's rest (and a little for how far it
+    // passes from the stop) is paid before
+    let mut dist: HashMap<usize, f64> = HashMap::new();
+    let mut prev: HashMap<usize, usize> = HashMap::new();
+    let mut first: HashMap<usize, usize> = HashMap::new();
+    let mut heap = std::collections::BinaryHeap::new();
+    for &(la, ia, off) in &near_a {
+        first.insert(la, ia);
+        let start = rest(la, ia) + off * 4.0;
+        for n in onward(la) {
+            if dist.get(&n).map(|d| start < *d).unwrap_or(true) {
+                dist.insert(n, start);
+                prev.insert(n, la);
+                heap.push(std::cmp::Reverse((ordered(start), n)));
+            }
+        }
+    }
+    let goal: HashMap<usize, (usize, f64)> = near_b.iter().map(|&(l, k, off)| (l, (k, off))).collect();
+    let mut reached: Option<(usize, usize)> = None;
+    let mut pops = 0usize;
+    while let Some(std::cmp::Reverse((d, l))) = heap.pop() {
+        let d = d as f64 / 1000.0;
+        // (the heap holds millimetres: an entry a better one replaced is more than one over)
+        if dist.get(&l).map(|x| d > *x + 0.002).unwrap_or(false) {
+            continue;
+        }
+        if let Some(&(k, _)) = goal.get(&l) {
+            reached = Some((l, k));
+            break;
+        }
+        pops += 1;
+        if pops > 400_000 {
+            break;
+        }
+        let through = d + len(l);
+        for n in onward(l) {
+            // (the lanes the stop is at are where the way begins, never on it)
+            if first.contains_key(&n) {
+                continue;
+            }
+            if dist.get(&n).map(|x| through < *x).unwrap_or(true) {
+                dist.insert(n, through);
+                prev.insert(n, l);
+                heap.push(std::cmp::Reverse((ordered(through), n)));
+            }
+        }
+    }
+    let Some((lb, ib)) = reached else {
+        log::info!("line editor: no way between the stops ({pops} lanes looked at)");
+        return None;
+    };
+    // back from the goal to the first lane
+    let mut chain = vec![lb];
+    let mut at = lb;
+    while let Some(&p) = prev.get(&at) {
+        chain.push(p);
+        if first.contains_key(&p) {
+            break;
+        }
+        at = p;
+        if chain.len() > 100_000 {
+            return None;
+        }
+    }
+    chain.reverse();
+    let mut out = Vec::new();
+    for (k, &l) in chain.iter().enumerate() {
+        let n = net.lanes[l].points.len() - 1;
+        let (from, to) = match (k == 0, k + 1 == chain.len()) {
+            (true, _) => (first.get(&l).copied().unwrap_or(0), n),
+            (_, true) => (0, ib),
+            _ => (0, n),
+        };
+        out.extend(pts(l, from, to));
+    }
+    Some(out)
+}
+
+/// A distance as an integer the heap can order (millimetres).
+fn ordered(d: f64) -> u64 {
+    (d * 1000.0).round().max(0.0) as u64
 }
 
 /// A ring `r_px` out and `w_px` thick around a world point, as the camera's own metres drawn
@@ -881,7 +1103,14 @@ fn read_map(look: &Look) -> Roads {
         min.x, min.y, max.x, max.y,
         lo.x, lo.y, hi.x, hi.y
     );
-    Roads { roads, net: Arc::new(net), lanes: by_path, splines: by_spline, origin, lo, hi, entries, objects }
+    // the bus stops, where their objects stand (a stop whose object is not placed is left out)
+    let stops: Vec<(String, DVec2)> = omsi_cfg::CfgFile::read(&omsi_cfg::resolve_path(&map_dir, "TTData/Busstops.cfg"))
+        .map(|f| omsi_timetable::parse_busstops(&f))
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|s| objects.get(&s.object_id).map(|q| (s.name, *q)))
+        .collect();
+    Roads { roads, net: Arc::new(net), lanes: by_path, splines: by_spline, origin, lo, hi, entries, objects, stops }
 }
 
 #[cfg(test)]
@@ -957,7 +1186,7 @@ mod tests {
     #[test]
     fn a_zoom_in_progress_keeps_the_plan_it_has() {
         let mut m = map();
-        let built = Key { global: PathBuf::from("maps/Grundorf/global.cfg"), trip: String::new(), tolerance: 2.0f32.to_bits() };
+        let built = Key { global: PathBuf::from("maps/Grundorf/global.cfg"), trip: String::new(), tolerance: 2.0f32.to_bits(), theme: 0 };
         let finer = Key { tolerance: 1.0f32.to_bits(), ..built.clone() };
         let plan = || Some(Plan { key: built.clone(), verts: Vec::new(), count: 0, uploaded: true });
         m.plan = plan();

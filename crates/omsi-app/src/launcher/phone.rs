@@ -77,7 +77,7 @@ pub struct PhoneView {
 pub fn draw(l: &mut Launcher) {
     let size = l.ui.size;
     let full = Rect::new(0.0, 0.0, size.x, size.y);
-    l.ui.p().rect(full, RAIL);
+    l.ui.p().rect(full, RAIL());
     if let Some(s) = l.phone.sheet {
         sheet(l, s, full);
         return;
@@ -96,8 +96,8 @@ pub fn draw(l: &mut Launcher) {
 
 fn tab_bar(l: &mut Launcher, r: Rect) {
     l.ui.solid(r);
-    l.ui.p().rect(r, PANEL);
-    l.ui.p().rect(Rect::new(r.x, r.y, r.w, 1.0), EDGE);
+    l.ui.p().rect(r, PANEL());
+    l.ui.p().rect(Rect::new(r.x, r.y, r.w, 1.0), EDGE());
     let w = r.w / TABS.len() as f32;
     let running = l.state.instances.iter().filter(|i| i.running).count();
     for (k, (tab, name, icon)) in TABS.iter().enumerate() {
@@ -116,16 +116,16 @@ fn tab_bar(l: &mut Launcher, r: Rect) {
         }
         let on = l.phone.tab == *tab;
         if down {
-            l.ui.p().rounded(cell.pad(10.0, 6.0), 12.0, HOVER);
+            l.ui.p().rounded(cell.pad(10.0, 6.0), 12.0, HOVER());
         }
-        let c = if on { ACCENT } else { TEXT_DIM };
+        let c = if on { ACCENT() } else { TEXT_DIM() };
         if on {
-            l.ui.p().rounded(Rect::new(cell.center().x - 28.0, cell.y + 7.0, 56.0, 28.0), 14.0, ACCENT.alpha(0.16));
+            l.ui.p().rounded(Rect::new(cell.center().x - 28.0, cell.y + 7.0, 56.0, 28.0), 14.0, SELECTED());
         }
         l.ui.icon(icon, Vec2::new(cell.center().x, cell.y + 21.0), 22.0, c);
         l.ui.text_in(name, Rect::new(cell.x, cell.y + 36.0, cell.w, 16.0), 11.5, if on { Weight::Bold } else { Weight::Medium }, c, Align::Center);
         if *tab == Tab::More && running > 0 {
-            l.ui.p().circle(Vec2::new(cell.center().x + 14.0, cell.y + 12.0), 5.0, OK);
+            l.ui.p().circle(Vec2::new(cell.center().x + 14.0, cell.y + 12.0), 5.0, OK());
         }
     }
 }
@@ -143,21 +143,21 @@ fn toast(l: &mut Launcher, body: Rect) {
     let first = text.lines().next().unwrap_or("").to_string();
     let w = (l.ui.width(&first, 13.0, Weight::Medium) + 44.0).min(body.w - 32.0);
     let r = Rect::new(body.center().x - w * 0.5, body.bottom() - 46.0, w, 36.0);
-    l.ui.p().rounded(r, 18.0, Color::rgba(40, 40, 40, 0.96 * fade));
-    l.ui.icon(if err { "error" } else { "info" }, Vec2::new(r.x + 18.0, r.center().y), 16.0, (if err { DANGER } else { TEXT_DIM }).alpha(fade));
-    l.ui.text_in(&first, Rect::new(r.x + 32.0, r.y, r.w - 42.0, r.h), 13.0, Weight::Medium, TEXT.alpha(fade), Align::Left);
+    l.ui.p().rounded(r, 18.0, POPUP().alpha(0.96 * fade));
+    l.ui.icon(if err { "error" } else { "info" }, Vec2::new(r.x + 18.0, r.center().y), 16.0, (if err { DANGER() } else { TEXT_DIM() }).alpha(fade));
+    l.ui.text_in(&first, Rect::new(r.x + 32.0, r.y, r.w - 42.0, r.h), 13.0, Weight::Medium, TEXT().alpha(fade), Align::Left);
 }
 
 /// A card of the Play screen: what is chosen, and the way to its sheet.
 fn card(l: &mut Launcher, name: &str, r: Rect, icon: &str, label: &str, value: &str, warn: bool) -> bool {
     let (h, down, clicked) = l.ui.interact(id_of(name), r);
-    l.ui.p().rounded(r, 14.0, if down { SELECTED } else if h { HOVER } else { FIELD });
+    l.ui.p().rounded(r, 14.0, if down { SELECTED() } else if h { HOVER() } else { FIELD() });
     let ic = Vec2::new(r.x + 26.0, r.center().y);
-    l.ui.p().circle(ic, 17.0, Color::rgba(255, 255, 255, 0.05));
-    l.ui.icon(icon, ic, 19.0, if warn { WARN } else { ACCENT });
-    l.ui.text_in(label, Rect::new(r.x + 54.0, r.y + 8.0, r.w - 84.0, 15.0), 11.0, Weight::Medium, TEXT_DIM, Align::Left);
-    l.ui.text_in(value, Rect::new(r.x + 54.0, r.y + 24.0, r.w - 84.0, r.h - 30.0), 14.5, Weight::Bold, TEXT, Align::Left);
-    l.ui.icon("chevron_right", Vec2::new(r.right() - 18.0, r.center().y), 20.0, TEXT_FAINT);
+    l.ui.p().circle(ic, 17.0, LIFT().alpha(0.05));
+    l.ui.icon(icon, ic, 19.0, if warn { WARN() } else { ACCENT() });
+    l.ui.text_in(label, Rect::new(r.x + 54.0, r.y + 8.0, r.w - 84.0, 15.0), 11.0, Weight::Medium, TEXT_DIM(), Align::Left);
+    l.ui.text_in(value, Rect::new(r.x + 54.0, r.y + 24.0, r.w - 84.0, r.h - 30.0), 14.5, Weight::Bold, TEXT(), Align::Left);
+    l.ui.icon("chevron_right", Vec2::new(r.right() - 18.0, r.center().y), 20.0, TEXT_FAINT());
     clicked
 }
 
@@ -224,19 +224,19 @@ fn play(l: &mut Launcher, body: Rect) {
     }
     // the bus's name over the foot of its picture, the livery as a chip beside it
     let shade = Rect::new(pr.x, pr.bottom() - 58.0, pr.w, 58.0);
-    l.ui.p().rounded(shade, RADIUS, Color::rgba(0, 0, 0, 0.55));
+    l.ui.p().rounded(shade, RADIUS, SHADE().alpha(0.8));
     let (name, maker) = l.state.bus().map(|b| (b.name.clone(), b.manufacturer.clone())).unwrap_or_else(|| ("Choose a bus".into(), String::new()));
-    l.ui.text_in(&maker, Rect::new(shade.x + 14.0, shade.y + 7.0, shade.w - 150.0, 15.0), 11.0, Weight::Medium, TEXT_DIM, Align::Left);
-    l.ui.text_in(&name, Rect::new(shade.x + 14.0, shade.y + 22.0, shade.w - 150.0, 26.0), 17.0, Weight::Bold, TEXT, Align::Left);
+    l.ui.text_in(&maker, Rect::new(shade.x + 14.0, shade.y + 7.0, shade.w - 150.0, 15.0), 11.0, Weight::Medium, TEXT_DIM(), Align::Left);
+    l.ui.text_in(&name, Rect::new(shade.x + 14.0, shade.y + 22.0, shade.w - 150.0, 26.0), 17.0, Weight::Bold, TEXT(), Align::Left);
     let paints = l.state.bus().map(|b| b.paints.len()).unwrap_or(0);
     if paints > 0 {
         let label = if l.state.choice.paint.is_empty() { l.state.bus().map(super::drive::default_livery_label).unwrap_or("Default paint").to_string() } else { l.state.choice.paint.clone() };
         let cw = (l.ui.width(&label, 12.0, Weight::Medium) + 40.0).min(170.0);
         let chip = Rect::new(shade.right() - cw - 10.0, shade.y + 13.0, cw, 32.0);
         let (_, down, clicked) = l.ui.interact(id_of("p-livery"), chip);
-        l.ui.p().rounded(chip, 16.0, if down { SELECTED } else { Color::rgba(255, 255, 255, 0.1) });
-        l.ui.icon("palette", Vec2::new(chip.x + 16.0, chip.center().y), 15.0, ACCENT);
-        l.ui.text_in(&label, Rect::new(chip.x + 28.0, chip.y, chip.w - 34.0, chip.h), 12.0, Weight::Medium, TEXT, Align::Left);
+        l.ui.p().rounded(chip, 16.0, if down { SELECTED() } else { LIFT().alpha(0.1) });
+        l.ui.icon("palette", Vec2::new(chip.x + 16.0, chip.center().y), 15.0, ACCENT());
+        l.ui.text_in(&label, Rect::new(chip.x + 28.0, chip.y, chip.w - 34.0, chip.h), 12.0, Weight::Medium, TEXT(), Align::Left);
         if clicked {
             open(l, Sheet::Livery);
         }
@@ -245,12 +245,12 @@ fn play(l: &mut Launcher, body: Rect) {
     if let Some(sn) = l.state.joined_server.clone() {
         let title = l.state.server_info.get(&sn).and_then(|x| x.1.as_ref().ok()).map(|i| i.name.clone()).unwrap_or(sn);
         let b = Rect::new(pr.x + 10.0, pr.y + 10.0, (l.ui.width(&title, 12.5, Weight::Bold) + 70.0).min(pr.w - 20.0), 34.0);
-        l.ui.p().rounded(b, 17.0, Color::rgba(0, 0, 0, 0.6));
-        l.ui.icon("dns", Vec2::new(b.x + 18.0, b.center().y), 15.0, OK);
-        l.ui.text_in(&title, Rect::new(b.x + 32.0, b.y, b.w - 64.0, b.h), 12.5, Weight::Bold, OK, Align::Left);
+        l.ui.p().rounded(b, 17.0, SHADE().alpha(0.85));
+        l.ui.icon("dns", Vec2::new(b.x + 18.0, b.center().y), 15.0, OK());
+        l.ui.text_in(&title, Rect::new(b.x + 32.0, b.y, b.w - 64.0, b.h), 12.5, Weight::Bold, OK(), Align::Left);
         let x = Rect::new(b.right() - 32.0, b.y, 32.0, b.h);
         let (_, _, leave) = l.ui.interact(id_of("p-leave"), x);
-        l.ui.icon("close", x.center(), 16.0, TEXT);
+        l.ui.icon("close", x.center(), 16.0, TEXT());
         if leave {
             l.state.leave_server();
         }
@@ -306,16 +306,16 @@ fn open(l: &mut Launcher, s: Sheet) {
 /// A sheet's bar: the way back, the title, and a search field when `search`.
 fn bar(l: &mut Launcher, r: Rect, title: &str, search: bool) -> bool {
     l.ui.solid(r);
-    l.ui.p().rect(r, PANEL);
-    l.ui.p().rect(Rect::new(r.x, r.bottom() - 1.0, r.w, 1.0), EDGE);
+    l.ui.p().rect(r, PANEL());
+    l.ui.p().rect(Rect::new(r.x, r.bottom() - 1.0, r.w, 1.0), EDGE());
     let back = Rect::new(r.x + 6.0, r.y + 5.0, 44.0, 44.0);
     let (_, down, clicked) = l.ui.interact(id_of("sheet-back"), back);
     if down {
-        l.ui.p().circle(back.center(), 20.0, HOVER);
+        l.ui.p().circle(back.center(), 20.0, HOVER());
     }
-    l.ui.icon("arrow_back", back.center(), 22.0, TEXT);
+    l.ui.icon("arrow_back", back.center(), 22.0, TEXT());
     let tw = if search { (r.w * 0.34).min(260.0) } else { r.w - 70.0 };
-    l.ui.text_in(title, Rect::new(r.x + 56.0, r.y, tw, r.h), 18.0, Weight::Bold, TEXT, Align::Left);
+    l.ui.text_in(title, Rect::new(r.x + 56.0, r.y, tw, r.h), 18.0, Weight::Bold, TEXT(), Align::Left);
     if search {
         let f = Rect::new(r.x + 60.0 + tw, r.y + 8.0, r.w - tw - 72.0, r.h - 16.0);
         l.ui.text_input("sheet-search", f, &mut l.phone.filter, "Search…", Some("search"));
@@ -334,12 +334,12 @@ fn big_row(ui: &mut super::ui::Ui, id: &str, r: Rect, title: &str, sub: &str, ch
         ui.badge(Vec2::new(r.right() - 48.0 - bw, r.y + 23.0), b, c);
         tw -= bw + 12.0;
     }
-    ui.text_in(title, Rect::new(tx, r.y + 9.0, tw, 22.0), 15.5, Weight::Bold, TEXT, Align::Left);
+    ui.text_in(title, Rect::new(tx, r.y + 9.0, tw, 22.0), 15.5, Weight::Bold, TEXT(), Align::Left);
     if !sub.is_empty() {
-        ui.text_in(sub, Rect::new(tx, r.y + 32.0, r.w - 60.0, 18.0), 12.0, Weight::Regular, TEXT_DIM, Align::Left);
+        ui.text_in(sub, Rect::new(tx, r.y + 32.0, r.w - 60.0, 18.0), 12.0, Weight::Regular, TEXT_DIM(), Align::Left);
     }
     if chosen {
-        ui.icon("check_circle", Vec2::new(r.right() - 24.0, r.center().y), 20.0, ACCENT);
+        ui.icon("check_circle", Vec2::new(r.right() - 24.0, r.center().y), 20.0, ACCENT());
     }
     clicked
 }
@@ -397,7 +397,7 @@ fn map_sheet(l: &mut Launcher, r: Rect) -> bool {
     l.ui.scroll_area("ps-maps", r, &mut |ui, v| {
         for (k, (file, name, desc, mod_)) in items.iter().enumerate() {
             let rr = Rect::new(v.x, v.y + k as f32 * (ROW_H + 6.0), v.w - 8.0, ROW_H);
-            if big_row(ui, &format!("pm-{file}"), rr, name, desc, *file == chosen, mod_.then_some(("MOD", ACCENT_2))) {
+            if big_row(ui, &format!("pm-{file}"), rr, name, desc, *file == chosen, mod_.then_some(("MOD", ACCENT_2()))) {
                 pick = Some(file.clone());
             }
         }
@@ -434,14 +434,14 @@ fn bus_sheet(l: &mut Launcher, r: Rect) -> bool {
     let mut pick = None;
     l.ui.scroll_area("ps-buses", r, &mut |ui, v| {
         if items.is_empty() {
-            ui.text_in(if loading { "Reading the buses…" } else { "No bus matches." }, Rect::new(v.x + 16.0, v.y, v.w, 40.0), 14.0, Weight::Regular, TEXT_DIM, Align::Left);
+            ui.text_in(if loading { "Reading the buses…" } else { "No bus matches." }, Rect::new(v.x + 16.0, v.y, v.w, 40.0), 14.0, Weight::Regular, TEXT_DIM(), Align::Left);
         }
         for (k, (file, name, sub, mod_, incomplete)) in items.iter().enumerate() {
             let rr = Rect::new(v.x, v.y + k as f32 * (ROW_H + 6.0), v.w - 8.0, ROW_H);
             if rr.bottom() < r.y - ROW_H * 2.0 || rr.y > r.bottom() + ROW_H * 2.0 {
                 continue;
             }
-            let badge = if *incomplete { Some(("PARTS", WARN)) } else if *mod_ { Some(("MOD", ACCENT_2)) } else { None };
+            let badge = if *incomplete { Some(("PARTS", WARN())) } else if *mod_ { Some(("MOD", ACCENT_2())) } else { None };
             if big_row(ui, &format!("pb-{file}"), rr, name, sub, *file == chosen, badge) {
                 pick = Some(file.clone());
             }
@@ -482,7 +482,7 @@ fn livery_sheet(l: &mut Launcher, r: Rect) -> bool {
 
 fn vehicle_sheet(l: &mut Launcher, r: Rect) -> bool {
     let Some(vehicle) = l.state.bus().cloned() else {
-        l.ui.text_in("Choose a bus first.", Rect::new(r.x + 16.0, r.y, r.w - 32.0, 40.0), 14.0, Weight::Regular, TEXT_DIM, Align::Left);
+        l.ui.text_in("Choose a bus first.", Rect::new(r.x + 16.0, r.y, r.w - 32.0, 40.0), 14.0, Weight::Regular, TEXT_DIM(), Align::Left);
         return false;
     };
     let inner = r.pad(10.0, 8.0);
@@ -537,14 +537,14 @@ fn vehicle_sheet(l: &mut Launcher, r: Rect) -> bool {
             inner.w,
             12.5,
             Weight::Regular,
-            WARN,
+            WARN(),
         ) + 12.0;
     }
     let description = vehicle.description.replace('\t', " ").lines().map(str::trim).collect::<Vec<_>>().join("\n").trim().to_string();
     if !description.is_empty() {
-        y += l.ui.paragraph(&description, Vec2::new(inner.x, y), inner.w, 12.0, Weight::Regular, TEXT_DIM) + 12.0;
+        y += l.ui.paragraph(&description, Vec2::new(inner.x, y), inner.w, 12.0, Weight::Regular, TEXT_DIM()) + 12.0;
     }
-    l.ui.text_in(&vehicle.file, Rect::new(inner.x, y, inner.w, 22.0), 10.5, Weight::Regular, TEXT_FAINT, Align::Left);
+    l.ui.text_in(&vehicle.file, Rect::new(inner.x, y, inner.w, 22.0), 10.5, Weight::Regular, TEXT_FAINT(), Align::Left);
     false
 }
 
@@ -566,7 +566,7 @@ fn start_sheet(l: &mut Launcher, r: Rect) -> bool {
     // A joined server owns the world traffic/weather. The spawn point is still the local
     // bus's choice, just as on the desktop Drive page.
     if l.state.joined_server.is_some() {
-        l.ui.paragraph("Traffic, passengers and the world's clock are set by the server.", Vec2::new(inner.x, y), inner.w, 13.0, Weight::Regular, TEXT_DIM);
+        l.ui.paragraph("Traffic, passengers and the world's clock are set by the server.", Vec2::new(inner.x, y), inner.w, 13.0, Weight::Regular, TEXT_DIM());
         return false;
     }
 
@@ -631,7 +631,7 @@ fn start_sheet(l: &mut Launcher, r: Rect) -> bool {
 fn roadbook_sheet(l: &mut Launcher, r: Rect) -> bool {
     let ibis_h = 154.0;
     let (Some(line), Some(tour), false) = (l.state.line().cloned(), l.state.tour().cloned(), l.state.choice.free) else {
-        l.ui.paragraph("Choose a line and a tour to see the roadbook and the IBIS codes.", Vec2::new(r.x + 12.0, r.y + 8.0), r.w - 24.0, 13.0, Weight::Regular, TEXT_DIM);
+        l.ui.paragraph("Choose a line and a tour to see the roadbook and the IBIS codes.", Vec2::new(r.x + 12.0, r.y + 8.0), r.w - 24.0, 13.0, Weight::Regular, TEXT_DIM());
         super::drive::ibis_box(l, Rect::new(r.x + 8.0, r.bottom() - ibis_h, r.w - 16.0, ibis_h));
         return false;
     };
@@ -642,13 +642,13 @@ fn roadbook_sheet(l: &mut Launcher, r: Rect) -> bool {
         let mut y = v.y;
         for (k, trip) in trips.iter().enumerate() {
             let head = Rect::new(v.x, y, v.w - 8.0, 54.0);
-            ui.p().rounded(head, 8.0, if k == 0 { SELECTED } else { FIELD });
+            ui.p().rounded(head, 8.0, if k == 0 { SELECTED() } else { FIELD() });
             ui.text_in(
                 &format!("{} · {} → {}", if k == 0 { "Your first trip" } else { "Then" }, if trip.from.is_empty() { "?" } else { &trip.from }, trip.terminus),
                 Rect::new(head.x + 12.0, head.y + 7.0, head.w - 24.0, 20.0),
                 13.0,
                 Weight::Bold,
-                TEXT,
+                TEXT(),
                 Align::Left,
             );
             ui.text_in(
@@ -656,14 +656,14 @@ fn roadbook_sheet(l: &mut Launcher, r: Rect) -> bool {
                 Rect::new(head.x + 12.0, head.y + 30.0, head.w - 24.0, 18.0),
                 11.5,
                 Weight::Regular,
-                TEXT_DIM,
+                TEXT_DIM(),
                 Align::Left,
             );
             y += 62.0;
             for stop in &trip.stops {
                 let row = Rect::new(v.x + 6.0, y, v.w - 20.0, 30.0);
-                ui.text_in(&super::state::hhmm(stop.arr), Rect::new(row.x, row.y, 52.0, row.h), 11.5, Weight::Condensed, TEXT_SOFT, Align::Left);
-                ui.text_in(&stop.name, Rect::new(row.x + 58.0, row.y, row.w - 62.0, row.h), 12.5, Weight::Regular, TEXT, Align::Left);
+                ui.text_in(&super::state::hhmm(stop.arr), Rect::new(row.x, row.y, 52.0, row.h), 11.5, Weight::Condensed, TEXT_SOFT(), Align::Left);
+                ui.text_in(&stop.name, Rect::new(row.x + 58.0, row.y, row.w - 62.0, row.h), 12.5, Weight::Regular, TEXT(), Align::Left);
                 y += 30.0;
             }
             y += 10.0;
@@ -716,11 +716,11 @@ fn servers_sheet(l: &mut Launcher, r: Rect) -> bool {
     let mut remove_addr: Option<String> = None;
     l.ui.scroll_area("pserver-list", list, &mut |ui, v| {
         if entries.is_empty() {
-            ui.text_in("No saved servers yet.", Rect::new(v.x + 12.0, v.y, v.w - 24.0, 40.0), 13.0, Weight::Regular, TEXT_DIM, Align::Left);
+            ui.text_in("No saved servers yet.", Rect::new(v.x + 12.0, v.y, v.w - 24.0, 40.0), 13.0, Weight::Regular, TEXT_DIM(), Align::Left);
         }
         for (k, entry) in entries.iter().enumerate() {
             let rr = Rect::new(v.x, v.y + k as f32 * (ROW_H + 8.0), v.w - 8.0, ROW_H);
-            ui.p().rounded(rr, 10.0, FIELD);
+            ui.p().rounded(rr, 10.0, FIELD());
             let info = l.state.server_info.get(&entry.address).map(|x| x.1.clone());
             let name = if !entry.name.is_empty() { entry.name.clone() } else { info.as_ref().and_then(|x| x.as_ref().ok()).map(|x| x.name.clone()).unwrap_or_else(|| entry.address.clone()) };
             let sub = match info {
@@ -728,8 +728,8 @@ fn servers_sheet(l: &mut Launcher, r: Rect) -> bool {
                 Some(Err(e)) => format!("Can't reach it: {e}"),
                 None => "Asking…".into(),
             };
-            ui.text_in(&name, Rect::new(rr.x + 14.0, rr.y + 7.0, rr.w - 190.0, 21.0), 14.0, Weight::Bold, TEXT, Align::Left);
-            ui.text_in(&sub, Rect::new(rr.x + 14.0, rr.y + 31.0, rr.w - 190.0, 18.0), 11.5, Weight::Regular, TEXT_DIM, Align::Left);
+            ui.text_in(&name, Rect::new(rr.x + 14.0, rr.y + 7.0, rr.w - 190.0, 21.0), 14.0, Weight::Bold, TEXT(), Align::Left);
+            ui.text_in(&sub, Rect::new(rr.x + 14.0, rr.y + 31.0, rr.w - 190.0, 18.0), 11.5, Weight::Regular, TEXT_DIM(), Align::Left);
             if ui.button(&format!("pserver-join-{k}"), Rect::new(rr.right() - 142.0, rr.y + 12.0, 92.0, 38.0), "Join", Some("login"), ButtonKind::Primary) {
                 join_addr = Some(entry.address.clone());
             }
@@ -765,7 +765,7 @@ fn duty_sheet(l: &mut Launcher, r: Rect) -> bool {
             pick = Some(None);
         }
         let mut y = v.y + ROW_H + 14.0;
-        ui.text_in(if loading { "Reading the timetable…" } else if lines.is_empty() { "The map has no lines to drive." } else { "Lines of the timetable" }, Rect::new(v.x + 8.0, y, v.w, 18.0), 12.0, Weight::Medium, TEXT_DIM, Align::Left);
+        ui.text_in(if loading { "Reading the timetable…" } else if lines.is_empty() { "The map has no lines to drive." } else { "Lines of the timetable" }, Rect::new(v.x + 8.0, y, v.w, 18.0), 12.0, Weight::Medium, TEXT_DIM(), Align::Left);
         y += 24.0;
         for (name, termini, tours) in &lines {
             let rr = Rect::new(v.x, y, v.w - 8.0, ROW_H);
@@ -797,7 +797,7 @@ fn duty_sheet(l: &mut Launcher, r: Rect) -> bool {
 
 fn tour_sheet(l: &mut Launcher, r: Rect) -> bool {
     let Some(line) = l.state.line().cloned() else {
-        l.ui.text_in("Choose a line first.", Rect::new(r.x + 16.0, r.y, r.w, 40.0), 14.0, Weight::Regular, TEXT_DIM, Align::Left);
+        l.ui.text_in("Choose a line first.", Rect::new(r.x + 16.0, r.y, r.w, 40.0), 14.0, Weight::Regular, TEXT_DIM(), Align::Left);
         return false;
     };
     let mut tours: Vec<&omsi_launcher_lib::TourInfo> = line.tours.iter().collect();
@@ -815,7 +815,7 @@ fn tour_sheet(l: &mut Launcher, r: Rect) -> bool {
     l.ui.scroll_area("ps-tours", r, &mut |ui, v| {
         for (k, (num, sub, runs, next)) in items.iter().enumerate() {
             let rr = Rect::new(v.x, v.y + k as f32 * (ROW_H + 6.0), v.w - 8.0, ROW_H);
-            if big_row(ui, &format!("pt-{num}"), rr, &format!("Tour {num}"), sub, chosen.as_deref() == Some(num.as_str()), (!runs).then_some(("OTHER DAY", TEXT_FAINT))) {
+            if big_row(ui, &format!("pt-{num}"), rr, &format!("Tour {num}"), sub, chosen.as_deref() == Some(num.as_str()), (!runs).then_some(("OTHER DAY", TEXT_FAINT()))) {
                 pick = Some((num.clone(), *runs, next.clone()));
             }
         }
@@ -838,13 +838,13 @@ fn tour_sheet(l: &mut Launcher, r: Rect) -> bool {
 
 fn time_sheet(l: &mut Launcher, r: Rect) -> bool {
     let left = Rect::new(r.x + 8.0, r.y + 4.0, (r.w * 0.42).max(260.0).min(r.w - 16.0), r.h - 8.0);
-    l.ui.text_in("Start", Rect::new(left.x, left.y, left.w, 18.0), 12.0, Weight::Medium, TEXT_DIM, Align::Left);
+    l.ui.text_in("Start", Rect::new(left.x, left.y, left.w, 18.0), 12.0, Weight::Medium, TEXT_DIM(), Align::Left);
     let mut t = l.state.choice.time;
     if l.ui.time_field("p-time", Rect::new(left.x, left.y + 22.0, left.w, 48.0), &mut t) {
         l.state.choice.time = t;
         l.state.touched();
     }
-    l.ui.text_in("Date", Rect::new(left.x, left.y + 84.0, left.w, 18.0), 12.0, Weight::Medium, TEXT_DIM, Align::Left);
+    l.ui.text_in("Date", Rect::new(left.x, left.y + 84.0, left.w, 18.0), 12.0, Weight::Medium, TEXT_DIM(), Align::Left);
     let mut d = l.state.choice.date.clone();
     if l.ui.date_field("p-date", Rect::new(left.x, left.y + 106.0, left.w, 48.0), &mut d) {
         l.state.choice.date = d;
@@ -962,7 +962,7 @@ fn time_sheet(l: &mut Launcher, r: Rect) -> bool {
                 }
                 yy += 52.0;
             }
-            ui.paragraph("The METAR is fetched when the game starts.", Vec2::new(v.x, yy), v.w - 8.0, 12.0, Weight::Regular, TEXT_DIM);
+            ui.paragraph("The METAR is fetched when the game starts.", Vec2::new(v.x, yy), v.w - 8.0, 12.0, Weight::Regular, TEXT_DIM());
             yy += 48.0;
             yy - v.y
         });
@@ -1020,14 +1020,14 @@ fn online(l: &mut Launcher, body: Rect) {
     l.state.ask_server(official, 15.0);
     // the official server, first and large
     let card = Rect::new(inner.x, inner.y, inner.w, 104.0);
-    l.ui.p().rounded(card, 16.0, FIELD);
-    l.ui.p().rounded(Rect::new(card.x, card.y, 5.0, card.h), 2.5, ACCENT);
+    l.ui.p().rounded(card, 16.0, FIELD());
+    l.ui.p().rounded(Rect::new(card.x, card.y, 5.0, card.h), 2.5, ACCENT());
     let ir = Rect::new(card.x + 18.0, card.y + 18.0, 68.0, 68.0);
     match l.icons.get(official) {
         Some(tex) => l.ui.image(ir, *tex, 12.0),
         None => {
-            l.ui.p().rounded(ir, 12.0, SELECTED);
-            l.ui.icon("public", ir.center(), 32.0, ACCENT);
+            l.ui.p().rounded(ir, 12.0, SELECTED());
+            l.ui.icon("public", ir.center(), 32.0, ACCENT());
         }
     }
     let info = l.state.server_info.get(official).map(|x| x.1.clone());
@@ -1040,17 +1040,17 @@ fn online(l: &mut Launcher, body: Rect) {
     }
     let tx = ir.right() + 16.0;
     let tw = card.right() - tx - 170.0;
-    l.ui.text_in(omsi_net::official::NAME, Rect::new(tx, card.y + 14.0, tw, 24.0), 17.0, Weight::Bold, TEXT, Align::Left);
+    l.ui.text_in(omsi_net::official::NAME, Rect::new(tx, card.y + 14.0, tw, 24.0), 17.0, Weight::Bold, TEXT(), Align::Left);
     let (line1, line2, c) = match info.as_ref() {
         Some(Ok(i)) => {
             let map = std::path::Path::new(&i.map.replace('\\', "/")).parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            (format!("{} / {} players online · {map}", i.players, i.max_players), i.motd.clone(), OK)
+            (format!("{} / {} players online · {map}", i.players, i.max_players), i.motd.clone(), OK())
         }
-        Some(Err(e)) => (e.clone(), String::new(), DANGER),
-        None => ("Looking for the server…".into(), String::new(), TEXT_DIM),
+        Some(Err(e)) => (e.clone(), String::new(), DANGER()),
+        None => ("Looking for the server…".into(), String::new(), TEXT_DIM()),
     };
     l.ui.text_in(&line1, Rect::new(tx, card.y + 42.0, tw, 18.0), 13.0, Weight::Medium, c, Align::Left);
-    l.ui.text_in(&line2, Rect::new(tx, card.y + 62.0, tw, 30.0), 12.0, Weight::Regular, TEXT_DIM, Align::Left);
+    l.ui.text_in(&line2, Rect::new(tx, card.y + 62.0, tw, 30.0), 12.0, Weight::Regular, TEXT_DIM(), Align::Left);
     let joined = l.state.joined_server.as_deref() == Some(official);
     let jb = Rect::new(card.right() - 156.0, card.y + 26.0, 140.0, 52.0);
     if joined {
@@ -1086,8 +1086,8 @@ fn online(l: &mut Launcher, body: Rect) {
     }
     let mut host = l.state.choice.lan_mode == "host";
     let hr = Rect::new(inner.x, row.bottom() + 12.0, inner.w, 44.0);
-    l.ui.p().rounded(hr, 12.0, FIELD);
-    l.ui.text_in("Host my next game", Rect::new(hr.x + 16.0, hr.y, hr.w - 120.0, hr.h), 14.0, Weight::Medium, TEXT, Align::Left);
+    l.ui.p().rounded(hr, 12.0, FIELD());
+    l.ui.text_in("Host my next game", Rect::new(hr.x + 16.0, hr.y, hr.w - 120.0, hr.h), 14.0, Weight::Medium, TEXT(), Align::Left);
     if l.ui.toggle("po-host", Rect::new(hr.right() - 70.0, hr.y + 8.0, 56.0, 28.0), &mut host, "") {
         l.state.choice.lan_mode = if host { "host".into() } else { "off".into() };
         l.state.joined_server = None;
@@ -1123,7 +1123,7 @@ fn online(l: &mut Launcher, body: Rect) {
     if list.h > 40.0 {
         l.ui.scroll_area("po-servers", list, &mut |ui, v| {
             if rows.is_empty() {
-                ui.text_in("No saved servers yet. Add one with Manage saved servers above.", Rect::new(v.x + 8.0, v.y, v.w - 16.0, 30.0), 12.0, Weight::Regular, TEXT_FAINT, Align::Left);
+                ui.text_in("No saved servers yet. Add one with Manage saved servers above.", Rect::new(v.x + 8.0, v.y, v.w - 16.0, 30.0), 12.0, Weight::Regular, TEXT_FAINT(), Align::Left);
             }
             for (k, (addr, name, sub)) in rows.iter().enumerate() {
                 let rr = Rect::new(v.x, v.y + k as f32 * (ROW_H + 6.0), v.w - 8.0, ROW_H);
@@ -1159,10 +1159,10 @@ fn more(l: &mut Launcher, body: Rect) {
         let (c, rw) = (k % cols, k / cols);
         let r = Rect::new(inner.x + (tw + gap) * c as f32, inner.y + (th + gap) * rw as f32, tw, th);
         let (h, down, clicked) = l.ui.interact(id_of(&format!("pmore-{name}")), r);
-        l.ui.p().rounded(r, 14.0, if down { SELECTED } else if h { HOVER } else { FIELD });
-        l.ui.icon(icon, Vec2::new(r.x + 28.0, r.y + 28.0), 24.0, ACCENT);
-        l.ui.text_in(name, Rect::new(r.x + 16.0, r.bottom() - 46.0, r.w - 24.0, 20.0), 15.0, Weight::Bold, TEXT, Align::Left);
-        l.ui.text_in(sub, Rect::new(r.x + 16.0, r.bottom() - 26.0, r.w - 24.0, 18.0), 11.5, Weight::Regular, TEXT_DIM, Align::Left);
+        l.ui.p().rounded(r, 14.0, if down { SELECTED() } else if h { HOVER() } else { FIELD() });
+        l.ui.icon(icon, Vec2::new(r.x + 28.0, r.y + 28.0), 24.0, ACCENT());
+        l.ui.text_in(name, Rect::new(r.x + 16.0, r.bottom() - 46.0, r.w - 24.0, 20.0), 15.0, Weight::Bold, TEXT(), Align::Left);
+        l.ui.text_in(sub, Rect::new(r.x + 16.0, r.bottom() - 26.0, r.w - 24.0, 18.0), 11.5, Weight::Regular, TEXT_DIM(), Align::Left);
         if clicked {
             l.phone.page = Some(*page);
             l.go(*page);
@@ -1181,7 +1181,7 @@ fn embedded(l: &mut Launcher, page: Page, body: Rect, back: bool) {
     let content = Rect::new(body.x + 16.0, body.y + top + 10.0 - l.page_scroll, body.w - 32.0, h);
     l.ui.push_clip(Rect::new(body.x, body.y + top, body.w, body.h - top), 0.0);
     match page {
-        Page::Drive => super::drive::draw(l, content),
+        Page::Home | Page::Drive => super::drive::draw(l, content),
         Page::Multiplayer => super::multiplayer::draw(l, content),
         Page::Profile => super::pages::profile(l, content),
         Page::Settings => super::pages::settings(l, content),
@@ -1191,6 +1191,9 @@ fn embedded(l: &mut Launcher, page: Page, body: Rect, back: bool) {
         Page::Tutorials => super::pages::tutorials(l, content),
         Page::Timetable => super::timetable::draw(l, content),
         Page::Setup => super::pages::setup(l, content),
+        Page::Buses => super::gallery::draw(l, content),
+        Page::Lines => super::lines::draw(l, content),
+        Page::Livery => super::livery::draw(l, content),
     }
     l.ui.pop_clip();
     if back {
