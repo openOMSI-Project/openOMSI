@@ -10601,7 +10601,10 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.post_buf, 0, bytemuck::bytes_of(&pu));
             // (a mirror's small picture goes without FXAA)
-            let fxaa = with_overlays && self.options.fxaa && omsi_cfg::env::var_os("OMSI_NO_FXAA").is_none();
+            let fxaa = with_overlays
+                && self.options.fxaa
+                && self.options.msaa <= 1
+                && omsi_cfg::env::var_os("OMSI_NO_FXAA").is_none();
             if let Some(h) = self.hdr_targets.get(&(width, height)) {
                 let puddles = h.puddles.as_ref().filter(|_| puddles_on);
                 let levels = h.down.len();
