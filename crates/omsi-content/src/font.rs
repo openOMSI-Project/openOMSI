@@ -215,24 +215,19 @@ impl FontAtlas {
         // 512x128 texture whose meshes map the lines separately. Drawn as one line and
         // squeezed to fit, that came out as a row of unreadable dots.
         if text.contains('@') {
-            let lh = self.font.height.max(1) as u32;
+            let glyph_h = self.font.height.max(1) as u32;
             let mut out = vec![0u8; (w * h * 4) as usize];
             let lines: Vec<&str> = text.split('@').collect();
-            // the block of lines is centred vertically, like a single line is
-            let block = lh * lines.len() as u32;
-            let top = h.saturating_sub(block) / 2;
+            let natural_extent = glyph_h.saturating_mul(lines.len() as u32);
+            let pitch = if natural_extent > h {
+                let visible = self.visible_glyph_height().max(1);
+                (h / lines.len() as u32).max(visible)
+            } else { glyph_h };
+            let extent = pitch.saturating_mul(lines.len().saturating_sub(1) as u32) + glyph_h;
+            let top = if extent > h { 0 } else { (h - extent) / 2 };
             for (i, line) in lines.iter().enumerate() {
-                let y0 = top + i as u32 * lh;
-                if y0 >= h {
-                    break;
-                }
-                let rows = lh.min(h - y0);
-                let img = self.render_aligned(line, w, lh, full_color, rgb, align);
-                for y in 0..rows as usize {
-                    let src = y * w as usize * 4;
-                    let dst = (y0 as usize + y) * w as usize * 4;
-                    out[dst..dst + w as usize * 4].copy_from_slice(&img[src..src + w as usize * 4]);
-                }
+                let y0 = top + i as u32 * pitch;
+                self.render_unscaled_at(line, w, h, full_color, rgb, align, y0 as i32, &mut out);
             }
             return out;
         }
@@ -241,10 +236,36 @@ impl FontAtlas {
         self.render_unscaled(text, w, h, full_color, rgb, align)
     }
 
+    fn visible_glyph_height(&self) -> u32 {
+        let mut max_rows = 0u32;
+        for glyph in &self.font.chars {
+            let y0 = glyph.y.max(0) as u32;
+            let y1 = (glyph.y + self.font.height).min(self.height as i32).max(0) as u32;
+            let x0 = glyph.x0.max(0) as u32;
+            let x1 = glyph.x1.min(self.width as i32).max(0) as u32;
+            let mut first = None;
+            let mut last = None;
+            for y in y0..y1 {
+                if (x0..x1).any(|x| self.alpha[((y * self.width + x) * 4) as usize] != 0) {
+                    first.get_or_insert(y);
+                    last = Some(y);
+                }
+            }
+            if let (Some(first), Some(last)) = (first, last) { max_rows = max_rows.max(last - first + 1); }
+        }
+        max_rows
+    }
+
     fn render_unscaled(&self, text: &str, w: u32, h: u32, full_color: bool, rgb: [u8; 3], align: TextAlign) -> Vec<u8> {
         let mut out = vec![0u8; (w * h * 4) as usize];
         let glyph_h = self.font.height.max(1) as i32;
         let y0 = (h as i32 - glyph_h) / 2;
+        self.render_unscaled_at(text, w, h, full_color, rgb, align, y0, &mut out);
+        out
+    }
+
+    fn render_unscaled_at(&self, text: &str, w: u32, h: u32, full_color: bool, rgb: [u8; 3], align: TextAlign, y0: i32, out: &mut [u8]) {
+        let glyph_h = self.font.height.max(1) as i32;
         let mut x = align.offset(w as i32, self.text_width(text), self.font.gap);
         for ch in text.chars() {
             if ch.is_whitespace() {
@@ -286,7 +307,6 @@ impl FontAtlas {
             }
             x += gw + self.font.gap;
         }
-        out
     }
 }
 
@@ -335,5 +355,24 @@ mod tests {
         assert_eq!(font.glyph(' '), None);
         // space_width should fall back to '0' width (8)
         assert_eq!(font.space_width(), 8);
+    }
+
+    #[test]
+    fn overflowing_multiline_text_keeps_the_last_line_visible() {
+        let font = Font {
+            path: PathBuf::new(),
+            name: "overflow-test".into(),
+            height: 6,
+            gap: 0,
+            chars: vec![FontChar { ch: 'A', x0: 0, x1: 1, y: 0 }],
+            ..Default::default()
+        };
+        let mut alpha = vec![0u8; 6 * 6 * 4];
+        for y in 1..5 {
+            alpha[(y * 6 * 4) as usize] = 255;
+        }
+        let atlas = FontAtlas::new(font, 6, 6, alpha.clone(), alpha);
+        let image = atlas.render("A@A@A", 1, 12, false, [255, 255, 255]);
+        assert!(image[(10 * 4) + 3] != 0, "last line must not be pushed below the texture");
     }
 }
