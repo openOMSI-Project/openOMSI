@@ -4355,6 +4355,11 @@ impl PlayerDuty {
         self.skipped.take()
     }
 
+    /// True while the bus stands at the next stop (`omsi.info().at_stop`).
+    pub fn at_stop(&self) -> bool {
+        self.at_stop
+    }
+
     /// How late the bus arrived at the stop it stands at (s; negative: early), None while it
     /// stands at none: the journey's log notes the arrival (`journey`).
     pub fn arrived(&self) -> Option<f64> {

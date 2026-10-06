@@ -119,11 +119,31 @@ pub(crate) fn game_info(app: &crate::App) -> Vec<(&'static str, InfoValue)> {
             v.push(("terminus", Text(trip.terminus.trim().to_string())));
             v.push(("trip_name", Text(trip.name.trim().to_string())));
             v.push(("stops", Num(trip.stops.len() as f64)));
+            // straight-line metres from the bus, where the stop's place is known
+            let distance = |s: &crate::schedule::PlannedStop| {
+                let (bus, stop) = (app.player.as_ref()?.vehicle.position, s.position?);
+                Some((stop.x - bus.x).hypot(stop.y - bus.y))
+            };
             if let Some(s) = trip.stops.get(d.next_stop) {
                 v.push(("next_stop", Text(s.name.trim().to_string())));
                 v.push(("next_stop_number", Num(d.next_stop as f64 + 1.0)));
                 v.push(("next_stop_arrival", Num(s.arr)));
                 v.push(("next_stop_departure", Num(s.dep)));
+                // the map's object ID of the stop, as the timetable and the map files name
+                // it: outside tools match the stop by it, the name can occur twice
+                v.push(("next_stop_id", Num(s.object_id as f64)));
+                v.push(("at_stop", Bool(d.at_stop())));
+                if let Some(m) = distance(s) {
+                    v.push(("next_stop_distance", Num(m)));
+                }
+            }
+            // the last stop before the next one the trip calls at (passing stations left out)
+            if let Some(s) = trip.stops.iter().take(d.next_stop).rev().find(|s| s.stops) {
+                v.push(("previous_stop", Text(s.name.trim().to_string())));
+                v.push(("previous_stop_id", Num(s.object_id as f64)));
+                if let Some(m) = distance(s) {
+                    v.push(("previous_stop_distance", Num(m)));
+                }
             }
         }
     }
