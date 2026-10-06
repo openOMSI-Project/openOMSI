@@ -3070,9 +3070,9 @@ impl Humans {
                     .filter(|t| !t.all_exit)
                     .map(|t| t.texture_id.trim().to_string()),
                 _ => None,
-            };
-            // (on a duty the people its trip takes where they are going get on, however the
-            // depot file names the terminus; in free drive nobody)
+            }
+            .or_else(|| self.duty.as_ref().map(|(trip, _, _)| trip.terminus.clone()));
+            // On a duty the people its trip takes where they are going get on; in free drive nobody.
             let takes = match &self.duty {
                 Some((trip, next, done)) => Takes::Duty { trip: trip.clone(), next: *next, done: *done },
                 None => Takes::Nobody,
