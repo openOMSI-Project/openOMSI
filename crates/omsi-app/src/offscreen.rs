@@ -385,6 +385,7 @@ pub(crate) fn run_offscreen(
     let mut spray = puddles::Spray::new();
     let spray_wet = puddles::road_wetness(initial_wetness(&weather), weather.snow);
     let spray_wind = Vec3::new(weather.wind.0.to_radians().sin(), weather.wind.0.to_radians().cos(), 0.0) * weather.wind.1 * puddles::GROUND_WIND;
+    let mut real_time = RealTime::default();
     for i in 0..total_frames {
         let t_s = i as f32 * dt;
         if server {
@@ -515,7 +516,7 @@ pub(crate) fn run_offscreen(
                 }
             }
             if lan_off.is_none() {
-                std::thread::sleep(std::time::Duration::from_secs_f32(dt));
+                std::thread::sleep(real_time.wait(Instant::now(), dt));
             }
         }
         if let Some(t) = traffic.as_mut() {
@@ -1120,8 +1121,8 @@ pub(crate) fn run_offscreen(
                     s.set_lan_tours(tours);
                 }
             }
-            // the other games run in real time
-            std::thread::sleep(std::time::Duration::from_secs_f32(dt));
+            // the other games run in real time (see `RealTime`)
+            std::thread::sleep(real_time.wait(Instant::now(), dt));
         }
         // the tyres' spray, frame by frame as the window throws it (the camera that matters
         // for its detail: the followed car's, else the player's bus)
@@ -2973,6 +2974,40 @@ pub(crate) fn run_offscreen(
     Ok(())
 }
 
+/// The offscreen loop's fixed steps kept to the clock when other games take part (a LAN
+/// session, the dedicated server): a step of `dt` every `dt` on the wall, the step's own work
+/// included. A whole step slept after each frame's work made a dedicated server's frames
+/// 41 ms long on Gladbeck: its world ran at 80 % of the clock while its world frames were
+/// stamped with the clock, so the players saw its cars and people a fifth too slow, mostly
+/// guessed on past the last frame they had, and standing still for a moment again and again
+/// (#660); its clock and timetable fell behind the day as well.
+#[derive(Default)]
+pub(crate) struct RealTime {
+    /// When the last step was to end (its wait ran until then).
+    end: Option<Instant>,
+}
+
+impl RealTime {
+    /// Further behind than this (a stall: a long load, the machine busy), the steps go on
+    /// from now rather than run back to back until they have caught up - the same quarter of
+    /// a second after which the session's stamps take the wall clock again
+    /// (`LanSession::tick`).
+    const BEHIND_MAX: std::time::Duration = std::time::Duration::from_millis(250);
+
+    /// How long to wait at `now`, at the end of a step of `dt` seconds.
+    pub(crate) fn wait(&mut self, now: Instant, dt: f32) -> std::time::Duration {
+        let dt = std::time::Duration::from_secs_f32(dt);
+        let due = self.end.map(|e| e + dt).unwrap_or(now + dt);
+        let due = if now > due + Self::BEHIND_MAX {
+            now
+        } else {
+            due
+        };
+        self.end = Some(due);
+        due.saturating_duration_since(now)
+    }
+}
+
 /// The tyres as they are drawn: the lowest point of each wheel mesh and how far it is over
 /// the road under it (negative: in the asphalt).
 fn tyre_lows(v: &omsi_sim::VehicleInstance, world: &World) -> Vec<(DVec3, f64)> {
@@ -3026,5 +3061,44 @@ fn vehicle_camera(player: &Player, camera: &mut Camera) {
         if let Some(f) = v.get(5) {
             camera.fov_deg = *f;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RealTime;
+    use std::time::{Duration, Instant};
+
+    /// The waits `RealTime` asks for after steps of 1/30 s that take `work` each, and the
+    /// wall time they all took.
+    fn run(work: &[u64]) -> (Vec<Duration>, f64) {
+        let t0 = Instant::now();
+        let (mut now, mut pace, mut waits) = (t0, RealTime::default(), Vec::new());
+        for w in work {
+            now += Duration::from_millis(*w);
+            let wait = pace.wait(now, 1.0 / 30.0);
+            waits.push(wait);
+            now += wait;
+        }
+        (waits, (now - t0).as_secs_f64())
+    }
+
+    #[test]
+    fn a_server_keeps_to_the_clock_whatever_its_steps_take() {
+        // a dedicated server on Gladbeck: 8 ms of work a step; 300 steps (10 s of its world)
+        // took 12.4 s with a whole step slept after each
+        let (_, wall) = run(&[8; 300]);
+        assert!((wall - 10.0).abs() < 0.04, "300 steps in {wall} s");
+        // uneven steps, some longer than a step: made up by the next ones
+        let uneven: Vec<u64> = (0..300).map(|i| [2, 45, 9, 60, 20][i % 5]).collect();
+        let (_, wall) = run(&uneven);
+        assert!((wall - 10.0).abs() < 0.07, "300 uneven steps in {wall} s");
+        // a stall of a second is not made up by thirty steps at once: on from there at the
+        // steps' pace
+        let mut stalled = vec![5; 100];
+        stalled[50] = 1000;
+        let (waits, _) = run(&stalled);
+        let steady = |w: &Duration| (w.as_secs_f64() - 0.0283).abs() < 0.001;
+        assert!(waits[51..].iter().all(steady), "{:?}", &waits[50..60]);
     }
 }
