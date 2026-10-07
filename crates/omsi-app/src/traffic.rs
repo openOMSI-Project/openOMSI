@@ -971,6 +971,34 @@ fn crossing_arrival(st: &AiState, distance: f32, claimed: bool, waits_short: boo
     }
 }
 
+/// The nearest vehicle in the part of the chosen exit that must be clear for this car.
+///
+/// `way` distances are measured from the car's present lane origin; `rear` is measured
+/// from the occupied lane's start. Combining both lets a queue be found across short,
+/// consecutive path objects instead of only on the first lane after a junction.
+fn queued_exit_vehicle(
+    way: &[(usize, f32)],
+    exit: (usize, f32),
+    need: f32,
+    occupied: impl IntoIterator<Item = (usize, f32, f32)>,
+) -> Option<(f32, f32, usize)> {
+    let start = way
+        .iter()
+        .position(|&(lane, distance)| lane == exit.0 && (distance - exit.1).abs() < 0.01)?;
+    occupied
+        .into_iter()
+        .filter_map(|(lane, rear, speed)| {
+            let offset = way[start..]
+                .iter()
+                .take_while(|&&(_, distance)| distance - exit.1 < need)
+                .find(|&&(candidate, _)| candidate == lane)
+                .map(|&(_, distance)| distance - exit.1)?;
+            let space = offset + rear;
+            (space < need).then_some((space, speed, lane))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+}
+
 /// A vehicle the AI does not drive, put onto the lanes for the right of way: the street
 /// lane it drives along (within 3.5 m, its heading within 45 degrees) and the lanes it
 /// may take on from there, as far as it gets in about six seconds. Where the way forks,
@@ -4658,27 +4686,29 @@ impl Traffic {
         let ruled_before_exit = ruled;
         let mut exit_full = false;
         if !jn.inside {
-            if let Some((e, de)) = jn.exit {
-                let room = on_lane
-                    .get(&e)
-                    .map(|v| v.as_slice())
-                    .unwrap_or(&[])
-                    .iter()
-                    .filter(|x| !x.3 && x.0 != i)
-                    .map(|&(j, sj, _, _)| (sj - self.cars[j].state.rear, self.cars[j].state.speed))
-                    .fold(None::<(f32, f32)>, |acc, x| {
-                        if acc.map(|a| x.0 < a.0).unwrap_or(true) {
-                            Some(x)
-                        } else {
-                            acc
-                        }
-                    });
-                if let Some((space, speed)) = room {
-                    if speed < 1.5 && space < st.length + st.min_gap && de < 40.0 {
+            if let Some(exit) = jn.exit {
+                let need = st.length + st.min_gap;
+                // A map often builds the road immediately beyond a crossing from several
+                // short path objects. Looking only at the first exit lane then calls the
+                // exit empty while a queue stands on the next 2 m piece, and a car enters
+                // the box with nowhere to put its body. Follow this car's chosen way until
+                // there is enough clear road for all of it.
+                let all_cars = &self.cars;
+                let occupied = on_lane.iter().flat_map(|(&lane, cars)| {
+                    cars.iter().filter_map(move |&(j, s, _, passing)| {
+                        (!passing && j != i).then_some((
+                            lane,
+                            s - all_cars[j].state.rear,
+                            all_cars[j].state.speed,
+                        ))
+                    })
+                });
+                if let Some((space, speed, lane)) = queued_exit_vehicle(way, exit, need, occupied) {
+                    if speed < 1.5 && space < need {
                         ruled = true;
                         exit_full = true;
                         if explain {
-                            why.push(format!("exit {e} full ({space:.1} m)"));
+                            why.push(format!("exit {} full on lane {lane} ({space:.1} m)", exit.0));
                         }
                     }
                 }
@@ -7881,7 +7911,7 @@ mod road_scale_tests {
 
 #[cfg(test)]
 mod junction_arrival_tests {
-    use super::crossing_arrival;
+    use super::{crossing_arrival, queued_exit_vehicle};
     use omsi_sim::traffic::AiState;
 
     #[test]
@@ -7933,6 +7963,40 @@ mod junction_arrival_tests {
         assert_eq!(crossing_arrival(&st, 10.0, false, true, false), f32::MAX);
         assert!(crossing_arrival(&st, 10.0, true, false, false) < 5.0);
         assert_eq!(crossing_arrival(&st, 10.0, false, false, false), 5.0);
+    }
+
+    #[test]
+    fn a_queue_on_a_short_lane_after_the_exit_keeps_the_junction_clear() {
+        // Lanes 20 and 21 are two short pieces immediately beyond the crossing. The first
+        // is empty; a car whose rear is 1 m into the second leaves only 3 m beyond the exit.
+        let way = [(10, -20.0), (20, 5.0), (21, 7.0), (22, 10.0), (23, 40.0)];
+        assert_eq!(
+            queued_exit_vehicle(&way, (20, 5.0), 8.0, [(21, 1.0, 0.0)]),
+            Some((3.0, 0.0, 21))
+        );
+    }
+
+    #[test]
+    fn traffic_beyond_the_space_the_car_needs_does_not_close_the_exit() {
+        let way = [(10, -20.0), (20, 5.0), (21, 7.0), (22, 10.0), (23, 40.0)];
+        assert_eq!(
+            queued_exit_vehicle(&way, (20, 5.0), 8.0, [(22, 5.0, 0.0), (23, 0.0, 0.0)]),
+            None
+        );
+    }
+
+    #[test]
+    fn the_nearest_vehicle_across_exit_pieces_wins() {
+        let way = [(10, -20.0), (20, 5.0), (21, 7.0), (22, 10.0)];
+        assert_eq!(
+            queued_exit_vehicle(
+                &way,
+                (20, 5.0),
+                10.0,
+                [(21, 4.0, 1.0), (20, 5.0, 0.5), (22, -1.0, 0.0)]
+            ),
+            Some((4.0, 0.0, 22))
+        );
     }
 }
 
