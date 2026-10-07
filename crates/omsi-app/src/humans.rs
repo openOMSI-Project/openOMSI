@@ -1680,6 +1680,11 @@ pub struct Humans {
     mirror: bool,
     /// LAN play: where the other players are (host): people are kept around them too.
     pub lan_centers: Vec<DVec3>,
+    /// A dedicated server: nobody plays at its own place (`center`, the map's camera), so
+    /// people are kept around the LAN players alone (`anchors`). Kept around the camera
+    /// too, the stops there took the whole pool (`max_people`) for people nobody saw, and
+    /// none were left for the stops and pavements around the players.
+    pub players_only: bool,
     /// LAN play: the other players' buses this frame (`set_remote_buses`), for their riders
     /// to sit in. Nobody of ours boards them: their doors count as shut.
     remote_now: Vec<BusNow>,
@@ -1909,6 +1914,7 @@ impl Humans {
             tiles_seen: 0,
             mirror: false,
             lan_centers: Vec::new(),
+            players_only: false,
             remote_now: Vec::new(),
             placed_now: Vec::new(),
             claims_out: Vec::new(),
@@ -2626,10 +2632,9 @@ impl Humans {
             });
         }
         for id in ids {
-            let center = self.center;
             let near = {
                 let s = &self.stops[&id];
-                (s.pos - center).length() < STOP_RANGE || self.lan_centers.iter().any(|c| (s.pos - *c).length() < STOP_RANGE)
+                self.anchors().any(|c| (s.pos - c).length() < STOP_RANGE)
             };
             let changed = {
                 let s = self.stops.get_mut(&id).unwrap();
@@ -3162,7 +3167,6 @@ impl Humans {
             });
         }
         if let Some(t) = traffic {
-            let near = self.center;
             let riding: HashSet<u64> = self
                 .people
                 .iter()
@@ -3174,7 +3178,12 @@ impl Humans {
             let mut visits = HashMap::new();
             for c in t.cars.iter().filter(|c| c.is_bus()) {
                 let from_eye = self.eye.map(|e| (c.vehicle.position - e.pos).length()).unwrap_or(f64::MAX);
-                if (c.vehicle.position - near).length().min(from_eye) > 400.0 && !riding.contains(&c.id) {
+                // (the timetable buses near every player: the people waiting around the other
+                // LAN players board them too)
+                if from_eye > 400.0
+                    && self.far_from_players(c.vehicle.position, 400.0)
+                    && !riding.contains(&c.id)
+                {
                     continue;
                 }
                 let Some(cabin) = self.cabin_for(&c.vehicle) else {
@@ -4030,7 +4039,9 @@ impl Humans {
                 let c = self.center;
                 self.populate_with(world, Some(n), renderer, scene, c);
                 if !self.mirror {
-                    self.populate_on_foot(world, n, renderer, scene, 1.0);
+                    if !self.players_only {
+                        self.populate_on_foot(world, n, renderer, scene, 1.0);
+                    }
                     self.populate_lan_centers(world, n, renderer, scene);
                 }
             }
@@ -4075,12 +4086,13 @@ impl Humans {
         let mut remove: Vec<usize> = Vec::new();
         self.pax_frame(dt, world, &buses, &bus_ix, &at_stops, bus, renderer, scene, &mut taken_ticket, &mut remove);
         stage!("passengers");
-        // the pedestrians: a crowd on the pavements
+        // the pedestrians: a crowd on the pavements (the cars around every player: the people
+        // around the other LAN players wait for them at the kerb too)
         let mut cars: Vec<(DVec2, DVec2, f64)> = Vec::new();
         let mut blocks: Vec<Block> = Vec::new();
         if let Some(t) = traffic {
             for c in &t.cars {
-                if (c.vehicle.position - self.center).length() > 320.0 {
+                if self.far_from_players(c.vehicle.position, 320.0) {
                     continue;
                 }
                 let h = c.vehicle.heading.to_radians();
@@ -4100,7 +4112,10 @@ impl Humans {
             }
         }
         for o in world.parked_boxes.lock().iter() {
-            if (o.center - self.center.truncate()).length() < 320.0 {
+            if self
+                .anchors()
+                .any(|c| (o.center - c.truncate()).length() < 320.0)
+            {
                 blocks.push(Block { center: o.center, half: o.half, heading: o.heading, vel: DVec2::ZERO });
             }
         }
@@ -5454,9 +5469,19 @@ pub struct LanPerson {
 }
 
 impl Humans {
+    /// The places people are kept around: ours (the player's bus, else the camera) - not on
+    /// a dedicated server, where nobody plays there (`players_only`) - and every other LAN
+    /// player's.
+    fn anchors(&self) -> impl Iterator<Item = DVec3> + '_ {
+        (!self.players_only)
+            .then_some(self.center)
+            .into_iter()
+            .chain(self.lan_centers.iter().copied())
+    }
+
     /// Is `p` further than `r` from us and from every other LAN player?
     fn far_from_players(&self, p: DVec3, r: f64) -> bool {
-        (p - self.center).length() > r && self.lan_centers.iter().all(|c| (p - *c).length() > r)
+        self.anchors().all(|c| (p - c).length() > r)
     }
 
     /// The stops and pavements around the other players of a LAN session (host).
@@ -5472,7 +5497,8 @@ impl Humans {
         }
         let mine = self.center;
         for c in self.lan_centers.clone() {
-            if (c - mine).length() < 150.0 {
+            // (near us they are there already - unless nobody plays here)
+            if !self.players_only && (c - mine).length() < 150.0 {
                 continue;
             }
             self.populate_with(world, Some(net), renderer, scene, c);
@@ -6738,5 +6764,28 @@ mod population_limit_tests {
         );
         assert_eq!(h.pool_used(), 1);
         assert!(h.people.iter().any(|p| p.id == 1));
+    }
+
+    /// A dedicated server's own place is the map's camera, where nobody plays: the stops and
+    /// pavements there get no people (they took the whole pool, and the players around
+    /// town met nobody); those around the LAN players do, and with nobody joined nowhere.
+    #[test]
+    fn a_dedicated_server_keeps_people_around_its_players_not_its_camera() {
+        let camera = DVec3::new(-1948.9, -174.7, 8.8);
+        let player = DVec3::new(-219.9, -995.5, 0.0);
+        let mut h = Humans::new(Path::new("/nonexistent"));
+        h.center = camera;
+        h.lan_centers = vec![player];
+        // a host plays at its own place too
+        assert!(!h.far_from_players(camera + DVec3::X * 100.0, STOP_RANGE));
+        assert!(!h.far_from_players(player + DVec3::Y * 100.0, STOP_RANGE));
+        h.players_only = true;
+        assert!(h.far_from_players(camera + DVec3::X * 100.0, STOP_RANGE));
+        assert!(h.far_from_players(camera, STROLL_RADIUS));
+        assert!(!h.far_from_players(player + DVec3::Y * 100.0, STOP_RANGE));
+        assert_eq!(h.anchors().collect::<Vec<_>>(), vec![player]);
+        h.lan_centers.clear();
+        assert!(h.far_from_players(camera, 1.0));
+        assert!(h.far_from_players(player, 1.0));
     }
 }

@@ -167,6 +167,9 @@ pub(crate) fn run_offscreen(
         if let Some(seed) = lan_seed {
             h.set_lan_seed(seed);
         }
+        // a dedicated server plays nowhere itself: its people are the LAN players' alone (at
+        // the map's camera they filled the whole pool, and the players met nobody)
+        h.players_only = args.server.is_some() && player.is_none();
         h.exact_fare = settings.exact_fare;
         h.boarding = settings.boarding.clone();
         h.voices = match settings.pax_voices.as_str() { "off" => 2, "tickets" => 1, _ => 0 };
