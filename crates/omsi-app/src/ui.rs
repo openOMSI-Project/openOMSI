@@ -455,6 +455,8 @@ pub struct Frame<'a> {
     /// Where the navigator is on the screen (the notifications stand over it, or under it
     /// in a top corner); none: they go to the top middle.
     pub notice_anchor: Option<[f32; 4]>,
+    /// The dispatch radio (`phonie`), when the server runs one: its button and the call.
+    pub radio: Option<crate::phonie::RadioHud>,
     /// What kind of menu the lines belong to.
     pub menu_kind: MenuKind,
     /// The open list's title and the small line above it (the line a tour list is of).
@@ -531,6 +533,9 @@ pub struct Ui {
     /// Where the information bar was drawn (within the panel, before `origin_x`), for the
     /// navigator to keep out of its way.
     pub info_rect: Option<[f32; 4]>,
+    /// The dispatch radio's button (a request to be called), and whether the mouse is on it.
+    pub radio_button: Option<[f32; 4]>,
+    pub radio_hovered: bool,
 }
 
 /// Between the information bar's parts.
@@ -610,7 +615,7 @@ impl Ui {
         self.chat.rect[2] += x;
     }
     pub fn new() -> Option<Ui> {
-        Some(Ui { origin_x: 0.0, text: TextCache::new()?, chat: ChatWidget::default(), menu_rects: Vec::new(), menu_arrows: Vec::new(), menu_scroll_thumb: None, menu_scroll_track: None, menu_ctl: Vec::new(), dd_rects: Vec::new(), dd_top: 0, dd_rows: 8, dd_scroll: None, menu_side: Vec::new(), menu_pane: Vec::new(), menu_pane_start: 0, menu_pane_go: None, menu_pane_box: None, menu_pane_scroll: None, menu_time: Vec::new(), anim: Default::default(), anim_dt: 0.0, menu_overlay_range: 0..0, vr_cursor_overlay: None, vr_tooltip_overlay: None, menu_start: 0, menu_rows: 0, menu_row_h: 1.0, images: Default::default(), info_rect: None })
+        Some(Ui { origin_x: 0.0, text: TextCache::new()?, chat: ChatWidget::default(), menu_rects: Vec::new(), menu_arrows: Vec::new(), menu_scroll_thumb: None, menu_scroll_track: None, menu_ctl: Vec::new(), dd_rects: Vec::new(), dd_top: 0, dd_rows: 8, dd_scroll: None, menu_side: Vec::new(), menu_pane: Vec::new(), menu_pane_start: 0, menu_pane_go: None, menu_pane_box: None, menu_pane_scroll: None, menu_time: Vec::new(), anim: Default::default(), anim_dt: 0.0, menu_overlay_range: 0..0, vr_cursor_overlay: None, vr_tooltip_overlay: None, menu_start: 0, menu_rows: 0, menu_row_h: 1.0, images: Default::default(), info_rect: None, radio_button: None, radio_hovered: false })
     }
 
     /// Draw the frame's interface: its overlays go after the HUD's in `scene.overlays`.
@@ -729,13 +734,16 @@ impl Ui {
             self.chat.hovered = false;
             self.chat.rect = [0.0; 4];
         }
+        // --- the dispatch radio: its button and the call, right over the navigator (under it
+        // in a top corner; at the bottom right without it)
+        let notice_anchor = self.draw_radio(r, scene, f, s);
         // --- the server's notifications: cards over the navigator (under it when it is in a
         // top corner; at the top middle without it), the newest nearest to it
         if !f.notices.is_empty() {
             let pad = 10.0 * s;
             let stripe = 4.0 * s;
             let gap = 6.0 * s;
-            let (x0, w, mut y, up) = match f.notice_anchor {
+            let (x0, w, mut y, up) = match notice_anchor {
                 Some(a) => {
                     let w = (a[2] - a[0]).max(300.0 * s).min(f.width - 16.0 * s);
                     let x0 = if a[0] + w > f.width { f.width - w - 8.0 * s } else { a[0] }.max(8.0 * s);
@@ -1349,6 +1357,89 @@ fn strip_more(label: &str) -> (&str, bool) {
 }
 
 impl Ui {
+    /// The dispatch radio's row: the button (green; orange while a request waits) and, during
+    /// a call, a band saying which call and who talks. Returns where the notifications stand
+    /// now (over the row as they stood over the navigator).
+    fn draw_radio(&mut self, r: &Renderer, scene: &mut Scene, f: &Frame, s: f32) -> Option<[f32; 4]> {
+        self.radio_button = None;
+        self.radio_hovered = false;
+        let Some(radio) = f.radio.as_ref() else {
+            return f.notice_anchor;
+        };
+        use crate::phonie::{CallKind, Talk};
+        let gap = 6.0 * s;
+        let h = 34.0 * s;
+        let nav = f.notice_anchor.unwrap_or([f.width - 316.0 * s, f.height - 12.0 * s, f.width - 16.0 * s, f.height - 12.0 * s]);
+        let up = f.notice_anchor.is_none() || nav[1] > f.height * 0.5;
+        let top = if up { nav[1] - gap - h } else { nav[3] + gap };
+        // the button, at the navigator's right edge
+        let bw = 58.0 * s;
+        let button = [nav[2] - bw, top, nav[2], top + h];
+        let over = f.cursor.0 >= button[0] && f.cursor.0 <= button[2] && f.cursor.1 >= button[1] && f.cursor.1 <= button[3];
+        let fill = if over && radio.can_request { [44, 174, 80, 255] } else { [32, 150, 64, 245] };
+        self.text.rounded(r, scene, button, 5.0 * s, fill);
+        let icon = self.radio_icon(r, scene, radio.button.icon());
+        let iz = 21.0 * s;
+        let (cx, cy) = ((button[0] + button[2]) * 0.5, (button[1] + button[3]) * 0.5);
+        scene.overlays.push((icon, [cx - iz * 0.5, cy - iz * 0.5, cx + iz * 0.5, cy + iz * 0.5]));
+        self.radio_button = Some(button);
+        self.radio_hovered = over;
+        // the call: a band left of the button
+        let x0 = nav[0];
+        let band = [x0, top, button[0] - gap, top + h];
+        if let Some(call) = radio.call.filter(|_| band[2] - band[0] > 80.0 * s) {
+            let accent = match call {
+                CallKind::Individual => [90, 160, 255],
+                CallKind::Selective => [240, 170, 50],
+                CallKind::General => [235, 80, 70],
+            };
+            let bg = self.text.solid(r, scene, [14, 16, 20, (230.0 * self.text.backdrop) as u8]);
+            scene.overlays.push((bg, band));
+            let stripe = self.text.solid(r, scene, [accent[0], accent[1], accent[2], 255]);
+            scene.overlays.push((stripe, [band[0], band[1], band[0] + 4.0 * s, band[3]]));
+            let mid = (band[1] + band[3]) * 0.5;
+            let tx = band[0] + 14.0 * s;
+            let w = self.put(r, scene, call.label(), (15.0 * s) as u32 | BOLD, [255, 255, 255, 255], tx, mid);
+            // who talks: the dispatcher, us, nobody (and why our key does nothing)
+            let (what, dot) = if let Some(e) = radio.mic_error.as_ref().filter(|_| call == CallKind::Individual) {
+                let _ = e;
+                ("No microphone", [235, 80, 70])
+            } else if radio.sending {
+                ("Transmitting", [235, 80, 70])
+            } else if radio.talk == Talk::Dispatcher {
+                ("Dispatcher speaking", [90, 210, 120])
+            } else if call != CallKind::Individual {
+                ("Listening only", [150, 150, 150])
+            } else {
+                ("Push to talk", [150, 150, 150])
+            };
+            let right = band[2] - 10.0 * s;
+            let tw = self.put_right(r, scene, what, (13.0 * s) as u32, [215, 215, 215, 255], right, mid);
+            let lit = radio.sending || radio.talk == Talk::Dispatcher;
+            if tx + w + 10.0 * s < right - tw - 16.0 * s {
+                let d = 4.5 * s;
+                let dx = right - tw - 10.0 * s;
+                let a = if lit { 255 } else { 160 };
+                self.text.rounded(r, scene, [dx - d, mid - d, dx + d, mid + d], d, [dot[0], dot[1], dot[2], a]);
+            }
+        }
+        // the notifications go on over the row
+        Some(match f.notice_anchor {
+            Some(a) if up => [a[0], top, a[2], a[3]],
+            Some(a) => [a[0], a[1], a[2], top + h],
+            None => [nav[0], top, nav[2], top + h],
+        })
+    }
+
+    /// One of the radio button's handsets (`assets/icons/custom`), white, drawn once.
+    fn radio_icon(&mut self, r: &Renderer, scene: &mut Scene, name: &'static str) -> TextureId {
+        const N: u32 = 64;
+        self.text.cached(r, scene, (name.to_string(), N, [255, 255, 255, 255]), (N, N), || {
+            let alpha = omsi_ui::icons::rasterize(name, N).unwrap_or_else(|| vec![0; (N * N) as usize]);
+            alpha.iter().flat_map(|&a| [255, 255, 255, a]).collect()
+        })
+    }
+
     /// `text` at `x`, its middle on `cy`; returns its width.
     fn put(&mut self, r: &Renderer, scene: &mut Scene, text: &str, px: u32, color: [u8; 4], x: f32, cy: f32) -> f32 {
         let l = self.text.label(r, scene, text, px, color);

@@ -1515,3 +1515,45 @@ fn a_banned_player_hears_why_at_the_door() {
     assert!(!c.connected);
     assert!(c.turned_away.as_deref().is_some_and(|r| r.contains("Banni : conduite dangereuse")), "{:?}", c.turned_away);
 }
+
+#[test]
+fn radio_frames_go_up_to_the_host_and_down_to_a_player() {
+    let mut host = LanSession::host(27930, "Server", world("m"), true).unwrap();
+    let port = host.local_addr().unwrap().port();
+    let mut c = LanSession::join(&port.to_string(), "driver", world("m"), Duration::from_secs(1)).unwrap();
+    pump(&mut [&mut host, &mut c], &[pose(0.0), pose(50.0)], 120, |s| s[1].connected && s[0].peers().any(|p| p.has_pose));
+    let me = c.my_id;
+    let frame = dispatch::Encoder::default().encode(&[0.2; dispatch::FRAME_SAMPLES]).to_bytes();
+    // a player's voice: the host hears it as that player's, whoever the datagram names
+    c.send_radio(1, 999, &frame);
+    pump(&mut [&mut host, &mut c], &[pose(0.0), pose(50.0)], 40, |s| !s[0].radio_in.is_empty());
+    assert_eq!(host.take_radio(), vec![(me, frame.clone())]);
+    // the dispatcher's, down to the player
+    host.send_radio(me, dispatch::DISPATCHER, &frame);
+    pump(&mut [&mut host, &mut c], &[pose(0.0), pose(50.0)], 40, |s| !s[1].radio_in.is_empty());
+    assert_eq!(c.take_radio(), vec![(dispatch::DISPATCHER, frame)]);
+}
+
+#[test]
+fn a_server_lets_in_only_the_games_with_what_it_requires() {
+    let mut host = LanSession::host(27933, "Server", world("m"), true).unwrap();
+    host.require(vec!["radio".into()], "get the radio edition".into());
+    let port = host.local_addr().unwrap().port();
+    // this game says it has the radio
+    let mut c = LanSession::join(&port.to_string(), "driver", world("m"), Duration::from_secs(1)).unwrap();
+    pump(&mut [&mut host, &mut c], &[pose(0.0), pose(50.0)], 120, |s| s[1].connected);
+    assert!(c.connected);
+    // a game that does not (an older one): turned away, told why
+    host.require(vec!["radio".into(), "teleporter".into()], "get the radio edition".into());
+    let mut old = LanSession::join(&port.to_string(), "old", world("m"), Duration::from_secs(1)).unwrap();
+    for _ in 0..120 {
+        host.tick(0.06, &pose(0.0));
+        old.tick(0.06, &pose(80.0));
+        if old.turned_away.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!old.connected);
+    assert_eq!(old.turned_away.as_deref(), Some("get the radio edition"));
+}

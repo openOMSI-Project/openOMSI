@@ -460,33 +460,44 @@ pub fn local_admin(request: &[u8], peer: Option<SocketAddr>, info: &Mutex<Server
     let text = String::from_utf8_lossy(request);
     let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
     let mut i = info.lock().unwrap_or_else(|e| e.into_inner());
-    if i.local_admin_password.is_empty() {
-        return ("404 Not Found", "no admin password on this server".into());
-    }
-    if !peer.map(|p| p.ip().is_loopback()).unwrap_or(false) {
-        return ("403 Forbidden", "only from this machine".into());
-    }
-    // A tunnel or a proxy on this machine connects from the loopback as well: the server's
-    // own cloudflared tunnel (`tunnel --url http://127.0.0.1:<web_port>`) would have put the
-    // door on the internet behind the password alone. What came through one says so.
-    if ["cf-connecting-ip", "cf-ray", "x-forwarded-for", "forwarded", "x-real-ip"].iter().any(|h| header(head, h).is_some()) {
-        return ("403 Forbidden", "only from this machine, not through a tunnel or proxy".into());
-    }
-    if !head.starts_with("POST ") {
-        return ("405 Method Not Allowed", "POST admin commands, one a line".into());
-    }
-    i.local_admin_failures.retain(|t| t.elapsed() < ADMIN_LOCK_WINDOW);
-    if i.local_admin_failures.len() >= ADMIN_LOCK_AFTER {
-        return ("429 Too Many Requests", "too many wrong passwords: try again later".into());
-    }
-    if !same_secret(header(head, "x-admin-password").unwrap_or(""), &i.local_admin_password) {
-        i.local_admin_failures.push(Instant::now());
-        return ("401 Unauthorized", "wrong admin password".into());
+    if let Err(refused) = local_door(head, peer, &mut i, true) {
+        return refused;
     }
     let commands: Vec<String> = body.lines().map(str::trim).filter(|l| !l.is_empty()).take(10).map(|l| l.chars().take(200).collect()).collect();
     let n = commands.len();
     i.local_admin_queue.extend(commands);
     ("202 Accepted", format!("{n} command(s) taken"))
+}
+
+/// The doors for a tool on this machine (`POST /admin`, the dispatch consoles' `/dispatch`):
+/// only from the loopback, not through a tunnel or a proxy, only with the admin password
+/// (`post`: and only as a POST). Why not, when not.
+fn local_door(head: &str, peer: Option<SocketAddr>, i: &mut ServerInfo, post: bool) -> Result<(), (&'static str, String)> {
+    let refuse = |status: &'static str, text: &str| Err((status, text.to_string()));
+    if i.local_admin_password.is_empty() {
+        return refuse("404 Not Found", "no admin password on this server");
+    }
+    if !peer.map(|p| p.ip().is_loopback()).unwrap_or(false) {
+        return refuse("403 Forbidden", "only from this machine");
+    }
+    // A tunnel or a proxy on this machine connects from the loopback as well: the server's
+    // own cloudflared tunnel (`tunnel --url http://127.0.0.1:<web_port>`) would have put the
+    // door on the internet behind the password alone. What came through one says so.
+    if ["cf-connecting-ip", "cf-ray", "x-forwarded-for", "forwarded", "x-real-ip"].iter().any(|h| header(head, h).is_some()) {
+        return refuse("403 Forbidden", "only from this machine, not through a tunnel or proxy");
+    }
+    if post && !head.starts_with("POST ") {
+        return refuse("405 Method Not Allowed", "POST admin commands, one a line");
+    }
+    i.local_admin_failures.retain(|t| t.elapsed() < ADMIN_LOCK_WINDOW);
+    if i.local_admin_failures.len() >= ADMIN_LOCK_AFTER {
+        return refuse("429 Too Many Requests", "too many wrong passwords: try again later");
+    }
+    if !same_secret(header(head, "x-admin-password").unwrap_or(""), &i.local_admin_password) {
+        i.local_admin_failures.push(Instant::now());
+        return refuse("401 Unauthorized", "wrong admin password");
+    }
+    Ok(())
 }
 
 /// One TCP connection to the gateway: a status request, the icon, or a player's WebSocket.
@@ -537,6 +548,28 @@ fn serve(stream: TcpStream, target: SocketAddr, info: &Mutex<ServerInfo>, stop: 
         s.write_all(hdr.as_bytes()).map_err(|e| e.to_string())?;
         s.write_all(&body).map_err(|e| e.to_string())?;
         return Ok(());
+    }
+    if path == "/dispatch" {
+        // a dispatcher's console (see `dispatch`): from this machine, with the admin password
+        let head = req.split_once("\r\n\r\n").map(|(h, _)| h).unwrap_or(&req);
+        let door = if crate::dispatch::consoles_open() {
+            local_door(head, peer, &mut info.lock().unwrap_or_else(|e| e.into_inner()), false)
+        } else {
+            Err(("404 Not Found", "this server runs no dispatch radio".to_string()))
+        };
+        if let Err((status, text)) = door {
+            let mut s = stream;
+            let mut request = [0u8; 2048];
+            let _ = s.read(&mut request);
+            let hdr = format!("HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}", text.len());
+            return s.write_all(hdr.as_bytes()).map_err(|e| e.to_string());
+        }
+        let mut ws = tungstenite::accept(stream).map_err(|e| e.to_string())?;
+        ws.get_mut().set_read_timeout(Some(Duration::from_millis(5))).map_err(|e| e.to_string())?;
+        log::info!("gateway: a dispatch console connected");
+        let name = header(head, "x-dispatcher").map(percent_decode).unwrap_or_default();
+        let monitor = header(head, "x-dispatcher-monitor").is_some_and(|v| v.trim() == "1");
+        return console(&mut ws, stop, &name, monitor);
     }
     if path.starts_with("/tcp") {
         // a byte stream to the session's TCP port (the host's mods): the way the files go
@@ -620,6 +653,92 @@ fn pump<S: Read + Write>(ws: &mut WebSocket<S>, udp: &UdpSocket, mut send: impl 
     }
     let _ = ws.close(None);
     Ok(())
+}
+
+/// `%XX` escapes as their bytes (a name in a header: UTF-8, percent-encoded).
+fn percent_decode(s: &str) -> String {
+    let b = s.trim().as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        match (b[i], b.get(i + 1).copied().and_then(hex), b.get(i + 2).copied().and_then(hex)) {
+            (b'%', Some(h), Some(l)) => {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+            }
+            (c, _, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A dispatcher's console until it goes: its messages to the hub, the server's to it.
+fn console<S: Read + Write>(ws: &mut WebSocket<S>, stop: &AtomicBool, name: &str, monitor: bool) -> Result<(), String> {
+    use crate::dispatch::{ConsoleIn, ConsoleOut};
+    let (id, rx) = crate::dispatch::register_console(name, monitor);
+    let r = (|| {
+        let mut last_in = Instant::now();
+        let mut last_ping = Instant::now();
+        while !stop.load(Ordering::Relaxed) {
+            let mut idle = true;
+            loop {
+                match ws.read() {
+                    Ok(Message::Text(t)) => {
+                        last_in = Instant::now();
+                        idle = false;
+                        if t.len() <= 4096 {
+                            crate::dispatch::console_said(ConsoleIn::Text(id, t.to_string()));
+                        }
+                    }
+                    Ok(Message::Binary(d)) => {
+                        last_in = Instant::now();
+                        idle = false;
+                        if d.len() <= crate::dispatch::MAX_FRAME {
+                            crate::dispatch::console_said(ConsoleIn::Voice(id, d.to_vec()));
+                        }
+                    }
+                    Ok(Message::Close(_)) => return Ok(()),
+                    Ok(_) => last_in = Instant::now(),
+                    Err(tungstenite::Error::Io(e)) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => break,
+                    Err(tungstenite::Error::ConnectionClosed) | Err(tungstenite::Error::AlreadyClosed) => return Ok(()),
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+            while let Ok(m) = rx.try_recv() {
+                idle = false;
+                let m = match m {
+                    ConsoleOut::Text(t) => Message::Text(t.into()),
+                    ConsoleOut::Binary(b) => Message::Binary(b.into()),
+                };
+                if let Err(e) = ws.write(m) {
+                    if !matches!(&e, tungstenite::Error::Io(io) if io.kind() == ErrorKind::WouldBlock) {
+                        return Err(e.to_string());
+                    }
+                }
+            }
+            let _ = ws.flush();
+            // (proxies close a WebSocket that stays quiet for a minute or two)
+            if last_ping.elapsed() > Duration::from_secs(20) {
+                last_ping = Instant::now();
+                let _ = ws.send(Message::Ping(Vec::new().into()));
+            }
+            if last_in.elapsed() > Duration::from_secs(90) {
+                return Err("nothing heard for 90 s".into());
+            }
+            if idle {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+        let _ = ws.close(None);
+        Ok(())
+    })();
+    crate::dispatch::unregister_console(id);
+    log::info!("gateway: a dispatch console left");
+    r
 }
 
 /// Carry a TCP stream both ways over a WebSocket until either side closes.

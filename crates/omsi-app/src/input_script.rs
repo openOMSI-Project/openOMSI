@@ -193,6 +193,19 @@ impl App {
         }
         if let PhysicalKey::Code(code) = event_key {
             let pressed = pressed;
+            // the dispatch radio's push to talk (`radio_ptt`, the right Ctrl key unless moved):
+            // held while it is down; a Ctrl, Shift or Alt key still makes its combinations
+            if self.phonie.as_ref().is_some_and(|r| r.available()) && !lan::chat_open(&self.remotes) {
+                let scan = keys::dik_code(code);
+                if scan.is_some() && self.game_keys.iter().any(|b| b.action.eq_ignore_ascii_case("radio_ptt") && Some(b.scan_code) == scan) {
+                    if let Some(r) = self.phonie.as_mut() {
+                        r.ptt = pressed;
+                    }
+                    if !matches!(code, KeyCode::ControlLeft | KeyCode::ControlRight | KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::AltLeft | KeyCode::AltRight) {
+                        return;
+                    }
+                }
+            }
             // LAN chat: its keys (`chat_open`, '/' or '`', and `chat_toggle`, V, in keyboard.cfg's
             // [game]: the player can move them, #130) open the line and show or hide the
             // chat, and while the line is open the keys are its own
@@ -694,6 +707,22 @@ impl App {
             self.lan_command(from, &text);
         }
         self.tick_voice(dt);
+        self.tick_radio();
+    }
+
+    /// The dispatch radio (`phonie`), once a frame of a session.
+    fn tick_radio(&mut self) {
+        let (Some(lan), Some(radio)) = (self.lan.as_mut(), self.phonie.as_mut()) else {
+            if self.lan.is_none() {
+                self.phonie = None;
+            }
+            return;
+        };
+        // (the bus driven may have a terminal of its own: its scripts see the radio)
+        if let Some(p) = self.player.as_mut() {
+            radio.bus_link(&mut p.vehicle, lan);
+        }
+        radio.tick(lan, self.audio.as_ref(), 1.0);
     }
 
     /// A command another player's game sent ours (`LanSession::command`).
@@ -720,6 +749,13 @@ impl App {
                 if let Some(l) = self.lan.as_mut() {
                     l.command(from, &answer);
                 }
+            }
+            return;
+        }
+        // the dispatch radio (`phonie`): where ours stands, from the server
+        if let Some(arg) = text.strip_prefix("radio ") {
+            if from == 1 && lan.role == omsi_net::Role::Client {
+                self.phonie.get_or_insert_with(crate::phonie::Radio::new).on_command(arg);
             }
             return;
         }
@@ -1359,6 +1395,15 @@ impl App {
             }
             return;
         }
+        // the dispatch radio's button: a request to be called
+        if self.ui.as_ref().is_some_and(|u| u.radio_hovered) {
+            if pressed {
+                if let (Some(r), Some(l)) = (self.phonie.as_mut(), self.lan.as_mut()) {
+                    r.request(l);
+                }
+            }
+            return;
+        }
         // a click on the chat opens its input box (and is the chat's, not the cockpit's)
         if pressed && self.lan.is_some() && self.settings.chat {
             if self.ui.as_ref().map(|u| u.chat.hovered).unwrap_or(false) {
@@ -1520,6 +1565,7 @@ impl App {
         Some(match name {
             "Shift" => ShiftLeft,
             "Ctrl" => ControlLeft,
+            "RCtrl" => ControlRight,
             "Alt" => AltLeft,
             "." => Period,
             "," => Comma,

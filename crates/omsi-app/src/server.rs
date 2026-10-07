@@ -50,6 +50,10 @@ pub(crate) struct ServerCfg {
     pub share_positions: bool,
     /// The GreenTeaSpeak server and channel the players talk in (`voice`).
     pub voice: Option<crate::voice::VoiceServer>,
+    /// Only games with these features get in (`omsi_net::FEATURES`: `radio`), and what one
+    /// without them is told.
+    pub require: Vec<String>,
+    pub require_message: String,
 }
 
 pub(crate) const DEFAULT_CFG: &str = "\
@@ -111,6 +115,11 @@ vehicles =
 # positions - for a live map of the server on a website; tell your players when it is on
 share_positions = 0
 
+# only games with these features get in (separated by commas): radio - the dispatch radio
+# (a game that does not have it is turned away and shown require_message; empty: any game)
+require =
+require_message =
+
 # voice chat: the players hear each other where they stand, through GreenTeaSpeak and its
 # openOMSI plugin (as SaltyChat does for FiveM). voice_server_uid is the voice server's unique
 # id (its info panel; needed: without it there is no voice chat), voice_channel the in-game
@@ -170,6 +179,8 @@ impl ServerCfg {
             vehicles: kv.get("vehicles").map(|v| v.split(';').map(|x| x.trim().replace('\\', "/")).filter(|x| !x.is_empty()).collect()).unwrap_or_default(),
             share_positions: flag("share_positions", false),
             voice: crate::voice::VoiceServer::from_kv(|k| kv.get(k).cloned()),
+            require: kv.get("require").map(|v| v.split([',', ';', ' ']).map(|x| x.trim().to_ascii_lowercase()).filter(|x| !x.is_empty()).collect()).unwrap_or_default(),
+            require_message: get("require_message", ""),
         })
     }
 }
@@ -205,6 +216,7 @@ pub(crate) fn prepare(args: &mut Args, path: &Path) -> Result<ServerCfg> {
     crate::real_time::set_server_real(cfg.real_time);
     let _ = SERVER_VEHICLES.set(cfg.vehicles.clone());
     let _ = SERVER_VOICE.set(cfg.voice.clone());
+    let _ = SERVER_REQUIRE.set((cfg.require.clone(), cfg.require_message.clone()));
     args.map = cfg.map.clone();
     args.time = cfg.time.clone();
     if let Some(d) = &cfg.date {
@@ -245,6 +257,8 @@ pub(crate) static SERVER_METAR: std::sync::OnceLock<Option<String>> = std::sync:
 
 /// The buses a dedicated server allows (`vehicles`; empty: every bus it has).
 pub(crate) static SERVER_VEHICLES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+/// What a joining game must have (`ServerCfg::require`) and what one without it is told.
+pub(crate) static SERVER_REQUIRE: std::sync::OnceLock<(Vec<String>, String)> = std::sync::OnceLock::new();
 
 /// Whether a `vehicles` list allows the bus `file` (an empty list: every bus). A player's
 /// game may name it with a folder before it (`D:/OMSI 2/Vehicles/…/….bus`).

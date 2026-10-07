@@ -206,6 +206,36 @@ station), or `SndExt_Radio` (the station button, 0 = off) with `SndVol_Radio` (t
 its `magnitola_1` (`frequency@station`, `@` the line break) gets the map's frequency for the
 place in its first line and the station and song in its second.
 
+## Dispatch radio (Phonie SAE): a terminal in the cab
+
+On a dedicated server that runs the dispatch radio (see SERVER.md), a bus's scripts see
+the radio and can work it: a radio set or an SAE terminal of the bus's own, with its
+lamps, its call button and the key of its handset. Each variable is used only when the
+bus declares it in a varlist; the game writes the first ones every frame and reads the
+last two.
+
+| Variable | Written by | Values |
+| --- | --- | --- |
+| `Phonie_State` | game | 0 free (a request can go out), 1 a request is out, 2 a call is on, 3 no radio (none on the server, or no dispatcher on duty) |
+| `Phonie_Call` | game | 0 no call, 1 individual, 2 selective, 3 general |
+| `Phonie_Talk` | game | 0 nobody, 1 the dispatcher, 2 the driver (in an individual call) |
+| `Phonie_Request` | game | 1 while our request waits (a minute at the most) |
+| `Phonie_PTT` | game | 1 while the push-to-talk is held (the key or the cab's) |
+| `Phonie_Sending` | game | 1 while our voice goes out |
+| `Phonie_Receiving` | game | 1 while a voice comes in |
+| `Phonie_Cmd_Request` | script | set to 1 to ask the dispatcher for a call; the game sets it back to 0 |
+| `Phonie_Cmd_PTT` | script | 1 while the cab's push-to-talk is held (as the game's key) |
+
+A request goes out only when one can (`Phonie_State` 0), and the driver talks only in an
+individual call while the dispatcher does not. A script might light a lamp with
+`(L.L.Phonie_State) 2 =` and send a request from a button's trigger:
+
+```
+{trigger:bus_phonie_call}
+    1 (S.L.Phonie_Cmd_Request)
+{end}
+```
+
 ## What stays as in OMSI 2
 
 The following behave as in OMSI 2 so that existing content works unchanged:

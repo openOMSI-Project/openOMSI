@@ -385,6 +385,7 @@ pub(crate) fn run_offscreen(
     let mut spray = puddles::Spray::new();
     let spray_wet = puddles::road_wetness(initial_wetness(&weather), weather.snow);
     let spray_wind = Vec3::new(weather.wind.0.to_radians().sin(), weather.wind.0.to_radians().cos(), 0.0) * weather.wind.1 * puddles::GROUND_WIND;
+    let mut srv_radio: Option<crate::phonie::RadioServer> = None;
     let mut real_time = RealTime::default();
     for i in 0..total_frames {
         let t_s = i as f32 * dt;
@@ -437,8 +438,20 @@ pub(crate) fn run_offscreen(
             if let Some(l) = lan_off.as_mut() {
                 let positions = |id: u32| remotes_off.remotes.get(&id).map(|r| (r.vehicle().position, r.vehicle().heading));
                 srv_admin.prune(l);
+                // the dispatch radio (`phonie`): the web dispatch page's consoles come in with
+                // the admin password, so a server with one runs it
+                if srv_radio.is_none() && !srv_admin.password.is_empty() {
+                    srv_radio = Some(crate::phonie::RadioServer::new());
+                }
                 for (from, text) in l.take_commands() {
+                    if let (Some(arg), Some(radio)) = (text.strip_prefix("radio "), srv_radio.as_mut()) {
+                        radio.command(from, arg);
+                        continue;
+                    }
                     crate::admin::server_command(l, from, &text, &mut srv_admin, &positions);
+                }
+                if let Some(radio) = srv_radio.as_mut() {
+                    radio.tick(l, dt);
                 }
                 // a tool on this machine (POST /admin, checked by the gateway): an admin of its own
                 for text in crate::lan::take_local_admin() {

@@ -20,6 +20,9 @@ pub struct StreamInner {
     /// How much is gathered before playing starts again after a stall, in seconds: a
     /// connection that stalled once tends to stall again, so each stall asks for more.
     prebuffer: f32,
+    /// A live voice (`StreamBuf::live`): the prebuffer stays as it is after a stall - a
+    /// two-way radio goes quiet between two calls, it is no stall to wait longer for.
+    live: bool,
     /// The voice ends (the radio was switched off or to another station).
     pub closed: bool,
 }
@@ -35,7 +38,9 @@ impl StreamInner {
         }
         if self.frames.len() < 2 {
             self.playing = false;
-            self.prebuffer = (self.prebuffer + 1.0).min(6.0);
+            if !self.live {
+                self.prebuffer = (self.prebuffer + 1.0).min(6.0);
+            }
             return None;
         }
         Some((self.frames[0], self.frames[1]))
@@ -54,6 +59,7 @@ impl Default for StreamBuf {
                 frames: VecDeque::new(),
                 playing: false,
                 prebuffer: 1.5,
+                live: false,
                 closed: false,
             }),
             status: Mutex::new(String::new()),
@@ -62,6 +68,19 @@ impl Default for StreamBuf {
 }
 
 impl StreamBuf {
+    /// A buffer for a live voice (the dispatch radio): it plays once `prebuffer` seconds
+    /// are in, and again as soon after every pause.
+    pub fn live(rate: u32, prebuffer: f32) -> StreamBuf {
+        let b = StreamBuf::default();
+        {
+            let mut i = b.inner.lock();
+            i.rate = rate;
+            i.prebuffer = prebuffer;
+            i.live = true;
+        }
+        b
+    }
+
     pub(crate) fn lock(&self) -> MutexGuard<'_, StreamInner> {
         self.inner.lock()
     }

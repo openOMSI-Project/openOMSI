@@ -1048,7 +1048,13 @@ pub fn start(args: &Args) -> Option<LanSession> {
                 (*port, false)
             };
             match LanSession::host(p, &player_name(args), world, try_next) {
-                Ok(s) => Some(s),
+                Ok(mut s) => {
+                    // a dedicated server that lets in only some games (`require`)
+                    if let Some((features, message)) = crate::server::SERVER_REQUIRE.get() {
+                        s.require(features.clone(), message.clone());
+                    }
+                    Some(s)
+                }
                 Err(e) => {
                     log::warn!("LAN: cannot host on port {p}: {e}");
                     write_failure(&format!("cannot host on port {p}: {e}"));

@@ -81,6 +81,7 @@ pub mod wire;
 pub mod world;
 pub mod vars;
 pub mod ws;
+pub mod dispatch;
 pub mod tunnel;
 pub mod official;
 
@@ -104,6 +105,10 @@ pub use wire::{
 /// 6: up to 63 sound and moving-part values in a state (a 6-bit count: the AA-FR Agora's
 /// sound variables alone filled the 31 there was room for).
 pub const PROTOCOL: u32 = 6;
+/// What this game can do beyond the protocol, said in its `HELLO` (comma-separated): a
+/// server may let in only games that can (`LanSession::require`) - `radio`: the dispatch
+/// radio (`dispatch`). A host that knows nothing of it reads past it.
+pub const FEATURES: &str = "radio";
 /// (omsi-plugin's `MULTIPLAYER_PORTS` keeps `omsi.send` off this one and the `PORT_RANGE` after it.)
 pub const DEFAULT_PORT: u16 = 27015;
 /// Ports a host tries after the default one when that is taken (a second session on the
@@ -151,6 +156,8 @@ const MAX_FIELD: usize = 64;
 const STATE_RATE: (f32, f32) = (40.0, 40.0);
 const MESSAGE_RATE: (f32, f32) = (10.0, 20.0);
 const CHAT_RATE: (f32, f32) = (1.0, 3.0);
+/// The dispatch radio's voice frames (`dispatch`): 25 a second, a little more in a burst.
+const RADIO_RATE: (f32, f32) = (30.0, 40.0);
 // ---------------------------------------------------------------------------------------
 // session codes
 
@@ -1268,6 +1275,7 @@ pub struct Peer {
     states: Bucket,
     messages: Bucket,
     chat: Bucket,
+    radio: Bucket,
     /// Datagrams of this player the host threw away (too many at once).
     pub dropped: u32,
     /// The nonce of the player's hellos (host side).
@@ -1291,6 +1299,7 @@ impl Peer {
             states: Bucket::new(STATE_RATE.1),
             messages: Bucket::new(MESSAGE_RATE.1),
             chat: Bucket::new(CHAT_RATE.1),
+            radio: Bucket::new(RADIO_RATE.1),
             dropped: 0,
             history: std::collections::VecDeque::new(),
             nonce: None,
@@ -1432,8 +1441,14 @@ pub struct LanSession {
     gone_lately: Vec<(Option<u64>, String, u32, Instant)>,
     /// Players the host sent away (host): their nonces, so they are not let in again.
     banned: Vec<(u64, String)>,
+    /// The features a joining game must have (`FEATURES`), and what one without them is told.
+    required: Vec<String>,
+    required_message: String,
     /// Commands for this game (`command`): (from, text).
     commands: Vec<(u32, String)>,
+    /// The dispatch radio's frames that came: (who speaks, frame) - a host's from its
+    /// players, a client's from its host (see `dispatch`).
+    radio_in: Vec<(u32, Vec<u8>)>,
     /// How fast the session's clock runs (the host's time speed; a client: the host's as
     /// its clock messages say).
     pub clock_speed: f64,
@@ -1523,7 +1538,10 @@ impl LanSession {
             bridge: None,
             gone_lately: Vec::new(),
             banned: Vec::new(),
+            required: Vec::new(),
+            required_message: String::new(),
             commands: Vec::new(),
+            radio_in: Vec::new(),
             clock_speed: 1.0,
         }
     }
@@ -1832,9 +1850,66 @@ impl LanSession {
         }
     }
 
+    /// Host: let in only games that have these features (`FEATURES`); one without them is
+    /// turned away and told `message` (empty: a message that names the feature).
+    pub fn require(&mut self, features: Vec<String>, message: String) {
+        if !features.is_empty() {
+            log::info!("LAN: only games with {} get in", features.join(", "));
+        }
+        self.required = features;
+        self.required_message = message;
+    }
+
     /// The commands that came for this game: (from, text).
     pub fn take_commands(&mut self) -> Vec<(u32, String)> {
         std::mem::take(&mut self.commands)
+    }
+
+    /// A frame of the dispatch radio (`dispatch::Frame::to_bytes`): a client's goes to its
+    /// host, a host's to player `to` - `speaker` says whose voice it is.
+    pub fn send_radio(&self, to: u32, speaker: u32, frame: &[u8]) {
+        let d = dispatch::datagram(speaker, frame);
+        let addr = match self.role {
+            Role::Host => self.peers.get(&to).and_then(|p| p.addr),
+            Role::Client => self.host,
+        };
+        if let Some(a) = addr {
+            self.send(&d, a);
+        }
+    }
+
+    /// The radio's frames that came since the last call: (who speaks, frame). A host's are
+    /// its players' own voices (the speaker is the player the datagram came from).
+    pub fn take_radio(&mut self) -> Vec<(u32, Vec<u8>)> {
+        std::mem::take(&mut self.radio_in)
+    }
+
+    fn on_radio(&mut self, data: &[u8], from: SocketAddr) {
+        let Some((speaker, frame)) = dispatch::read_datagram(data) else {
+            return;
+        };
+        match self.role {
+            Role::Host => {
+                // a player speaks for itself only, within its rate
+                let Some(id) = self.peers.iter().find(|(_, p)| p.addr == Some(from)).map(|(id, _)| *id) else {
+                    return;
+                };
+                let Some(peer) = self.peers.get_mut(&id) else {
+                    return;
+                };
+                if !peer.radio.take(RADIO_RATE) {
+                    return;
+                }
+                if self.radio_in.len() < 256 {
+                    self.radio_in.push((id, frame.to_vec()));
+                }
+            }
+            Role::Client => {
+                if self.radio_in.len() < 256 {
+                    self.radio_in.push((speaker, frame.to_vec()));
+                }
+            }
+        }
     }
 
     fn on_command(&mut self, parts: &[&str], from: SocketAddr) {
@@ -2136,7 +2211,7 @@ impl LanSession {
             "-".to_string()
         };
         let msg = format!(
-            "HELLO|{PROTOCOL}|{session}|{}|{}|{}|{:016X}",
+            "HELLO|{PROTOCOL}|{session}|{}|{}|{}|{:016X}|{FEATURES}",
             self.my_name,
             vehicle_path(&mine.bus).unwrap_or_default(),
             self.world.fields(),
@@ -2536,6 +2611,10 @@ impl LanSession {
             }
             if data[0] == vars::VARS_MAGIC {
                 self.on_vars(&data, from);
+                continue;
+            }
+            if data[0] == dispatch::RADIO_MAGIC {
+                self.on_radio(&data, from);
                 continue;
             }
             let Ok(text) = std::str::from_utf8(&data) else {
@@ -2987,6 +3066,18 @@ impl LanSession {
         if proto != PROTOCOL {
             log::warn!("LAN: {from} speaks protocol {proto}, we speak {PROTOCOL}; turned away");
             self.reject(from, &format!("the host runs LAN protocol {PROTOCOL}, your game protocol {proto} - both players need the same version of the game"));
+            return;
+        }
+        // a game without what this host requires (an older one, or another build of it)
+        let has: Vec<&str> = field(parts, 11).split(',').map(str::trim).collect();
+        if let Some(missing) = self.required.iter().find(|f| !has.contains(&f.as_str())) {
+            log::warn!("LAN: '{name}' at {from} has no {missing} in its game; turned away");
+            let why = if self.required_message.is_empty() {
+                format!("this server needs a game with the {missing} feature - update openOMSI")
+            } else {
+                self.required_message.clone()
+            };
+            self.reject(from, &why);
             return;
         }
         let asked = field(parts, 2);

@@ -93,6 +93,10 @@ impl ApplicationHandler for App {
                 self.input_back();
             }
             WindowEvent::Focused(false) => {
+                // (a key let go elsewhere never comes back up: the radio stops sending)
+                if let Some(r) = self.phonie.as_mut() {
+                    r.ptt = false;
+                }
                 self.finish_vr_nav_edit();
                 self.window_focused = false;
                 if let Some(ctl) = self.controllers.as_mut() {
@@ -2493,6 +2497,7 @@ impl ApplicationHandler for App {
                             || self.vr_nav_edit.is_some()
                             || self.chooser.is_some()
                             || ui.chat.hovered
+                            || ui.radio_hovered
                             || map_open
                             || (!vr_active && self.navigator.as_ref().is_some_and(|n| n.over_panel(cx, cy)));
                         let dropdown = self.dropdown.as_ref().filter(|_| self.chooser.is_some()).map(|d| ui::DropdownView {
@@ -2554,6 +2559,7 @@ impl ApplicationHandler for App {
                             tags,
                             notices: &self.notices,
                             notice_anchor: self.navigator.as_ref().and_then(|n| n.screen_rect()),
+                            radio: self.phonie.as_ref().and_then(|r| r.hud()),
                         };
                         ui.draw_at(r, scene, &frame, dt, hud[0]);
                     }

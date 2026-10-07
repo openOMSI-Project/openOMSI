@@ -14,6 +14,7 @@ mod discord;
 #[cfg(steam)]
 mod steam;
 mod voice;
+mod phonie;
 mod head_idle;
 mod headtrack;
 #[cfg(windows)]
@@ -542,6 +543,7 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
         #[cfg(steam)]
         steam: None,
         voice: None,
+        phonie: None,
         headtrack: None,
         headtrack_failed: None,
         headtrack_scale_last: None,

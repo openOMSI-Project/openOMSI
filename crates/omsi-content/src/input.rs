@@ -125,6 +125,11 @@ impl KeyboardCfg {
         // presses one twice and passes through a view they did not want). On the list unbound,
         // as the indicator toggles are: whoever wants it gives it a key, and nobody else loses
         // one to it.
+        // the dispatch radio's push to talk (a dedicated server's `phonie`): the right Ctrl
+        // key (DIK 157), held on its own
+        if !self.game.iter().any(|b| b.action.eq_ignore_ascii_case("radio_ptt")) {
+            self.game.push(KeyBinding { action: "radio_ptt".into(), scan_code: 157, modifier: 0 });
+        }
         if !self.game.iter().any(|b| b.action.eq_ignore_ascii_case("view_toggle_interior")) {
             self.game.push(KeyBinding { action: "view_toggle_interior".into(), scan_code: 0, modifier: 0 });
         }

@@ -1291,6 +1291,7 @@ fn known_action(a: &str) -> Option<String> {
         ("chat_open", "Multiplayer: write in the chat"),
         ("chat_toggle", "Multiplayer: show / hide the chat"),
         ("voice_radio", "Multiplayer: bus radio (hold)"),
+        ("radio_ptt", "Dispatch radio: push to talk"),
         ("sim_pause", "Pause"),
         ("screenshot", "Screenshot"),
         ("quicksave", "Quicksave"),
@@ -1314,7 +1315,16 @@ pub fn controls(l: &mut Launcher, area: Rect) {
     // a key pressed while one binding waits for it
     if let (Some((sec, idx)), Some(code)) = (l.pages.capturing, l.ui.input.raw_key) {
         use winit::keyboard::KeyCode as K;
+        // (the radio's push to talk is held on its own: a Ctrl, Shift or Alt key alone is a key for it)
+        let alone = l.state.keybindings.get(["vehicles", "game"][sec]).and_then(|a| a.as_array()).and_then(|a| a.get(idx)).and_then(|b| b.get("action")).and_then(|a| a.as_str()).is_some_and(|a| a.eq_ignore_ascii_case("radio_ptt"));
         if code == K::Escape {
+            l.pages.capturing = None;
+        } else if alone && matches!(code, K::ShiftLeft | K::ShiftRight | K::ControlLeft | K::ControlRight | K::AltLeft | K::AltRight) {
+            if let (Some(scan), Some(b)) = (crate::keys::dik_code(code), l.state.keybindings.get_mut("game").and_then(|a| a.as_array_mut()).and_then(|a| a.get_mut(idx))) {
+                b["scan_code"] = json!(scan);
+                b["modifier"] = json!(0);
+            }
+            save_keys(l, false);
             l.pages.capturing = None;
         } else if !matches!(code, K::ShiftLeft | K::ShiftRight | K::ControlLeft | K::ControlRight | K::AltLeft | K::AltRight | K::SuperLeft | K::SuperRight) {
             match crate::keys::dik_code(code) {
