@@ -267,6 +267,11 @@ impl ApplicationHandler for App {
                 button: winit::event::MouseButton::Left,
                 ..
             } => {
+                // while the plugins' panels have the mouse its clicks are theirs, none the bus's
+                if self.plugin_focus() {
+                    self.plugin_click(state == ElementState::Pressed);
+                    return;
+                }
                 if self.touch.enabled {
                     let p = glam::Vec2::new(self.cursor.0, self.cursor.1);
                     if state == ElementState::Pressed {
@@ -702,6 +707,7 @@ impl ApplicationHandler for App {
                     || self.chooser.is_some()
                     || self.list_kind.is_some()
                     || self.navigator.as_ref().is_some_and(|n| n.map_open())
+                    || crate::plugin_ui::focused(&self.plugins)
                     || !matches!(self.view.as_str(), "driver" | "outside" | "pax");
                 let hide = (moved || actions.iter().any(|a| a.1)) && !needs_mouse && !vr_on;
                 if self.vr_nav_edit.is_none() && hide != self.cursor_hidden.is_some() && (hide || needs_mouse) {
@@ -778,7 +784,10 @@ impl ApplicationHandler for App {
                 // mouse steering asks only for a player's vehicle, 0x6f4257; not on foot,
                 // #516)
                 let bus_view = self.mouse_steers_in_view();
-                if let (true, Some(s)) = (self.mouse_drive && bus_view && !self.mouse_look && !self.input_away
+                // (the plugins' panels having the mouse hold the wheel and the pedals as
+                // looking round does: the cursor goes to their buttons)
+                let panels_mouse = self.plugin_focus();
+                if let (true, Some(s)) = (self.mouse_drive && bus_view && !self.mouse_look && !self.input_away && !panels_mouse
                                               && self.game_menu.is_none(), self.surface.as_ref()) {
                     let (w, h) = (s.config.width as f32, s.config.height as f32);
                     if std::mem::take(&mut self.center_cursor) {
@@ -839,7 +848,7 @@ impl ApplicationHandler for App {
                     }
                     analog.throttle = Some(self.mouse_pedals.0);
                     analog.brake = Some(self.mouse_pedals.1);
-                } else if self.mouse_drive && bus_view && (self.mouse_look || self.input_away)
+                } else if self.mouse_drive && bus_view && (self.mouse_look || self.input_away || panels_mouse)
                     && self.game_menu.is_none() {
                     // looking round with the right button: the wheel and the pedals stay where
                     // the mouse left them, as in OMSI (they went slack until the button was let
@@ -2219,6 +2228,10 @@ impl ApplicationHandler for App {
                             lines.push(format!("Change due: {owed:.2}"));
                         }
                     }
+                    // (the cursor no longer works the cab: how to have it back)
+                    if crate::plugin_ui::focused(&self.plugins) {
+                        lines.push(crate::plugin_ui::FOCUS_NOTE.into());
+                    }
                     let __t = Instant::now();
                     // (the frame's overlays start empty; the notes are the interface's, in
                     // Roboto - OMSI's bitmap font HUD is the start menu's and the offscreen
@@ -2337,6 +2350,37 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
+                    // the Lua plugins' panels (`omsi.ui`): over the picture and the navigator,
+                    // under the game's own interface; not under its menus, nor in VR
+                    let plugin_focus = crate::plugin_ui::focused(&self.plugins);
+                    if let Some(plugin_ui) = self.plugins.as_ref().map(|p| p.ui.clone()) {
+                        let dpi = self
+                            .window
+                            .as_ref()
+                            .map_or(1.0, |w| w.scale_factor() as f32);
+                        let settings = &self.settings;
+                        let size = ui::size_factor(
+                            hud[3],
+                            dpi,
+                            settings.ui_scale,
+                            settings.ui_scale_window,
+                        );
+                        let map_open = self.navigator.as_ref().is_some_and(|n| n.map_open());
+                        let frame = crate::plugin_ui::PanelsFrame {
+                            hud,
+                            scale: dpi * size,
+                            hidden: vr_active
+                                || self.game_menu.is_some()
+                                || self.chooser.is_some()
+                                || map_open,
+                            cursor: self.cursor,
+                            dt,
+                            backdrop: ui::backdrop(settings.ui_opacity),
+                            navigator: self.navigator.as_ref().and_then(|n| n.screen_rect()),
+                        };
+                        let mut state = plugin_ui.borrow_mut();
+                        self.plugin_panels.frame(r, scene, &mut state, &frame);
+                    }
                     if let (Some(ui), Some(s)) = (self.ui.as_mut(), self.surface.as_ref()) {
                         let scale = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
                         let (w, h) = (hud[2], hud[3]);
@@ -2387,6 +2431,7 @@ impl ApplicationHandler for App {
                         let (cx, cy) = self.cursor;
                         let map_open = self.navigator.as_ref().is_some_and(|n| n.map_open());
                         let covered = self.game_menu.is_some()
+                            || plugin_focus
                             || self.vr_nav_edit.is_some()
                             || self.chooser.is_some()
                             || ui.chat.hovered

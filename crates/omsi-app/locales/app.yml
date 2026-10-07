@@ -25631,3 +25631,10 @@ _version: 2
   it: "l’host ti ha escluso da questa sessione"
   nl: "de host heeft je uit deze sessie gestuurd"
   tr: "ev sahibi seni bu oturumdan attı"
+"The mouse is on the plugin panels · Esc gives it back":
+  de: "Die Maus ist auf den Plugin-Fenstern · Esc gibt sie zurück"
+  nl: "De muis staat op de pluginpanelen · Esc geeft hem terug"
+  fr: "La souris est sur les panneaux des plugins · Échap la rend"
+  ru: "Мышь на панелях плагинов · Esc возвращает её"
+  uk: "Миша на панелях плагінів · Esc повертає її"
+  pl: "Mysz jest na panelach wtyczek · Esc ją oddaje"

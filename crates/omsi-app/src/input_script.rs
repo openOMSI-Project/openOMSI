@@ -151,6 +151,10 @@ impl App {
                 n.toggle_map();
                 return;
             }
+            // and gives the mouse back to the bus when the plugins' panels have it
+            if self.release_plugin_focus() {
+                return;
+            }
         }
         let event_key = PhysicalKey::Code(code);
         if let (Some(m), PhysicalKey::Code(code)) = (self.menu.as_mut(), event_key) {

@@ -165,6 +165,8 @@ pub(crate) struct App {
     /// What happened since the Lua plugins' last frame: crashes, people knocked down,
     /// stops skipped (see `plugins::queue_event`).
     pub(crate) plugin_events: Vec<omsi_plugin::GameEvent>,
+    /// The Lua plugins' panels and notifications on the screen (`omsi.ui`).
+    pub(crate) plugin_panels: crate::plugin_ui::PluginPanels,
     /// Seconds Ctrl+Shift+Page Up/Down has been held (the clock runs faster the longer).
     pub(crate) clock_hold: f32,
     /// How far the clock was set since the timetable was last put out again (s; see

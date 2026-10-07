@@ -26,6 +26,7 @@
 //! Wine elsewhere). The frame is one round trip.
 
 pub mod lua;
+pub mod ui;
 
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -724,6 +725,8 @@ pub struct Plugins {
     pub loaded: Vec<Plugin>,
     /// The Lua plugins (`plugins/*.lua`, `plugins/<name>/main.lua`).
     pub lua: Vec<lua::LuaPlugin>,
+    /// What the Lua plugins show on the screen (`omsi.ui`), for the game to draw.
+    pub ui: ui::SharedUi,
 }
 
 impl Plugins {
@@ -748,6 +751,7 @@ impl Plugins {
             }
         }
         let mut lua = Vec::new();
+        let ui = ui::SharedUi::default();
         let mut seen = std::collections::HashSet::new();
         for dir in dirs {
             for path in lua::find_lua(dir) {
@@ -755,7 +759,7 @@ impl Plugins {
                 if !seen.insert(key) {
                     continue;
                 }
-                match lua::LuaPlugin::load(&path, &mut lua::NoVehicle) {
+                match lua::LuaPlugin::load_with_ui(&path, &mut lua::NoVehicle, ui.clone()) {
                     Ok(p) => {
                         log::info!("Lua plugin {} loaded ({})", p.name, path.display());
                         lua.push(p);
@@ -764,7 +768,7 @@ impl Plugins {
                 }
             }
         }
-        Plugins { loaded, lua }
+        Plugins { loaded, lua, ui }
     }
 
     pub fn is_empty(&self) -> bool {

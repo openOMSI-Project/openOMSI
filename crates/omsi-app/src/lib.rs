@@ -98,6 +98,7 @@ mod on_foot;
 mod route_arrows;
 mod server;
 mod player;
+mod plugin_ui;
 mod plugins;
 mod services;
 mod situation;
@@ -528,6 +529,7 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
         pane_scroll: None,
         plugin_keys: Vec::new(),
         plugin_events: Vec::new(),
+        plugin_panels: Default::default(),
         clock_hold: 0.0,
         clock_jump: 0.0,
         seat_bus: String::new(),
