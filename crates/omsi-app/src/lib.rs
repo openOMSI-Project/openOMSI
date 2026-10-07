@@ -120,9 +120,31 @@ const _LOCALES: &str = include_str!("../locales/app.yml");
 /// Show the interface in `code` (the settings' ENG / DEU / FRA / RUS).
 pub(crate) fn ui_language(code: &str) {
     omsi_ui::i18n::set_lookup(|lang, text| _rust_i18n_try_translate(lang, text).map(|t| t.into_owned()));
+    static TEMPLATES: std::sync::Once = std::sync::Once::new();
+    TEMPLATES.call_once(|| omsi_ui::i18n::set_templates(locale_keys(_LOCALES)));
     let iso = omsi_launcher_lib::language_iso(code);
     omsi_ui::i18n::set_language(iso);
     omsi_sim::vehicle_api::set_locale(iso);
+}
+
+fn locale_keys(yml: &str) -> impl Iterator<Item = String> + '_ {
+    yml.lines().filter_map(|l| l.strip_prefix('"')?.strip_suffix("\":")).filter(|k| k.contains('{')).filter_map(|k| {
+        let mut out = String::new();
+        let mut chars = k.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            out.push(match chars.next()? {
+                'n' => '\n',
+                't' => '\t',
+                x @ ('"' | '\\') => x,
+                _ => return None,
+            });
+        }
+        Some(out)
+    })
 }
 
 use anyhow::{anyhow, Context, Result};
@@ -703,5 +725,35 @@ mod tests {
             None,
         );
         assert_eq!(both, vec![DVec3::new(10.0, 20.0, 0.0), cam.position]);
+    }
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use omsi_ui::i18n::{templated, templates};
+
+    fn fr(key: &str) -> Option<String> {
+        super::_rust_i18n_try_translate("fr", key).map(|t| t.into_owned())
+    }
+
+    #[test]
+    fn the_template_keys_of_the_tables_are_read_as_the_code_writes_them() {
+        let raw = super::_LOCALES.lines().filter(|l| l.starts_with('"') && l.contains('{')).count();
+        assert_eq!(super::locale_keys(super::_LOCALES).count(), raw);
+        let used: Vec<String> = templates(super::locale_keys(super::_LOCALES)).into_iter().map(|(k, _)| k).collect();
+        for k in ["Graphics profile \"{name}\" not found", "Mirror panel added ({} in all)", "Head tracking with opentrack (UDP port {})"] {
+            assert!(used.iter().any(|x| x == k), "{k}");
+        }
+    }
+
+    #[test]
+    fn a_translated_template_is_left_as_it_is_when_translated_again() {
+        let t = templates(super::locale_keys(super::_LOCALES));
+        for (key, _) in &t {
+            let mut n = 0;
+            let sample: String = key.split('{').enumerate().map(|(i, s)| if i == 0 { s.to_string() } else { n += 1; format!("V{n}{}", &s[s.find('}').unwrap() + 1..]) }).collect();
+            let Some(once) = templated(&t, &sample, fr) else { continue };
+            assert!(templated(&t, &once, fr).is_none_or(|twice| twice == once), "{key}: {once}");
+        }
     }
 }

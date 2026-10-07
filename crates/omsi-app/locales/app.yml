@@ -22195,6 +22195,219 @@ _version: 2
   ms: "Hidup/matikan pengawal permainan"
   tl: "I-on/i-off ang mga game controller"
 
+"Graphics driver is slow ({upload:.0} MB/s): the game will stutter. Restarting the computer usually fixes it.":
+  fr: "Le pilote graphique est lent ({upload:.0} Mo/s) : le jeu va saccader. Redémarrer l'ordinateur règle généralement le problème."
+
+"Crash: {:.0} kJ":
+  fr: "Choc : {:.0} kJ"
+
+"Mirror {}: field of view {:.0}° (the bus's {:.0}°)":
+  fr: "Rétroviseur {} : champ de vision {:.0}° (celui du bus : {:.0}°)"
+
+"Mirror {} shifted {:+.2} m across, {:+.2} m forward, {:+.2} m up":
+  fr: "Rétroviseur {} décalé de {:+.2} m latéralement, {:+.2} m vers l'avant, {:+.2} m vers le haut"
+
+"Mirror {}: {:+.1}° across, {:+.1}° up":
+  fr: "Rétroviseur {} : {:+.1}° à l'horizontale, {:+.1}° à la verticale"
+
+"Mirror {}: {:+.1}° across, {:+.1}° up (Ctrl+Alt+arrows)":
+  fr: "Rétroviseur {} : {:+.1}° à l'horizontale, {:+.1}° à la verticale (Ctrl+Alt+flèches)"
+
+"The engine is off  ({e} electrics, {m} starter; mod buses with an ignition key turn it with {e}: press again and hold. Shift+U does it all)":
+  fr: "Le moteur est coupé  ({e} électricité, {m} démarreur ; les bus de mods avec clé de contact démarrent avec {e} : appuyez de nouveau et maintenez. Shift+U fait tout)"
+
+"The gearbox is in N: press {d}, or click it. Buses like the Citaro take D only with the brake held":
+  fr: "La boîte est sur N : appuyez sur {d} ou cliquez dessus. Les bus comme le Citaro ne passent en D qu'avec le frein enfoncé"
+
+"Parking brake is on  ({k} releases it)":
+  fr: "Le frein de stationnement est serré  ({k} le desserre)"
+
+"The tour starts at {}: the clock was moved from {from} to {}":
+  fr: "Le service commence à {} : l'horloge est passée de {from} à {}"
+
+"New object {name}: taken away (Delete brings it back)":
+  fr: "Nouvel objet {name} : retiré (Suppr le remet)"
+
+"New object {} {name}: V for the next of its folder, C copies it again":
+  fr: "Nouvel objet {} {name} : V pour le suivant de son dossier, C le copie à nouveau"
+
+"Object {id} {name}: deleted (Delete brings it back)":
+  fr: "Objet {id} {name} : supprimé (Suppr le remet)"
+
+"Object {id} {name}: moved {:+.2} / {:+.2} / {:+.2} m, turned {:+.1}°":
+  fr: "Objet {id} {name} : déplacé de {:+.2} / {:+.2} / {:+.2} m, tourné de {:+.1}°"
+
+"Ground brush: {:.1} m":
+  fr: "Pinceau de terrain : {:.1} m"
+
+"Press a button on {name} (Esc cancels)":
+  fr: "Appuyez sur un bouton de {name} (Échap annule)"
+
+"Graphics profile \"{name}\" loaded: graphics settings apply when the game starts the next time":
+  fr: "Profil graphique « {name} » chargé : les réglages graphiques s'appliquent au prochain lancement du jeu"
+
+"Graphics profile \"{name}\" not found":
+  fr: "Profil graphique « {name} » introuvable"
+
+"Line {line}, tour {}":
+  fr: "Ligne {line}, service {}"
+
+"Passenger waiting for a ticket: {name} {value:.2} - press {}":
+  fr: "Passager qui attend un billet : {name} {value:.2} - appuyez sur {}"
+
+"Mirror {} is back as the bus has it (Shift+R: every mirror)":
+  fr: "Le rétroviseur {} est revenu au réglage d'origine du bus (Shift+R : tous les rétroviseurs)"
+
+"Saved {} tile(s) to the content folder ({})":
+  fr: "{} tuile(s) enregistrée(s) dans le dossier de contenu ({})"
+
+"Saved as slot {n}: the launcher continues from it":
+  fr: "Enregistré dans l'emplacement {n} : le lanceur reprend à partir de là"
+
+"Host's mods: {pct}% ({:.0} of {:.0} MB) {file}":
+  fr: "Mods de l'hôte : {pct} % ({:.0} sur {:.0} Mo) {file}"
+
+"Host's mods: {} files ({:.0} MB) fetched (kept for the next join)":
+  fr: "Mods de l'hôte : {} fichiers ({:.0} Mo) récupérés (gardés pour la prochaine fois)"
+
+"Line {line} · tour {t} · {map}":
+  fr: "Ligne {line} · service {t} · {map}"
+
+"Line {line} · choose a tour · {map}":
+  fr: "Ligne {line} · choisissez un service · {map}"
+
+"Automatic ({auto})":
+  fr: "Automatique ({auto})"
+
+"No duty chosen: free driving on {map}. Pick a line and a tour under Route to see the roadbook here.":
+  fr: "Aucun service choisi : conduite libre sur {map}. Choisissez une ligne et un service sous Itinéraire pour voir la feuille de route ici."
+
+"Line {} · tour {} · from {}":
+  fr: "Ligne {} · service {} · départ {}"
+
+"Depot file {} has no entries for this line. Type line {} and the terminus code by hand, or press Shift+U.":
+  fr: "Le fichier de dépôt {} n'a aucune entrée pour cette ligne. Saisissez la ligne {} et le code du terminus à la main, ou appuyez sur Shift+U."
+
+"Depot file {} · Shift+U in the game types it for you":
+  fr: "Fichier de dépôt {} · Shift+U dans le jeu le saisit pour vous"
+
+"Personnel file of {name} deleted.":
+  fr: "Dossier de {name} supprimé."
+
+"Driver {name} created.":
+  fr: "Conducteur {name} créé."
+
+"Loaded \"{name}\".":
+  fr: "« {name} » chargé."
+
+"Deleted \"{name}\".":
+  fr: "« {name} » supprimé."
+
+"Saved \"{name}\".":
+  fr: "« {name} » enregistré."
+
+"Automatic ({} here)":
+  fr: "Automatique ({} ici)"
+
+"Gear {gear} (H-pattern)":
+  fr: "Rapport {gear} (grille en H)"
+
+"Driving keys: {name} (Settings). Those keys drive the bus and win over the list below. Change any key here and your own layout (Custom controls) is used from then on.":
+  fr: "Touches de conduite : {name} (Paramètres). Ces touches conduisent le bus et l'emportent sur la liste ci-dessous. Changez une touche ici et votre propre disposition (Commandes personnalisées) est utilisée dès lors."
+
+"Add \"{new_action}\" and give it a key":
+  fr: "Ajouter « {new_action} » et lui donner une touche"
+
+"Anything put into {} is installed by itself once it has finished copying.":
+  fr: "Tout ce qui est mis dans {} s'installe tout seul une fois la copie terminée."
+
+"Line {line} · tour {t}":
+  fr: "Ligne {line} · service {t}"
+
+"Line {line} · choose a tour":
+  fr: "Ligne {line} · choisissez un service"
+
+"Real weather from {home} (ICAO can be changed)":
+  fr: "Météo réelle de {home} (code OACI modifiable)"
+
+"The server plays {}, which is not installed here: it is fetched from the server on joining.":
+  fr: "Le serveur utilise la carte {}, qui n'est pas installée ici : elle sera téléchargée depuis le serveur à la connexion."
+
+"The host drives on {name}: that map is chosen":
+  fr: "L'hôte conduit sur {name} : cette carte est choisie"
+
+"Game {pid} ended by itself.":
+  fr: "Le jeu {pid} s'est terminé tout seul."
+
+"Game {pid} did not end by itself and was killed - this run is not saved.":
+  fr: "Le jeu {pid} ne s'est pas terminé tout seul et a été arrêté de force - cette session n'est pas enregistrée."
+
+"The timetable of {map_folder} is the map's own again (the edited copy was removed)":
+  fr: "L'horaire de {map_folder} est de nouveau celui de la carte (la copie modifiée a été supprimée)"
+
+"The timetable of {map_folder} has not been changed here":
+  fr: "L'horaire de {map_folder} n'a pas été modifié ici"
+
+"Line {name} is there already":
+  fr: "La ligne {name} existe déjà"
+
+"Line {name} added: give it tours, then save":
+  fr: "Ligne {name} ajoutée : donnez-lui des services, puis enregistrez"
+
+"Save all ({n} lines)":
+  fr: "Tout enregistrer ({n})"
+
+"You have {current}. Update now? The launcher downloads the new version ({}) from GitHub and Android installs it; openOMSI then starts again - your mods and settings stay as they are.":
+  fr: "Vous avez {current}. Mettre à jour maintenant ? Le lanceur télécharge la nouvelle version ({}) depuis GitHub et Android l'installe ; openOMSI redémarre ensuite - vos mods et réglages restent tels quels."
+
+"You have {current}. Update now? The launcher downloads the new version ({}) from GitHub, puts it in place of this one and starts again - your mods and settings stay as they are.":
+  fr: "Vous avez {current}. Mettre à jour maintenant ? Le lanceur télécharge la nouvelle version ({}) depuis GitHub, la met à la place de celle-ci et redémarre - vos mods et réglages restent tels quels."
+
+"All {n} mirrors of this bus have a panel already":
+  fr: "Les {n} rétroviseurs de ce bus ont déjà un panneau"
+
+"Mirror panel added ({} in all)":
+  fr: "Panneau de rétroviseur ajouté ({} au total)"
+
+"Mirror panel removed ({} left)":
+  fr: "Panneau de rétroviseur retiré (reste : {})"
+
+"Panel shows mirror {} of {}":
+  fr: "Le panneau montre le rétroviseur {} sur {}"
+
+"Downloading the translation model: {} %":
+  fr: "Téléchargement du modèle de traduction : {} %"
+
+"paid: {paid:.2}  (change {:.2})":
+  fr: "payé : {paid:.2}  (monnaie {:.2})"
+
+"KY_{action} added. Press its key now.":
+  fr: "KY_{action} ajouté. Appuyez maintenant sur la touche à lui attribuer."
+
+"This bus takes parts from vehicle pack(s) that are not installed: {} (install them for its displays and devices)":
+  fr: "Ce bus utilise des pièces de pack(s) de véhicules non installé(s) : {} (installez-les pour que ses afficheurs et équipements fonctionnent)"
+
+"openOMSI {} could not be downloaded: {e}":
+  fr: "openOMSI {} n'a pas pu être téléchargé : {e}"
+
+"openOMSI was not updated to {}: the installation was cancelled.":
+  fr: "openOMSI n'a pas été mis à jour vers {} : l'installation a été annulée."
+
+"openOMSI was not updated to {}: installing apps was not allowed for openOMSI (Settings → Apps → openOMSI → Install unknown apps).":
+  fr: "openOMSI n'a pas été mis à jour vers {} : l'installation d'applications n'est pas autorisée pour openOMSI (Paramètres → Applications → openOMSI → Installer des applis inconnues)."
+
+"openOMSI {} is installed; start it again yourself ({e}).":
+  fr: "openOMSI {} est installé ; relancez-le vous-même ({e})."
+
+"METAR of {} (fetched at the start)":
+  fr: "METAR de {} (récupéré au démarrage)"
+
+"the host plays on {theirs}, which is not installed here - install that map to meet the others":
+  fr: "l'hôte joue sur {theirs}, qui n'est pas installée ici - installez cette carte pour retrouver les autres"
+
+"the host's season ({}) differs from the one loaded here ({}) - start the game again to see it":
+  fr: "la saison de l'hôte ({}) diffère de celle chargée ici ({}) - relancez le jeu pour la voir"
+
 "Continue":
   ca: "Continua"
   pt: "Continuar"
