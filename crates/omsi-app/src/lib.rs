@@ -87,6 +87,7 @@ mod evdev_buttons;
 mod evdev_ff;
 mod cli;
 mod diagnostics;
+mod depot_bus;
 mod duty_start;
 mod input_script;
 mod launcher_link;

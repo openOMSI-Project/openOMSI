@@ -57,6 +57,18 @@ impl App {
         ) {
             log::warn!("writing the session summary: {e}");
         }
+        if let (Some(id), Some(p)) = (self.args.depot.as_deref(), self.player.as_ref()) {
+            let c = &self.career;
+            let outing = omsi_launcher_lib::depot::Outing {
+                metres: c.metres,
+                seconds: c.seconds,
+                stops: c.stops[0],
+                tickets: c.tickets.0,
+                takings: c.tickets.1,
+                crashes: c.crashes[0],
+            };
+            crate::depot_bus::record(&p.vehicle, id, &outing);
+        }
         self.career.seconds = 0.0;
     }
 

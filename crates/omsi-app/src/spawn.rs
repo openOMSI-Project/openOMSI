@@ -492,6 +492,9 @@ pub(crate) fn spawn_player(
             args.situation_strvars.len()
         );
     }
+    if let Some(id) = args.depot.as_deref().filter(|_| !args.is_resuming()) {
+        crate::depot_bus::restore(&mut p.vehicle, id);
+    }
     if let Some(sv) = &args.setstr {
         for kv in sv.split(',') {
             if let Some((k, v)) = kv.split_once('=') {

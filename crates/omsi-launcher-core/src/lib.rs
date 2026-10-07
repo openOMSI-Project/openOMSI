@@ -7,6 +7,7 @@
 //! `install` runs mod installs as background jobs, `index` caches the content lists and
 //! tells the page when they changed, `instances` keeps track of the games started.
 
+pub mod depot;
 pub mod index;
 pub mod install;
 pub mod instances;
@@ -2475,6 +2476,9 @@ pub struct Duty {
     /// A situation file to continue (the map's `laststn.osn`): nothing else of the duty.
     #[serde(default)]
     pub situation: Option<String>,
+    /// The depot bus driven: it starts with the wear it was left with (see [`depot`]).
+    #[serde(default)]
+    pub depot: Option<String>,
 }
 
 /// The situation the game left on `map` last (`laststn.osn` in the map's folder: the
@@ -2600,6 +2604,9 @@ fn duty_args_for_root(d: &Duty, root: &Path) -> Result<Vec<String>> {
     }
     if let Some(n) = d.number.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
         a.extend(["--number".into(), n.to_string()]);
+    }
+    if let Some(id) = d.depot.as_deref().map(str::trim).filter(|i| !i.is_empty()) {
+        a.extend(["--depot".into(), id.to_string()]);
     }
     // (a vehicle file taken for a depot from a broken ailists.cfg by older launchers is none)
     if let Some(h) = d.hof.as_deref().filter(|h| !h.trim().is_empty() && !h.to_ascii_lowercase().contains(".bus") && !h.to_ascii_lowercase().contains(".ovh")) {

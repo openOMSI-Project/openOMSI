@@ -102,6 +102,9 @@ pub(crate) struct Args {
     /// variable and, unless the plate is free, gives the plate that list pairs with it.
     #[arg(long)]
     pub(crate) number: Option<String>,
+    /// Bus of the player's depot (`~/.openomsi/depot.json`): its wear is restored, and saved at the end.
+    #[arg(long)]
+    pub(crate) depot: Option<String>,
     /// Time of day at start, HH:MM (default 09:00).
     #[arg(long, default_value = "09:00")]
     pub(crate) time: String,

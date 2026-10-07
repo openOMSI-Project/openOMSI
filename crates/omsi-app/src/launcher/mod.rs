@@ -10,6 +10,7 @@
 
 pub(crate) mod drive;
 pub(crate) mod mapview;
+mod depot;
 pub mod mobile;
 pub mod phone;
 mod multiplayer;
@@ -42,6 +43,7 @@ use winit::window::{Window, WindowId};
 pub enum Page {
     Drive,
     Multiplayer,
+    Depot,
     Profile,
     Settings,
     Controls,
@@ -52,9 +54,10 @@ pub enum Page {
     Setup,
 }
 
-const PAGES: [(Page, &str, &str); 10] = [
+const PAGES: [(Page, &str, &str); 11] = [
     (Page::Drive, "Drive", "directions_bus"),
     (Page::Multiplayer, "Multiplayer", "groups"),
+    (Page::Depot, "Depot", "garage"),
     (Page::Profile, "Profile", "badge"),
     (Page::Settings, "Settings", "tune"),
     (Page::Controls, "Controls", "keyboard"),
@@ -108,6 +111,7 @@ pub struct Launcher {
     /// The launcher made for a phone (see `phone`).
     pub phone: phone::PhoneView,
     pub pages: pages::PagesView,
+    pub depot: depot::DepotView,
     pub mp: multiplayer::MultiplayerView,
     /// Server icons in the interface pipeline (by server address), and those decoded but
     /// not yet uploaded.
@@ -190,6 +194,7 @@ impl Launcher {
         drive: drive::DriveView::default(),
         phone: phone::PhoneView::default(),
         pages: pages::PagesView::default(),
+        depot: depot::DepotView::default(),
         mp: multiplayer::MultiplayerView::default(),
         icons: Default::default(),
         icons_pending: Vec::new(),
@@ -273,6 +278,7 @@ impl Launcher {
             "sheet-duty" => app.phone.sheet = Some(phone::Sheet::Duty),
             "sheet-time" => app.phone.sheet = Some(phone::Sheet::Time),
             "sheet-livery" => app.phone.sheet = Some(phone::Sheet::Livery),
+            "depot:add" => app.depot.adding = Some(depot::Draft { bus: app.state.choice.bus.clone(), plate: app.state.depot.new_plate(1), ..Default::default() }),
             _ => {}
         }
         if let Some(step) = p.split(':').nth(1).and_then(|s| s.parse::<usize>().ok()) {
@@ -850,7 +856,11 @@ impl Launcher {
         self.update_tick(event_loop);
         // the preview shows the chosen bus in the chosen light
         let c = &self.state.choice;
-        let look = showroom::Look { root: std::path::PathBuf::from(&self.state.config.root), map: c.map.clone(), bus: c.bus.clone(), paint: c.paint.clone(), weather: c.weather.clone(), time: c.time, date: c.date.clone() };
+        let mut look = showroom::Look { root: std::path::PathBuf::from(&self.state.config.root), map: c.map.clone(), bus: c.bus.clone(), paint: c.paint.clone(), weather: c.weather.clone(), time: c.time, date: c.date.clone() };
+        if let Some((bus, paint)) = (self.page == Page::Depot).then(|| depot::look(self)).flatten() {
+            look.bus = bus;
+            look.paint = paint;
+        }
         // (not while a game runs: the launcher looked at meanwhile loads no bus onto the card)
         if !look.bus.is_empty() && !look.map.is_empty() && !self.state.in_game() {
             self.showroom.want(look);
@@ -1112,6 +1122,7 @@ impl Launcher {
         match self.page {
             Page::Drive => drive::draw(self, content),
             Page::Multiplayer => multiplayer::draw(self, content),
+            Page::Depot => depot::draw(self, content),
             Page::Profile => pages::profile(self, content),
             Page::Settings => pages::settings(self, content),
             Page::Controls => pages::controls(self, content),
@@ -1275,6 +1286,7 @@ impl Launcher {
             };
             match p {
                 Page::Profile => self.state.load_profile(),
+                Page::Depot => self.state.load_depot(),
                 Page::Mods => self.state.load_mods(),
                 Page::Sessions => self.state.poll_now(),
                 _ => {}

@@ -81,6 +81,10 @@ fn with_official(mut list: Vec<ServerEntry>) -> Vec<ServerEntry> {
     list
 }
 
+fn depot_bus_of<'a>(depot: &'a core::depot::Depot, c: &Choice) -> Option<&'a core::depot::DepotBus> {
+    depot.get(&c.depot).filter(|b| b.bus == c.bus && b.paint == c.paint && b.plate == c.plate && b.number == c.number)
+}
+
 fn servers_path() -> std::path::PathBuf {
     core::data_dir().join("servers.json")
 }
@@ -95,6 +99,9 @@ pub struct Choice {
     pub plate: String,
     /// The fleet number picked from the bus's `[number]` list (empty: its first).
     pub number: String,
+    /// The depot bus taken (empty: none); changing the bus, its paint or plate lets it go.
+    #[serde(default)]
+    pub depot: String,
     pub hof: String,
     /// The depot file was chosen by hand (else it follows the map and the date).
     pub hof_manual: bool,
@@ -132,6 +139,7 @@ impl Default for Choice {
             paint: String::new(),
             plate: String::new(),
             number: String::new(),
+            depot: String::new(),
             hof: String::new(),
             hof_manual: false,
             map: String::new(),
@@ -213,6 +221,8 @@ pub struct State {
     pub save_pick: usize,
     pub profiles: Vec<String>,
     pub profile: Option<core::Profile>,
+    /// The player's own buses (`~/.openomsi/depot.json`).
+    pub depot: core::depot::Depot,
     pub settings: serde_json::Value,
     pub settings_dirty: f32,
     /// `settings.cfg` as last read or written here: a game changes it too (its Options
@@ -293,6 +303,7 @@ impl State {
             save_pick: 0,
             profiles: Vec::new(),
             profile: None,
+            depot: core::depot::load().unwrap_or_default(),
             settings,
             settings_dirty: 0.0,
             settings_file: read_settings_file(),
@@ -656,6 +667,7 @@ impl State {
             season: Some(c.season.clone()).filter(|s| s != "auto"),
             tutorial: None,
             situation: None,
+            depot: self.depot_bus().map(|b| b.id.clone()),
         }
     }
 
@@ -1162,6 +1174,42 @@ impl State {
         self.touched();
     }
 
+    pub fn load_depot(&mut self) {
+        match core::depot::load() {
+            Ok(d) => self.depot = d,
+            Err(e) => self.set_status(format!("{e:#}"), true),
+        }
+    }
+
+    pub fn save_depot(&mut self) {
+        if let Err(e) = core::depot::save(&self.depot) {
+            self.set_status(format!("{e:#}"), true);
+        }
+    }
+
+    /// The depot bus taken, while the bus, livery, plate and fleet number are still its own.
+    pub fn depot_bus(&self) -> Option<&core::depot::DepotBus> {
+        depot_bus_of(&self.depot, &self.choice)
+    }
+
+    /// Sets the duty's bus to depot bus `id`, as it was added.
+    pub fn take_depot_bus(&mut self, id: &str) {
+        let Some(b) = self.depot.get(id).cloned() else { return };
+        self.select_bus(&b.bus);
+        self.choice.paint = b.paint;
+        self.choice.plate = b.plate;
+        self.choice.number = b.number;
+        self.choice.depot = b.id;
+        self.touched();
+    }
+
+    /// Adds `b` to the depot and returns its id.
+    pub fn add_to_depot(&mut self, b: core::depot::DepotBus) -> String {
+        let id = self.depot.add(b);
+        self.save_depot();
+        id
+    }
+
     pub fn select_map(&mut self, file: &str) {
         if self.choice.map == file {
             return;
@@ -1384,6 +1432,21 @@ mod choice_tests {
         assert_eq!(super::Choice::fresh(saved).lan_mode, "off");
         let host: super::Choice = serde_json::from_str(r#"{"lan_mode":"host"}"#).unwrap();
         assert_eq!(super::Choice::fresh(host).lan_mode, "host");
+    }
+
+    #[test]
+    fn a_depot_bus_is_driven_only_while_the_choice_is_still_its_own() {
+        let mut depot = omsi_launcher_lib::depot::Depot::default();
+        let id = depot.add(omsi_launcher_lib::depot::DepotBus { bus: "Vehicles/A/a.bus".into(), paint: "Red".into(), plate: "AB-123".into(), ..Default::default() });
+        let mut c = super::Choice { bus: "Vehicles/A/a.bus".into(), paint: "Red".into(), plate: "AB-123".into(), depot: id.clone(), ..Default::default() };
+        assert_eq!(super::depot_bus_of(&depot, &c).map(|b| b.id.as_str()), Some(id.as_str()));
+        c.plate = "XY-999".into();
+        assert!(super::depot_bus_of(&depot, &c).is_none());
+        c.plate = "AB-123".into();
+        c.paint.clear();
+        assert!(super::depot_bus_of(&depot, &c).is_none());
+        let back: super::Choice = serde_json::from_str(r#"{"bus":"Vehicles/A/a.bus"}"#).unwrap();
+        assert_eq!(back.depot, "");
     }
 
     #[test]

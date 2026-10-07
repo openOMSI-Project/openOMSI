@@ -8,7 +8,7 @@
 
 use super::state::{hhmm, trip_index_at};
 use super::theme::*;
-use super::ui::{id_of, ButtonKind};
+use super::ui::{id_of, ButtonKind, Ui};
 use super::Launcher;
 use glam::{DVec2, Vec2};
 use omsi_launcher_lib::{display_bus_name, vehicle_type_label, WeatherInfo};
@@ -16,10 +16,10 @@ use omsi_ui::paint::Align;
 use omsi_ui::{Color, Rect, Weight};
 
 #[derive(Clone)]
-struct BusVariant {
-    file: String,
+pub(super) struct BusVariant {
+    pub(super) file: String,
     name: String,
-    variant: String,
+    pub(super) variant: String,
     fresh: bool,
     installed: bool,
     paints: usize,
@@ -27,10 +27,10 @@ struct BusVariant {
 }
 
 #[derive(Clone)]
-struct BusManufacturer {
-    key: String,
-    name: String,
-    variants: Vec<BusVariant>,
+pub(super) struct BusManufacturer {
+    pub(super) key: String,
+    pub(super) name: String,
+    pub(super) variants: Vec<BusVariant>,
 }
 
 #[derive(Default)]
@@ -155,6 +155,7 @@ pub fn draw(l: &mut Launcher, area: Rect) {
         l.preview_full(lay.view, 0.5);
     }
     l.ui.p().rounded_border(lay.view, RADIUS, 1.0, EDGE);
+    depot_banner(l, lay.view);
 
     steps(l, lay.steps);
     l.ui.panel(lay.panel);
@@ -609,6 +610,44 @@ fn foot(l: &mut Launcher, f: Rect, tab: usize) {
     }
 }
 
+/// Over the picture: the depot bus taken, or a word that the choice is no longer it.
+fn depot_banner(l: &mut Launcher, view: Rect) {
+    let linked = l.state.depot.get(&l.state.choice.depot).cloned();
+    let Some(b) = linked else { return };
+    let mine = l.state.depot_bus().is_some();
+    let (title, sub) = if mine {
+        let mut sub = vec![b.plate.clone(), format!("{:.0} km", b.odometer().unwrap_or(b.metres / 1000.0))];
+        if let Some(f) = b.fuel() {
+            sub.push(format!("{f:.0} L"));
+        }
+        (omsi_ui::tr("Your bus: %{name}").replace("%{name}", &b.name), sub.into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" · "))
+    } else {
+        (omsi_ui::tr("%{name} is no longer the bus of your depot").replace("%{name}", &b.name), omsi_ui::tr("Livery, plate or bus changed: this run will not count for it.").into_owned())
+    };
+    let back = (!mine).then(|| omsi_ui::tr("Take %{name} back").replace("%{name}", &b.name));
+    let text_w = l.ui.width(&title, 13.0, Weight::Bold).max(l.ui.width(&sub, 11.5, Weight::Regular));
+    let back_w = back.as_ref().map(|t| l.ui.width(t, 12.5, Weight::Medium) + 52.0).unwrap_or(0.0);
+    let w = (54.0 + text_w + back_w + 44.0).min(view.w - 24.0);
+    let r = Rect::new(view.x + 12.0, view.y + 12.0, w, 52.0);
+    let tint = if mine { ACCENT } else { WARN };
+    l.ui.p().rounded(r, RADIUS, Color::rgba(18, 18, 18, 0.92));
+    l.ui.p().rounded_border(r, RADIUS, 1.0, tint.alpha(0.7));
+    l.ui.icon(if mine { "garage" } else { "warning" }, Vec2::new(r.x + 26.0, r.center().y), 22.0, tint);
+    let tw = r.w - 54.0 - back_w - 40.0;
+    l.ui.text_in(&title, Rect::new(r.x + 48.0, r.y + 8.0, tw, 18.0), 13.0, Weight::Bold, TEXT, Align::Left);
+    l.ui.text_in(&sub, Rect::new(r.x + 48.0, r.y + 27.0, tw, 16.0), 11.5, Weight::Regular, TEXT_DIM, Align::Left);
+    if let Some(t) = back {
+        let br = Rect::new(r.right() - 40.0 - back_w, r.y + 9.0, back_w, 34.0);
+        if l.ui.button("depot-take-back", br, &t, Some("autorenew"), ButtonKind::Normal) {
+            l.state.take_depot_bus(&b.id);
+        }
+    }
+    if l.ui.icon_button("depot-banner-close", Vec2::new(r.right() - 20.0, r.center().y), 12.0, "close", "Drive another bus, not from the depot") {
+        l.state.choice.depot.clear();
+        l.state.touched();
+    }
+}
+
 /// The livery the bus would wear.
 fn paint_line(l: &Launcher) -> String {
     match l.state.bus() {
@@ -732,7 +771,7 @@ fn map_labels(l: &mut Launcher, map: Rect, avoid: &[Rect]) {
 
 /// OMSI takes the manufacturer and the complete type from [friendlyname]. The
 /// vehicle folder and rendering configuration do not define this hierarchy.
-fn build_bus_manufacturers(vehicles: &[omsi_launcher_lib::VehicleInfo], allowed: Option<&std::collections::HashSet<String>>, fresh: &std::collections::HashSet<String>) -> Vec<BusManufacturer> {
+pub(super) fn build_bus_manufacturers(vehicles: &[omsi_launcher_lib::VehicleInfo], allowed: Option<&std::collections::HashSet<String>>, fresh: &std::collections::HashSet<String>) -> Vec<BusManufacturer> {
     let mut grouped = std::collections::BTreeMap::<String, BusManufacturer>::new();
     for vehicle in vehicles {
         if !allowed.map(|a| a.contains(&vehicle.file.replace('\\', "/").to_lowercase())).unwrap_or(true) {
@@ -827,7 +866,7 @@ fn variant_matches(variant: &BusVariant, q: &str) -> bool {
     q.is_empty() || variant.name.to_lowercase().contains(q) || variant.variant.to_lowercase().contains(q) || display_bus_name(&variant.file).to_lowercase().contains(q)
 }
 
-fn manufacturer_matches(model: &BusManufacturer, q: &str) -> bool {
+pub(super) fn manufacturer_matches(model: &BusManufacturer, q: &str) -> bool {
     q.is_empty() || model.name.to_lowercase().contains(q) || model.variants.iter().any(|v| variant_matches(v, q))
 }
 
@@ -890,86 +929,10 @@ fn step_bus(l: &mut Launcher, r: Rect) {
         l.drive.expanded_manufacturer = visible.first().map(|m| m.key.clone());
     }
     let expanded = l.drive.expanded_manufacturer.clone();
-    let mut toggle = None;
-    let mut pick = None;
-    let mut star: Option<String> = None;
     let loading = l.state.loading_content;
-    l.ui.scroll_area("bus-model-list", list, &mut |ui, view| {
-        let mut y = view.y + 6.0;
-        if visible.is_empty() {
-            ui.text_in(if loading { "Reading the buses…" } else { "No buses found. Try another search." }, Rect::new(view.x + 12.0, y, view.w - 24.0, 50.0), 12.5, Weight::Regular, TEXT_DIM, Align::Left);
-        }
-        for model in &visible {
-            let open = model.variants.len() > 1 && expanded.as_deref() == Some(model.key.as_str());
-            let row = Rect::new(view.x + 6.0, y, view.w - 18.0, 54.0);
-            // Keep the scroll extent, but avoid shaping text and emitting geometry for
-            // invisible families. The expanded dropdown retains its widget state.
-            if !open && !ui.rect_visible(row) {
-                y += 58.0;
-                continue;
-            }
-            let selected = model.variants.iter().find(|v| v.file == chosen);
-            if ui.row(&format!("bus-family-{}", model.key), row, selected.is_some()) {
-                if model.variants.len() == 1 { pick = Some(model.variants[0].file.clone()); }
-                else { toggle = Some(model.key.clone()); }
-            }
-            ui.icon("directions_bus", Vec2::new(row.x + 20.0, row.y + 23.0), 20.0, if selected.is_some() { ACCENT } else { TEXT_DIM });
-            let title = Rect::new(row.x + 42.0, row.y + 7.0, row.w - 78.0, 20.0);
-            ui.text_in(&model.name, title, 13.0, Weight::Medium, TEXT, Align::Left);
-            ui.tooltip(title, &model.name);
-            let subtitle = if model.variants.len() == 1 { format!("{} · {}", omsi_ui::tr(&model.variants[0].variant), liveries_text(model.variants[0].paints)) }
-            else if let Some(v) = selected { format!("{} · {} {}", omsi_ui::tr(&v.variant), model.variants.len(), omsi_ui::tr("models")) }
-            else { format!("{} {}", model.variants.len(), omsi_ui::tr("models")) };
-            let subtitle = if selected.is_some_and(|v| v.incomplete) { format!("{subtitle} · {}", omsi_ui::tr("PARTS MISSING")) }
-            else if selected.is_some_and(|v| v.fresh) { format!("{subtitle} · {}", omsi_ui::tr("NEW")) }
-            else if selected.is_some_and(|v| v.installed) { format!("{subtitle} · {}", omsi_ui::tr("MOD")) } else { subtitle };
-            ui.text_in(&subtitle, Rect::new(title.x, row.y + 29.0, title.w, 17.0), 11.5, Weight::Regular, TEXT_DIM, Align::Left);
-            ui.icon(if model.variants.len() == 1 { if selected.is_some() { "check" } else { "chevron_right" } } else if open { "expand_less" } else { "expand_more" }, Vec2::new(row.right() - 18.0, row.center().y), 18.0, if selected.is_some() { ACCENT } else { TEXT_DIM });
-            // the star: a bus of its own is starred here, a family's types in its list below
-            let starred = model.variants.iter().any(|v| is_fav(&v.file));
-            let sr = Rect::new(row.right() - 62.0, row.center().y - 13.0, 26.0, 26.0);
-            if model.variants.len() == 1 {
-                let (hs, _, cs) = ui.interact(id_of(&format!("bus-star-{}", model.key)), sr);
-                if cs {
-                    star = Some(model.variants[0].file.clone());
-                }
-                ui.icon("star", sr.center(), 16.0, if starred { ACCENT } else if hs { TEXT_SOFT } else { Color::WHITE.alpha(0.16) });
-                ui.tooltip(sr, if starred { "Remove from the favourites" } else { "Add to the favourites" });
-            } else if starred {
-                ui.icon("star", sr.center(), 14.0, ACCENT.alpha(0.8));
-            }
-            y += 58.0;
-            if open {
-                let variants: Vec<&BusVariant> = model.variants.iter().filter(|variant| (q.is_empty() || model.name.to_lowercase().contains(&q) || variant.file == chosen || variant_matches(variant, &q)) && (!only || variant.file == chosen || is_fav(&variant.file))).collect();
-                let selected_index = variants.iter().position(|variant| variant.file == chosen);
-                let mut options: Vec<String> = variants.iter().map(|variant| variant_option(variant)).collect();
-                let offset = if selected_index.is_none() { options.insert(0, "Choose a bus".into()); 1 } else { 0 };
-                let mut sel = selected_index.unwrap_or(0);
-                ui.label(Rect::new(view.x + 38.0, y, view.w - 50.0, 22.0), "Type / variant");
-                y += 26.0;
-                let dropdown = Rect::new(view.x + 38.0, y, view.w - 50.0 - 36.0, ROW);
-                if !options.is_empty() && ui.select(&format!("bus-type-{}", model.key), dropdown, &mut sel, &options) {
-                    if let Some(variant) = sel.checked_sub(offset).and_then(|index| variants.get(index)) { pick = Some(variant.file.clone()); }
-                }
-                // the star of the type chosen
-                if let Some(variant) = selected {
-                    let sr = Rect::new(dropdown.right() + 6.0, y, 30.0, ROW);
-                    let on = is_fav(&variant.file);
-                    let (hs, _, cs) = ui.interact(id_of(&format!("bus-star-type-{}", model.key)), sr);
-                    if cs {
-                        star = Some(variant.file.clone());
-                    }
-                    ui.icon("star", sr.center(), 18.0, if on { ACCENT } else if hs { TEXT_SOFT } else { Color::WHITE.alpha(0.2) });
-                    ui.tooltip(sr, if on { "Remove from the favourites" } else { "Add to the favourites" });
-                }
-                if let Some(variant) = selected {
-                    ui.tooltip(dropdown, &format!("{}\n{}\n{}", variant.name, variant.file, liveries_text(variant.paints)));
-                }
-                y += ROW + 10.0;
-            }
-        }
-        y - view.y + 4.0
-    });
+    let mut picked = FamilyPick::default();
+    l.ui.scroll_area("bus-model-list", list, &mut |ui, view| family_rows(ui, view, "bus", &visible, expanded.as_deref(), &chosen, &q, Some((&favs, only)), loading, &mut picked));
+    let FamilyPick { toggle, pick, star } = picked;
     if let Some(key) = toggle {
         l.drive.expanded_manufacturer = if l.drive.expanded_manufacturer.as_ref() == Some(&key) { None } else { Some(key.clone()) };
         if l.drive.expanded_manufacturer.is_some() {
@@ -1062,6 +1025,96 @@ fn step_bus(l: &mut Launcher, r: Rect) {
             if plate_changed { l.state.choice.plate = plate; l.state.touched(); }
         }
     }
+}
+
+/// What a click in the bus families did.
+#[derive(Default)]
+pub(super) struct FamilyPick {
+    pub(super) toggle: Option<String>,
+    pub(super) pick: Option<String>,
+    pub(super) star: Option<String>,
+}
+
+/// The bus families, a type list under the one open; `favs`: the starred buses and whether only those show.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn family_rows(ui: &mut Ui, view: Rect, prefix: &str, visible: &[&BusManufacturer], expanded: Option<&str>, chosen: &str, q: &str, favs: Option<(&std::collections::BTreeSet<String>, bool)>, loading: bool, out: &mut FamilyPick) -> f32 {
+    let is_fav = |file: &str| favs.is_some_and(|(f, _)| f.contains(&fav_key(file)));
+    let only = favs.is_some_and(|(f, o)| o && !f.is_empty());
+    let stars = favs.is_some();
+    let mut y = view.y + 6.0;
+    if visible.is_empty() {
+        ui.text_in(if loading { "Reading the buses…" } else { "No buses found. Try another search." }, Rect::new(view.x + 12.0, y, view.w - 24.0, 50.0), 12.5, Weight::Regular, TEXT_DIM, Align::Left);
+    }
+    for model in visible {
+        let open = model.variants.len() > 1 && expanded == Some(model.key.as_str());
+        let row = Rect::new(view.x + 6.0, y, view.w - 18.0, 54.0);
+        // Keep the scroll extent, but avoid shaping text and emitting geometry for
+        // invisible families. The expanded dropdown retains its widget state.
+        if !open && !ui.rect_visible(row) {
+            y += 58.0;
+            continue;
+        }
+        let selected = model.variants.iter().find(|v| v.file == chosen);
+        if ui.row(&format!("{prefix}-family-{}", model.key), row, selected.is_some()) {
+            if model.variants.len() == 1 { out.pick = Some(model.variants[0].file.clone()); }
+            else { out.toggle = Some(model.key.clone()); }
+        }
+        ui.icon("directions_bus", Vec2::new(row.x + 20.0, row.y + 23.0), 20.0, if selected.is_some() { ACCENT } else { TEXT_DIM });
+        let title = Rect::new(row.x + 42.0, row.y + 7.0, row.w - 78.0, 20.0);
+        ui.text_in(&model.name, title, 13.0, Weight::Medium, TEXT, Align::Left);
+        ui.tooltip(title, &model.name);
+        let subtitle = if model.variants.len() == 1 { format!("{} · {}", omsi_ui::tr(&model.variants[0].variant), liveries_text(model.variants[0].paints)) }
+        else if let Some(v) = selected { format!("{} · {} {}", omsi_ui::tr(&v.variant), model.variants.len(), omsi_ui::tr("models")) }
+        else { format!("{} {}", model.variants.len(), omsi_ui::tr("models")) };
+        let subtitle = if selected.is_some_and(|v| v.incomplete) { format!("{subtitle} · {}", omsi_ui::tr("PARTS MISSING")) }
+        else if selected.is_some_and(|v| v.fresh) { format!("{subtitle} · {}", omsi_ui::tr("NEW")) }
+        else if selected.is_some_and(|v| v.installed) { format!("{subtitle} · {}", omsi_ui::tr("MOD")) } else { subtitle };
+        ui.text_in(&subtitle, Rect::new(title.x, row.y + 29.0, title.w, 17.0), 11.5, Weight::Regular, TEXT_DIM, Align::Left);
+        ui.icon(if model.variants.len() == 1 { if selected.is_some() { "check" } else { "chevron_right" } } else if open { "expand_less" } else { "expand_more" }, Vec2::new(row.right() - 18.0, row.center().y), 18.0, if selected.is_some() { ACCENT } else { TEXT_DIM });
+        // the star: a bus of its own is starred here, a family's types in its list below
+        let starred = model.variants.iter().any(|v| is_fav(&v.file));
+        let sr = Rect::new(row.right() - 62.0, row.center().y - 13.0, 26.0, 26.0);
+        if stars && model.variants.len() == 1 {
+            let (hs, _, cs) = ui.interact(id_of(&format!("{prefix}-star-{}", model.key)), sr);
+            if cs {
+                out.star = Some(model.variants[0].file.clone());
+            }
+            ui.icon("star", sr.center(), 16.0, if starred { ACCENT } else if hs { TEXT_SOFT } else { Color::WHITE.alpha(0.16) });
+            ui.tooltip(sr, if starred { "Remove from the favourites" } else { "Add to the favourites" });
+        } else if stars && starred {
+            ui.icon("star", sr.center(), 14.0, ACCENT.alpha(0.8));
+        }
+        y += 58.0;
+        if open {
+            let variants: Vec<&BusVariant> = model.variants.iter().filter(|variant| (q.is_empty() || model.name.to_lowercase().contains(&q) || variant.file == chosen || variant_matches(variant, &q)) && (!only || variant.file == chosen || is_fav(&variant.file))).collect();
+            let selected_index = variants.iter().position(|variant| variant.file == chosen);
+            let mut options: Vec<String> = variants.iter().map(|variant| variant_option(variant)).collect();
+            let offset = if selected_index.is_none() { options.insert(0, "Choose a bus".into()); 1 } else { 0 };
+            let mut sel = selected_index.unwrap_or(0);
+            ui.label(Rect::new(view.x + 38.0, y, view.w - 50.0, 22.0), "Type / variant");
+            y += 26.0;
+            let dropdown = Rect::new(view.x + 38.0, y, view.w - 50.0 - 36.0, ROW);
+            if !options.is_empty() && ui.select(&format!("{prefix}-type-{}", model.key), dropdown, &mut sel, &options) {
+                if let Some(variant) = sel.checked_sub(offset).and_then(|index| variants.get(index)) { out.pick = Some(variant.file.clone()); }
+            }
+            // the star of the type chosen
+            if let Some(variant) = selected.filter(|_| stars) {
+                let sr = Rect::new(dropdown.right() + 6.0, y, 30.0, ROW);
+                let on = is_fav(&variant.file);
+                let (hs, _, cs) = ui.interact(id_of(&format!("{prefix}-star-type-{}", model.key)), sr);
+                if cs {
+                    out.star = Some(variant.file.clone());
+                }
+                ui.icon("star", sr.center(), 18.0, if on { ACCENT } else if hs { TEXT_SOFT } else { Color::WHITE.alpha(0.2) });
+                ui.tooltip(sr, if on { "Remove from the favourites" } else { "Add to the favourites" });
+            }
+            if let Some(variant) = selected {
+                ui.tooltip(dropdown, &format!("{}\n{}\n{}", variant.name, variant.file, liveries_text(variant.paints)));
+            }
+            y += ROW + 10.0;
+        }
+    }
+    y - view.y + 4.0
 }
 
 pub(super) fn natural(s: &str) -> (u64, String) {

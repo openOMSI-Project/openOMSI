@@ -234,7 +234,7 @@ fn hours_short(h: f64) -> String {
 }
 
 /// A Unix time as "YYYY-MM-DD HH:MM" in the machine's time zone.
-fn chrono_like(t: u64) -> String {
+pub(super) fn chrono_like(t: u64) -> String {
     #[cfg(unix)]
     {
         let tt = t as libc::time_t;
