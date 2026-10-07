@@ -214,7 +214,10 @@ impl Touch {
 }
 
 const PANEL_BG: Color = Color::rgba(14, 16, 20, 0.62);
-const PANEL_ON: Color = Color::rgba(232, 160, 48, 0.92);
+/// A switch that is on: the interface's accent.
+fn panel_on() -> Color {
+    crate::accent::base().alpha(0.92)
+}
 const TEXT: Color = Color::rgba(240, 240, 240, 1.0);
 const DIM: Color = Color::rgba(240, 240, 240, 0.55);
 
@@ -950,7 +953,7 @@ impl App {
                 // the rim, with the top mark in its gap
                 let top = a0 - FRAC_PI_2;
                 pt.arc(c, rim_in, r, top + 0.12, top + TAU - 0.12, part);
-                pt.arc(c, rim_in, r, top - 0.12, top + 0.12, PANEL_ON);
+                pt.arc(c, rim_in, r, top - 0.12, top + 0.12, panel_on());
             } else {
                 pt.text(atlas, fonts, "TILT", 14.0 * u, Weight::Bold, t.wheel_c, Align::Center, DIM);
             }
@@ -997,7 +1000,7 @@ impl App {
         let held: Vec<Btn> = t.fingers.iter().filter_map(|f| if let Role::Button(_, b) = f.role { Some(b) } else { None }).collect();
         for b in t.buttons.iter() {
             let pressed = held.contains(&b.btn);
-            let bg = if b.on { PANEL_ON } else if pressed { Color::rgba(90, 94, 100, 0.85) } else { panel_bg };
+            let bg = if b.on { panel_on() } else if pressed { Color::rgba(90, 94, 100, 0.85) } else { panel_bg };
             let fg = if b.on { Color::rgba(20, 20, 20, 1.0) } else { TEXT };
             if b.round {
                 let c = b.rect.center();

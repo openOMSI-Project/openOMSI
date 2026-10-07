@@ -1,21 +1,22 @@
 //! The Drive page's map: the chosen map as the game's own city map has it - every spline's
 //! and every object's `[path]`, linked to its neighbours, grouped into carriageways with
 //! their real widths, where its entry points stand and where its objects are - and the road
-//! pieces the chosen trip drives over it.
+//! pieces the chosen duty's trips drive over it.
 //!
 //! It reads the map the way the navigator does (`scene::navigation_map_of`, then
-//! `navigator::city_roads`), so what the launcher shows cannot drift from what the game
-//! draws on its own map. What it leaves out is what choosing a duty does not need: no
-//! meshes, no textures, no traffic, no timetable beyond the chosen trip. That read is the
-//! one thing here that costs anything (the same 0.1 - 1.5 s the game's own map costs) and it
-//! runs once per map selection, off the interface thread, with the page saying so while it
-//! does.
+//! `navigator::city_roads`), so the roads the launcher shows cannot drift from the ones the
+//! game draws on its own map. What it leaves out is what choosing a duty does not need: no
+//! meshes, no textures, no traffic, no timetable beyond the chosen duty's trips. That read is
+//! the one thing here that costs anything (the same 0.1 - 1.5 s the game's own map costs) and
+//! it runs once per map selection, off the interface thread, with the page saying so while
+//! it does.
 //!
 //! It is not a picture but a map: dragged to move, the wheel to zoom where the cursor is, an
-//! entry point clicked to choose where the bus is put down. The chosen line's route runs over
-//! the roads in red and its stops stand on it, their names and times written beside them by
-//! the interface (`Launcher::map_labels`). The lists next to it do what a map cannot say, and
-//! they stay.
+//! entry point clicked to choose where the bus is put down. The duty's route - every trip of
+//! it, as Omsi-Hub draws the whole shift - runs over the roads in blue and its stops stand on
+//! it as the stop sign the game's navigator draws (`stop_signs`, in the style the settings
+//! choose), the first one lifted; the name and time of the stop under the mouse are written
+//! beside it by the interface (`drive::map_labels`).
 //!
 //! The lines are built once per zoom band - a point every fraction of a pixel is all the eye
 //! gets (`tolerance`) - so moving the map is a matrix and not a rebuild.
@@ -30,29 +31,52 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::time::Instant;
 
-// The map is drawn with the game's own city map palette and order (see `navigator`): every
-// road's dark casing first, then every road's surface over every casing, then the chosen
-// line's route in the map's own red - so the two maps are the same picture.
-use crate::navigator::{ROAD, ROAD_CASING, ROAD_MAIN, ROUTE};
-const STOP: Color = Color::rgba(240, 240, 240, 1.0);
-/// Entry points wear the launcher's own amber; the one under the mouse a grey ring, the
-/// chosen one a white (a click on the map takes the place of a name in a list of seventy).
-const ENTRY: Color = Color::rgba(232, 160, 48, 1.0);
-const ENTRY_HOVER: Color = Color::rgba(160, 160, 160, 1.0);
+// The map is drawn as Omsi-Hub's setup map draws it (its `roadLayer` and `routemap.css`): on
+// the launcher's night-blue ground, every road's casing first and then every road's surface
+// over every casing (a crossing's surface is not cut by a neighbour's casing), a main road a
+// shade lighter than a side street - and over it the duty in the accent (the player's colour,
+// `crate::accent`; Omsi-Hub's was the blue of every navigation there is), on a darker casing
+// so it reads where it runs over itself. The roads are the
+// game's own (`navigator::city_roads`); only the colours are the launcher's.
+const ROAD_CASING: Color = Color::rgba(33, 40, 51, 1.0);
+const ROAD: Color = Color::rgba(60, 69, 82, 1.0);
+const ROAD_MAIN: Color = Color::rgba(73, 82, 97, 1.0);
+fn route_casing() -> Color {
+    crate::accent::base().darken(0.56)
+}
+fn route() -> Color {
+    crate::accent::shades().hover
+}
+/// Entry points are quiet light dots - colour is the stop signs' and the accent the route's; the one
+/// under the mouse gets a grey ring, the chosen one a white (a click on the map takes the
+/// place of a name in a list of seventy).
+const ENTRY: Color = Color::rgba(196, 202, 214, 1.0);
+const ENTRY_EDGE: Color = Color::rgba(9, 12, 24, 1.0);
+const ENTRY_HOVER: Color = Color::rgba(149, 157, 176, 1.0);
 const ENTRY_HERE: Color = Color::rgba(255, 255, 255, 1.0);
 /// A road is at least this wide on the screen when the map is far out, its own metres when
-/// it is near (the toolkit takes both: `Painter::ribbon`); the route, the dots and the rings
-/// have no metres of their own. The first two match the game's city map.
+/// it is near (the toolkit takes both: `Painter::ribbon`); the route, the signs and the rings
+/// have no metres of their own. The route's two are Omsi-Hub's 9 and 5 pixels.
 const CASING_PX: f32 = 2.4;
 const ROAD_PX: f32 = 1.4;
+const ROUTE_CASING_PX: f32 = 9.0;
 const ROUTE_PX: f32 = 5.0;
-const STOP_PX: f32 = 2.8;
+/// A stop is the stop sign the player looks for in the game, in the style chosen in the
+/// settings (`stop_signs`, as the navigator draws it): this many points across, the one under
+/// the mouse a little larger, the duty's first stop - where the bus is headed - as the
+/// navigator's next stop.
+const SIGN_PX: f32 = 14.0;
+const SIGN_HOVER_PX: f32 = 17.0;
 const ENTRY_PX: f32 = 3.4;
-/// The map's own background: the dark the window is cleared to, so the rail, the panels and
-/// the map meet without a seam.
-const BACKDROP: wgpu::Color = wgpu::Color { r: 0.0056, g: 0.0056, b: 0.0056, a: 1.0 };
+/// How near the mouse must come to a sign for its name to be written (points).
+const STOP_REACH: f32 = 9.0;
+/// The map's own background: the ground the window is cleared to (`theme::GROUND`, here in
+/// linear light), so the sheets and the map meet without a seam.
+const BACKDROP: wgpu::Color = wgpu::Color { r: 0.0027, g: 0.0037, b: 0.0091, a: 1.0 };
 /// The closest the map goes in, in metres a pixel.
 const MPP_MIN: f64 = 0.15;
+/// The least a duty's route is framed with, in metres across.
+const MIN_FRAME: f64 = 400.0;
 /// A press that travelled less than this many pixels is a click on what stands under it.
 const CLICK_SLOP: f32 = 5.0;
 /// How long the wheel has to be still before the plan is built again for the new zoom (see
@@ -60,8 +84,8 @@ const CLICK_SLOP: f32 = 5.0;
 /// for the whole map to be thinned again on every notch.
 const ZOOM_SETTLE: std::time::Duration = std::time::Duration::from_millis(140);
 
-/// What the map should show. Changing `map` reads the tiles again; changing `trip` only walks
-/// the timetable; changing `entry` only moves the ring.
+/// What the map should show. Changing `map` reads the tiles again; changing `trips` only
+/// walks the timetable for the trips not read yet; changing `entry` only moves the ring.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Look {
     /// The map as the launcher names it (`maps/<name>/global.cfg`), and where that is.
@@ -69,10 +93,24 @@ pub struct Look {
     pub global: PathBuf,
     /// The date the duty starts on (the chrono folders change the map and the timetable).
     pub date: String,
-    /// The trip whose route is drawn (empty: the map alone).
-    pub trip: String,
+    /// The trips of the duty, in the order they are driven, by their trip file's name: their
+    /// routes are drawn and their stops signed, the first one's first stop ringed (none: the
+    /// map alone).
+    pub trips: Vec<String>,
     /// The entry point the player picked, -1 = automatic (nothing is ringed).
     pub entry: i32,
+}
+
+/// A stop of the duty where the map has it: its place, and the trip of `Look::trips` and
+/// the stop of that trip it was first called at as (a stop the duty calls at again is
+/// signed once).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PlacedStop {
+    pub at: DVec2,
+    pub trip: usize,
+    pub stop: usize,
+    /// The stop's map object (what the timetable's `StopInfo::id` names).
+    pub id: i64,
 }
 
 /// One frame of the mouse over the map. `blocked` is what a panel or a field over it takes.
@@ -125,19 +163,49 @@ struct Roads {
     entries: Vec<Entry>,
     /// Every placed object's world place: the trip's stops are found here.
     objects: HashMap<i64, DVec2>,
+    /// Every bus stop of the map (the line editor's), and whether the map drives on the left.
+    stops: Vec<crate::scene::MapStop>,
+    left_hand: bool,
 }
+
+/// What the line editor lays over the map: its legs as lines (in the plan, built again when
+/// `revision` changes) and the stops as dots (every frame).
+#[derive(Default)]
+pub struct EditorLayer {
+    pub revision: u64,
+    /// (world points, colour, width in points).
+    pub lines: Vec<(Vec<DVec2>, Color, f32)>,
+    pub dots: Vec<Dot>,
+    /// The look's trips are not drawn as the duty's route (the company's fleet map draws its
+    /// lines itself, each in its colour).
+    pub plain: bool,
+}
+
+/// A stop of the line editor on the map.
+#[derive(Clone, Copy, Debug)]
+pub struct Dot {
+    pub at: DVec2,
+    pub fill: Color,
+    /// Radius in points.
+    pub r: f32,
+    pub ring: Option<Color>,
+}
+
+/// The trips' routes read so far, by trip name, and the map and date they were read for.
+type Paths = HashMap<String, omsi_launcher_lib::TripPath>;
 
 /// What a worker read.
 struct Reply {
     look: Look,
     roads: Option<Arc<Roads>>,
-    trip: omsi_launcher_lib::TripPath,
+    /// Every trip of the look's that the timetable knows, with the ones read before.
+    paths: Paths,
     /// What went wrong, when nothing could be read at all.
     error: Option<String>,
 }
 
 /// The plan (buffer 0): the roads and the route as one vertex list, and what it was built
-/// for - another map, another trip, or another zoom band (whose own thinning it is).
+/// for - another map, another duty, or another zoom band (whose own thinning it is).
 struct Plan {
     key: Key,
     verts: Vec<Vertex>,
@@ -148,9 +216,14 @@ struct Plan {
 #[derive(Clone, PartialEq)]
 struct Key {
     global: PathBuf,
-    trip: String,
+    /// The duty's trips (`Look::trips`).
+    trips: Vec<String>,
     /// The simplification the plan was built with, as the bit pattern of its metres.
     tolerance: u32,
+    /// The line editor's lines (`EditorLayer::revision`), none without them.
+    editor: Option<u64>,
+    /// The accent the route is drawn in.
+    accent: u32,
 }
 
 /// The map: what it shows, where it is looking, and the texture it is drawn into.
@@ -158,10 +231,14 @@ pub struct MapView {
     want: Option<Look>,
     shown: Option<Look>,
     roads: Option<Arc<Roads>>,
-    trip: omsi_launcher_lib::TripPath,
-    /// Where the trip calls: (its place on the map, the stop's own number in the timetable).
-    stops: Vec<(DVec2, usize)>,
-    /// The world rectangle the trip's route covers (the map's own when no trip is chosen).
+    /// The routes of the shown look's trips, in its order (an empty one for a trip the
+    /// timetable does not know), and every route read on this map and date so far - a
+    /// duty that changes one trip reads only that one.
+    paths: Vec<omsi_launcher_lib::TripPath>,
+    known: (PathBuf, String, Paths),
+    /// Where the duty calls, each stop once (see `PlacedStop`).
+    stops: Vec<PlacedStop>,
+    /// The world rectangle the duty's route covers (the map's own when no duty is chosen).
     route_box: Option<(DVec2, DVec2)>,
     error: Option<String>,
     loading: Option<Receiver<Reply>>,
@@ -185,6 +262,16 @@ pub struct MapView {
     /// among the drawn markers; `take_clicked` turns the second into the choice's own number.
     hover: Option<usize>,
     clicked: Option<usize>,
+    /// The duty's stop under the mouse (a number in `stops`).
+    hover_stop: Option<usize>,
+    /// The stop signs' style (the settings' `stop_style`, passed in every frame).
+    pub stop_style: crate::stop_signs::Style,
+    /// The line editor's layer: with it the entry points are neither drawn nor clicked, and
+    /// a click anywhere is the editor's (`take_click_at`).
+    pub editor: Option<EditorLayer>,
+    click_at: Option<Vec2>,
+    /// Counts the reads that arrived (a page that builds on the trips' routes builds again).
+    reads: u64,
 
     /// The plan and the markers (buffers 0 and 1); the markers are built every frame, the
     /// plan only when its key changes.
@@ -207,7 +294,8 @@ impl MapView {
             want: None,
             shown: None,
             roads: None,
-            trip: Default::default(),
+            paths: Vec::new(),
+            known: Default::default(),
             stops: Vec::new(),
             route_box: None,
             error: None,
@@ -222,6 +310,11 @@ impl MapView {
             last: None,
             hover: None,
             clicked: None,
+            hover_stop: None,
+            stop_style: crate::stop_signs::Style::German,
+            editor: None,
+            click_at: None,
+            reads: 0,
             plan: None,
             gpu: None,
             target: None,
@@ -274,10 +367,37 @@ impl MapView {
         (w as u32, h as u32)
     }
 
-    /// Where the trip calls, as the map knows it: (place, the stop's number in the
-    /// timetable's own list of it).
-    pub fn stops_placed(&self) -> &[(DVec2, usize)] {
+    /// The duty's stops where the map has them (see `placed_stops`).
+    pub fn placed_stops(&self) -> &[PlacedStop] {
         &self.stops
+    }
+
+    /// The duty's stop under the mouse.
+    pub fn hovered_stop(&self) -> Option<PlacedStop> {
+        self.stops.get(self.hover_stop?).copied()
+    }
+
+    /// The duty's first stop, when the map has it (the one ringed).
+    pub fn first_stop(&self) -> Option<PlacedStop> {
+        self.stops.first().copied().filter(|s| s.trip == 0 && s.stop == 0)
+    }
+
+    /// Zoom by `factor` (under 1 in, over 1 out) about the middle of the window the map is
+    /// framed in, as Omsi-Hub's + and - do.
+    pub fn zoom_by(&mut self, factor: f64) {
+        self.mpp = (self.mpp * factor).clamp(MPP_MIN, self.max_mpp().max(MPP_MIN));
+        self.manual = true;
+    }
+
+    /// Frame the duty's route (the whole map without one) again, as when it was chosen.
+    pub fn refit(&mut self) {
+        self.fit = true;
+        self.manual = false;
+    }
+
+    /// What one interface point of the map holds, in metres (the scale bar's measure).
+    pub fn metres_per_point(&self) -> f64 {
+        self.mpp * self.scale as f64
     }
 
     /// The chosen entry point, as the choice has it (-1: automatic).
@@ -313,6 +433,104 @@ impl MapView {
     pub fn take_clicked(&mut self) -> Option<usize> {
         let drawn = self.clicked.take()?;
         Some(self.roads.as_deref()?.entries.get(drawn)?.index)
+    }
+
+    /// The roads read for the map now wanted (not those of the map before, while another is
+    /// being read).
+    fn roads_of_wanted(&self) -> Option<&Roads> {
+        let map = |l: &Option<Look>| l.as_ref().map(|x| x.map.clone());
+        self.roads.as_deref().filter(|_| map(&self.shown).is_some() && map(&self.shown) == map(&self.want))
+    }
+
+    /// The wanted map's lane network, its bus stops and whether it drives on the left (the
+    /// line editor's), once it is read.
+    pub fn network(&self) -> Option<(Arc<Network>, &[crate::scene::MapStop], bool)> {
+        let r = self.roads_of_wanted()?;
+        Some((r.net.clone(), &r.stops, r.left_hand))
+    }
+
+    /// The world point under a point of the picture.
+    pub fn world_of(&self, at: Vec2) -> DVec2 {
+        self.world_at(at)
+    }
+
+    /// Where a click (a press that did not move the map) landed this frame, once.
+    pub fn take_click_at(&mut self) -> Option<Vec2> {
+        self.click_at.take()
+    }
+
+    /// The line editor's lines, made anew only when their revision changes.
+    pub fn editor_lines(&mut self, revision: u64, lines: impl FnOnce() -> Vec<(Vec<DVec2>, Color, f32)>) {
+        let layer = self.editor.get_or_insert_with(EditorLayer::default);
+        if layer.revision != revision {
+            layer.revision = revision;
+            layer.lines = lines();
+        }
+    }
+
+    /// The line editor's stops this frame.
+    pub fn editor_dots(&mut self, dots: Vec<Dot>) {
+        self.editor.get_or_insert_with(EditorLayer::default).dots = dots;
+    }
+
+    /// The line editor is left: the map is the duty's again.
+    pub fn editor_off(&mut self) {
+        if self.editor.take().is_some() {
+            self.plan = None;
+        }
+    }
+
+    /// The company's fleet map: its lines over the map, each in its colour (made anew only
+    /// when their revision changes), and the look's trips not drawn as a duty's route.
+    pub fn company_lines(&mut self, revision: u64, lines: impl FnOnce() -> Vec<(Vec<DVec2>, Color, f32)>) {
+        self.editor_lines(revision, lines);
+        if let Some(e) = self.editor.as_mut() {
+            e.plain = true;
+        }
+    }
+
+    /// How many reads have arrived (a page building on `trip_tracks` builds again).
+    pub fn reads(&self) -> u64 {
+        self.reads
+    }
+
+    /// The shown look's trips as the map has them, in its order: the trip's name, its route
+    /// as a line in world metres (the lanes its road pieces run on, end to end; empty where
+    /// the map lacks them) and the place of each of its stops.
+    pub fn trip_tracks(&self) -> Vec<(String, Vec<DVec2>, Vec<Option<DVec2>>)> {
+        let (Some(shown), Some(roads)) = (self.shown.as_ref(), self.roads.as_deref()) else { return Vec::new() };
+        shown
+            .trips
+            .iter()
+            .zip(self.paths.iter())
+            .map(|(name, path)| {
+                let mut pts: Vec<DVec2> = Vec::new();
+                for piece in &path.route {
+                    let Some(lane) = roads.routes_of(piece).first().and_then(|i| roads.net.lanes.get(*i)) else { continue };
+                    for q in &lane.points {
+                        let p = q.truncate();
+                        if pts.last().is_none_or(|x| (*x - p).length() > 0.05) {
+                            pts.push(p);
+                        }
+                    }
+                }
+                let stops = path.stops.iter().map(|id| roads.objects.get(id).copied()).collect();
+                (name.clone(), pts, stops)
+            })
+            .collect()
+    }
+
+    /// Where a placed object of the map stands, in world metres: the free drive marks the
+    /// stop chosen to start at with it.
+    pub fn object_place(&self, id: i64) -> Option<DVec2> {
+        self.roads_of_wanted()?.objects.get(&id).copied()
+    }
+
+    /// The entry point nearest to a world point in a straight line, as its own place in
+    /// `global.cfg`'s list (what the choice and `--entry` count), and how far it is in
+    /// metres: where the bus of a free drive stands for a stop chosen to start at.
+    pub fn nearest_entry(&self, p: DVec2) -> Option<(usize, f64)> {
+        self.roads_of_wanted()?.entries.iter().map(|e| (e.index, (e.at - p).length())).min_by(|a, b| a.1.total_cmp(&b.1))
     }
 
     /// Where a world point lies in the picture (interface pixels, `rect`'s own coordinates).
@@ -364,6 +582,8 @@ impl MapView {
         }
         let over = rect.contains(p.at) && !p.blocked;
         self.hover = if over { self.hit(p.at) } else { None };
+        // (an entry point under the mouse is what a click takes: its name, not the stop's)
+        self.hover_stop = if over && self.hover.is_none() { self.hit_stop(p.at) } else { None };
         // the wheel zooms where the cursor is: the world under it stays under it
         if over && p.wheel.abs() > 0.0 {
             let before = self.world_at(p.at);
@@ -382,7 +602,9 @@ impl MapView {
             if let Some(last) = self.last {
                 let d = p.at - last;
                 self.travelled += d.length();
-                self.center -= DVec2::new(d.x as f64, -d.y as f64) * self.mpp / self.scale as f64;
+                // (`d` is in points and `mpp` is metres a pixel: a point is `scale` pixels -
+                // divided, the map lagged behind the hand on a screen of 150 %)
+                self.center -= DVec2::new(d.x as f64, -d.y as f64) * self.mpp * self.scale as f64;
                 self.manual = true;
             }
         }
@@ -391,6 +613,7 @@ impl MapView {
             // a press that stayed where it was is a click on the entry point under it
             if self.panning && self.travelled < CLICK_SLOP {
                 self.clicked = self.hit(p.at);
+                self.click_at = Some(p.at);
             }
             self.panning = false;
         }
@@ -398,11 +621,26 @@ impl MapView {
 
     /// The entry point under a point of the picture, if one is within reach.
     fn hit(&self, at: Vec2) -> Option<usize> {
+        if self.editor.is_some() {
+            return None;
+        }
         let roads = self.roads.as_deref()?;
         let mut best: Option<(f32, usize)> = None;
         for (i, e) in roads.entries.iter().enumerate() {
             let d = (self.project(e.at) - at).length();
             if d <= 14.0 && best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                best = Some((d, i));
+            }
+        }
+        best.map(|(_, i)| i)
+    }
+
+    /// The duty's stop under a point of the picture, if one is within reach.
+    fn hit_stop(&self, at: Vec2) -> Option<usize> {
+        let mut best: Option<(f32, usize)> = None;
+        for (i, s) in self.stops.iter().enumerate() {
+            let d = (self.project(s.at) - at).length();
+            if d <= STOP_REACH && best.map(|(bd, _)| d < bd).unwrap_or(true) {
                 best = Some((d, i));
             }
         }
@@ -419,15 +657,17 @@ impl MapView {
                     // whole new trip): the map opens on the trip's own route, and the
                     // timetable arrives a moment after the page does, so the first read of a
                     // map often has no trip at all
-                    let before = self.shown.as_ref().map(|s| (s.global.clone(), s.date.clone(), s.trip.clone()));
+                    let before = self.shown.as_ref().map(|s| (s.global.clone(), s.date.clone(), s.trips.clone()));
                     let another = before.as_ref().map(|(g, d, _)| g != &r.look.global || d != &r.look.date).unwrap_or(true);
-                    let another_trip = before.as_ref().map(|(_, _, t)| t != &r.look.trip).unwrap_or(true);
+                    let another_trip = before.as_ref().map(|(_, _, t)| t != &r.look.trips).unwrap_or(true);
                     if let Some(roads) = r.roads {
                         self.roads = Some(roads);
                     }
-                    self.trip = r.trip;
+                    self.paths = r.look.trips.iter().map(|t| r.paths.get(t).cloned().unwrap_or_default()).collect();
+                    self.known = (r.look.global.clone(), r.look.date.clone(), r.paths);
                     self.error = r.error;
                     self.shown = Some(r.look);
+                    self.reads += 1;
                     self.plan = None;
                     self.place();
                     if another || another_trip {
@@ -447,17 +687,18 @@ impl MapView {
             return;
         }
         // only the ring moved: nothing has to be read again
-        if self.shown.as_ref().map(|s| s.map == want.map && s.date == want.date && s.trip == want.trip).unwrap_or(false) {
+        if self.shown.as_ref().map(|s| s.map == want.map && s.date == want.date && s.trips == want.trips).unwrap_or(false) {
             self.shown = Some(want);
             return;
         }
-        // the tiles of the map are read once; another trip on the same map only walks the
-        // timetable again
+        // the tiles of the map are read once; another duty on the same map only walks the
+        // timetable again, and only for the trips not read yet
         let have = self.roads.clone().filter(|_| self.shown.as_ref().map(|s| s.global == want.global && s.date == want.date).unwrap_or(false));
+        let known = if self.known.0 == want.global && self.known.1 == want.date { self.known.2.clone() } else { Paths::new() };
         let (tx, rx) = channel();
         let w = want.clone();
         let spawned = std::thread::Builder::new().name("launcher map".into()).spawn(move || {
-            let _ = tx.send(read(w, have));
+            let _ = tx.send(read(w, have, known));
         });
         match spawned {
             Ok(_) => self.loading = Some(rx),
@@ -468,41 +709,45 @@ impl MapView {
         }
     }
 
-    /// Where the trip's stops stand, and how much of the map its route covers - once per
+    /// Where the duty's stops stand, and how much of the map its route covers - once per
     /// read, not once per frame.
     fn place(&mut self) {
-        self.stops.clear();
+        self.hover_stop = None;
         self.route_box = None;
-        let Some(roads) = self.roads.clone() else { return };
-        for (i, id) in self.trip.stops.iter().enumerate() {
-            if let Some(q) = roads.objects.get(id) {
-                self.stops.push((*q, i));
-            }
-        }
+        let Some(roads) = self.roads.clone() else {
+            self.stops.clear();
+            return;
+        };
+        self.stops = placed_stops(&self.paths, &roads.objects);
         let (mut lo, mut hi) = (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN));
-        let mut found = 0usize;
-        for piece in &self.trip.route {
-            let lanes = roads.routes_of(piece);
-            found += usize::from(!lanes.is_empty());
-            for i in lanes {
-                let Some(l) = roads.net.lanes.get(i) else { continue };
-                for q in &l.points {
-                    lo = lo.min(q.truncate());
-                    hi = hi.max(q.truncate());
-                }
+        let (mut found, mut pieces) = (0usize, 0usize);
+        for i in route_lanes(&roads, &self.paths, &mut found, &mut pieces) {
+            let Some(l) = roads.net.lanes.get(i) else { continue };
+            for q in &l.points {
+                lo = lo.min(q.truncate());
+                hi = hi.max(q.truncate());
             }
         }
-        if found < self.trip.route.len() {
+        // the stops belong to the frame too: a trip whose road pieces the map lacks still
+        // shows where it calls
+        for s in &self.stops {
+            lo = lo.min(s.at);
+            hi = hi.max(s.at);
+        }
+        if found < pieces {
             // (a map whose timetable still names splines it no longer has: the game's own
             // routing skips the same pieces, so the picture is right even where it is short)
-            log::info!("launcher map: the route - {found} of {} pieces are on the map", self.trip.route.len());
+            log::info!("launcher map: the route - {found} of {pieces} pieces are on the map");
         }
         if lo.x != f64::MAX {
-            self.route_box = Some((lo, hi));
+            // (a duty the map knows one stop of is still a place, not a point to zoom into)
+            let half = ((hi - lo) * 0.5).max(DVec2::splat(MIN_FRAME * 0.5));
+            let mid = (lo + hi) * 0.5;
+            self.route_box = Some((mid - half, mid + half));
         }
     }
 
-    /// What the map is looking at: the chosen trip's own route when there is one (that is
+    /// What the map is looking at: the chosen duty's own route when there is one (that is
     /// what the player is choosing), else the whole map.
     fn content(&self) -> Option<(DVec2, DVec2)> {
         if let Some((lo, hi)) = self.route_box {
@@ -533,7 +778,7 @@ impl MapView {
         self.fit = false;
         log::info!(
             "map: looking at {} ({:.0}, {:.0}) - ({:.0}, {:.0}) through a {} x {} window, {:.1} m per pixel",
-            if self.route_box.is_some() { "the trip's route" } else { "the whole map" },
+            if self.route_box.is_some() { "the duty's route" } else { "the whole map" },
             lo.x, lo.y, hi.x, hi.y, vis.w.round(), vis.h.round(), self.mpp
         );
     }
@@ -580,7 +825,8 @@ impl MapView {
         }
         let roads = self.roads.clone()?;
         let tolerance = self.tolerance();
-        let key = Key { global: self.shown.as_ref().map(|s| s.global.clone()).unwrap_or_default(), trip: self.trip_name(), tolerance: tolerance.to_bits() };
+        let key = Key { global: self.shown.as_ref().map(|s| s.global.clone()).unwrap_or_default(), trips: self.trip_names(), tolerance: tolerance.to_bits(), editor: self.editor.as_ref().map(|e| e.revision), accent: crate::accent::chosen() };
+        // (not while the wheel still turns: the zoom in progress keeps the plan it has)
         if self.plan_is_stale(&key) {
             let (verts, points) = self.build(&roads, tolerance);
             let count = verts.len() as u32;
@@ -614,9 +860,9 @@ impl MapView {
         Some(target)
     }
 
-    /// The name of the trip whose route is drawn (the plan is built again when it changes).
-    fn trip_name(&self) -> String {
-        self.shown.as_ref().map(|s| s.trip.clone()).unwrap_or_default()
+    /// The trips whose routes are drawn (the plan is built again when they change).
+    fn trip_names(&self) -> Vec<String> {
+        self.shown.as_ref().map(|s| s.trips.clone()).unwrap_or_default()
     }
 
     /// Whether the plan has to be built again: another map, another trip, or another band of
@@ -656,7 +902,7 @@ impl MapView {
         Mat4::orthographic_rh(left, right, bottom, top, -100.0, 100.0)
     }
 
-    /// The roads of the whole map and the chosen trip's route over them, as one vertex list
+    /// The roads of the whole map and the chosen duty's route over them, as one vertex list
     /// (the camera only moves a matrix over it).
     fn build(&self, roads: &Roads, tolerance: f32) -> (Vec<Vertex>, usize) {
         let k = self.scale;
@@ -685,16 +931,33 @@ impl MapView {
             }
         }
         // the route: the very lanes the game would drive, so it runs on its own side of the
-        // road and not down the middle of it
-        for piece in &self.trip.route {
-            for i in roads.routes_of(piece) {
-                let Some(l) = roads.net.lanes.get(i) else { continue };
-                let v: Vec<Vec3> = l.points.iter().map(|q| rel(*q)).collect();
-                let v = simplify(&v, tolerance);
+        // road and not down the middle of it - every trip of the duty, each lane once, the
+        // casings of all of it under the blue of all of it (a trip coming back over a street
+        // is not cut by the casing of the one that went out)
+        let (mut found, mut pieces) = (0, 0);
+        let plain = self.editor.as_ref().is_some_and(|e| e.plain);
+        let lanes: Vec<Vec<Vec3>> = route_lanes(roads, if plain { &[] } else { &self.paths }, &mut found, &mut pieces)
+            .into_iter()
+            .filter_map(|i| roads.net.lanes.get(i))
+            .map(|l| simplify(&l.points.iter().map(|q| rel(*q)).collect::<Vec<_>>(), tolerance))
+            .filter(|v| v.len() >= 2)
+            .collect();
+        for (w, c) in [(ROUTE_CASING_PX, route_casing()), (ROUTE_PX, route())] {
+            for v in &lanes {
                 points += v.len();
-                if v.len() >= 2 {
-                    p.ribbon(&v, 0.0, ROUTE_PX * k, ROUTE, false);
-                }
+                p.ribbon(v, 0.0, w * k, c, true);
+            }
+        }
+        // the line editor's legs, each on a dark casing
+        if let Some(e) = self.editor.as_ref() {
+            let rel2 = |q: DVec2| Vec3::new((q.x - roads.origin.x) as f32, (q.y - roads.origin.y) as f32, 0.0);
+            let lines: Vec<(Vec<Vec3>, Color, f32)> = e.lines.iter().map(|(v, c, w)| (simplify(&v.iter().map(|q| rel2(*q)).collect::<Vec<_>>(), tolerance), *c, *w)).filter(|x| x.0.len() >= 2).collect();
+            for (v, _, w) in &lines {
+                p.ribbon(v, 0.0, (w + 4.0) * k, route_casing(), true);
+            }
+            for (v, c, w) in &lines {
+                points += v.len();
+                p.ribbon(v, 0.0, w * k, *c, true);
             }
         }
         (p.verts, points)
@@ -706,11 +969,20 @@ impl MapView {
         let mpp = self.mpp as f32;
         let at = |q: DVec2| Vec3::new((q.x - roads.origin.x) as f32, (q.y - roads.origin.y) as f32, 0.0);
         let mut p = Painter::new();
-        for (q, _) in &self.stops {
-            p.world_disc(at(*q), 0.0, STOP_PX * k, STOP);
+        // the line editor: its stops, and nothing of the duty's
+        if let Some(e) = self.editor.as_ref() {
+            for d in &e.dots {
+                p.world_disc(at(d.at), 0.0, (d.r + 1.5) * k, ENTRY_EDGE);
+                p.world_disc(at(d.at), 0.0, d.r * k, d.fill);
+                if let Some(c) = d.ring {
+                    ring(&mut p, at(d.at), (d.r + 3.0) * k, 2.0 * k, c, mpp);
+                }
+            }
+            return p.verts;
         }
         let chosen = self.chosen();
         for (i, e) in roads.entries.iter().enumerate() {
+            p.world_disc(at(e.at), 0.0, (ENTRY_PX + 1.5) * k, ENTRY_EDGE);
             p.world_disc(at(e.at), 0.0, ENTRY_PX * k, ENTRY);
             if self.hover == Some(i) {
                 ring(&mut p, at(e.at), (ENTRY_PX + 3.0) * k, 2.0 * k, ENTRY_HOVER, mpp);
@@ -720,8 +992,53 @@ impl MapView {
                 ring(&mut p, at(e.at), (ENTRY_PX + 6.5) * k, 2.0 * k, ENTRY_HERE, mpp);
             }
         }
+        // the stops over the entry points: they are what the duty is about; the first one -
+        // where the bus is headed - as the navigator's next stop, the one under the mouse a
+        // little lifted (the signs as the game draws them: `stop_signs`)
+        let first = self.first_stop();
+        for (i, s) in self.stops.iter().enumerate().rev() {
+            let (kind, size) = if first.is_some() && i == 0 {
+                (crate::stop_signs::Kind::Next, SIGN_PX)
+            } else {
+                (crate::stop_signs::Kind::Ahead, if self.hover_stop == Some(i) { SIGN_HOVER_PX } else { SIGN_PX })
+            };
+            crate::stop_signs::draw_world(&mut p, self.stop_style, kind, at(s.at), size * k);
+        }
         p.verts
     }
+}
+
+/// The duty's stops where the map has them, each once, in the order the duty first calls at
+/// them (`paths` in the duty's order; `objects` the map's placed objects).
+fn placed_stops(paths: &[omsi_launcher_lib::TripPath], objects: &HashMap<i64, DVec2>) -> Vec<PlacedStop> {
+    let mut seen = hashbrown::HashSet::new();
+    let mut out = Vec::new();
+    for (t, path) in paths.iter().enumerate() {
+        for (s, id) in path.stops.iter().enumerate() {
+            let Some(q) = objects.get(id) else { continue };
+            if seen.insert(*id) {
+                out.push(PlacedStop { at: *q, trip: t, stop: s, id: *id });
+            }
+        }
+    }
+    out
+}
+
+/// The lanes the duty drives, each once (a shift drives a street out and back, and a tour
+/// the same loop all day), in the order first driven. `found` and `pieces` count the road
+/// pieces the map had of the ones the timetable names.
+fn route_lanes(roads: &Roads, paths: &[omsi_launcher_lib::TripPath], found: &mut usize, pieces: &mut usize) -> Vec<usize> {
+    let mut seen = hashbrown::HashSet::new();
+    let mut out = Vec::new();
+    for path in paths {
+        for piece in &path.route {
+            let lanes = roads.routes_of(piece);
+            *pieces += 1;
+            *found += usize::from(!lanes.is_empty());
+            out.extend(lanes.into_iter().filter(|i| seen.insert(*i)));
+        }
+    }
+    out
 }
 
 impl Roads {
@@ -757,11 +1074,12 @@ fn simplify(pts: &[Vec3], tol: f32) -> Vec<Vec3> {
 }
 
 /// Read a map the way the map needs it: the roads the game's city map draws, the entry
-/// points, the objects - and the chosen trip's route with them.
-fn read(look: Look, have: Option<Arc<Roads>>) -> Reply {
-    let mut reply = Reply { look, roads: None, trip: Default::default(), error: None };
+/// points, the objects - and the chosen duty's routes with them (`known`: the ones read
+/// before on this map and date).
+fn read(look: Look, have: Option<Arc<Roads>>, known: Paths) -> Reply {
+    let mut reply = Reply { look, roads: None, paths: Paths::new(), error: None };
     if let Some(r) = have {
-        reply.trip = trip_of(&reply.look);
+        reply.paths = paths_of(&reply.look, known);
         reply.roads = Some(r);
         return reply;
     }
@@ -769,24 +1087,25 @@ fn read(look: Look, have: Option<Arc<Roads>>) -> Reply {
     if roads.roads.is_empty() && roads.objects.is_empty() {
         reply.error = Some(format!("{}", reply.look.global.display()));
     }
-    reply.trip = trip_of(&reply.look);
+    reply.paths = paths_of(&reply.look, known);
     reply.roads = Some(Arc::new(roads));
     reply
 }
 
-/// The route of the chosen trip (nothing when no trip is chosen or the map has a timetable
-/// that does not know it).
-fn trip_of(look: &Look) -> omsi_launcher_lib::TripPath {
-    if look.trip.trim().is_empty() {
-        return Default::default();
-    }
-    match omsi_launcher_lib::trip_path(&look.map, &look.date, &look.trip) {
-        Ok(t) => t,
-        Err(e) => {
-            log::debug!("trip path for {}: {e}", look.trip);
-            Default::default()
+/// The routes of the duty's trips, added to `known` (a trip the timetable does not know has
+/// an empty one, so it is not asked for again).
+fn paths_of(look: &Look, mut known: Paths) -> Paths {
+    for trip in &look.trips {
+        if trip.trim().is_empty() || known.contains_key(trip) {
+            continue;
         }
+        let path = omsi_launcher_lib::trip_path(&look.map, &look.date, trip).unwrap_or_else(|e| {
+            log::debug!("trip path for {trip}: {e}");
+            Default::default()
+        });
+        known.insert(trip.clone(), path);
     }
+    known
 }
 
 /// The map's own data, read the way the game reads it for its city map: every tile's paths
@@ -817,7 +1136,7 @@ fn read_map(look: &Look) -> Roads {
         .filter(|t| omsi_cfg::vfs::is_file(&t.2))
         .collect();
     let t0 = std::time::Instant::now();
-    let crate::scene::NavigationMap { lanes, road_surfaces, places, signs: _ } = crate::scene::navigation_map_of(&root, &tiles, &chrono);
+    let crate::scene::NavigationMap { lanes, road_surfaces, places, signs: _, stops } = crate::scene::navigation_map_of(&root, &tiles, &chrono);
     let (roads, net) = crate::navigator::city_roads(lanes, &road_surfaces);
     // the lanes the timetable can name, and the lanes of every spline behind them
     let mut by_path = HashMap::new();
@@ -881,7 +1200,7 @@ fn read_map(look: &Look) -> Roads {
         min.x, min.y, max.x, max.y,
         lo.x, lo.y, hi.x, hi.y
     );
-    Roads { roads, net: Arc::new(net), lanes: by_path, splines: by_spline, origin, lo, hi, entries, objects }
+    Roads { roads, net: Arc::new(net), lanes: by_path, splines: by_spline, origin, lo, hi, entries, objects, stops, left_hand: global.left_hand_traffic }
 }
 
 #[cfg(test)]
@@ -912,6 +1231,67 @@ mod tests {
         assert_eq!(m.take_clicked(), Some(0));
         // a click is taken once
         assert_eq!(m.take_clicked(), None);
+    }
+
+    fn path(stops: &[i64], splines: &[i64]) -> omsi_launcher_lib::TripPath {
+        let route = splines.iter().map(|s| omsi_launcher_lib::RoadPiece { tile_x: 0, tile_y: 0, spline: *s, path: 0 }).collect();
+        omsi_launcher_lib::TripPath { route, stops: stops.to_vec() }
+    }
+
+    #[test]
+    fn a_stop_the_duty_calls_at_again_is_signed_once() {
+        // out over stops 1 2 3 and back over 3 2 1, then on to 4 (5 is not on the map)
+        let objects: HashMap<i64, DVec2> = (1..=4).map(|k| (k, DVec2::new(k as f64 * 100.0, 0.0))).collect();
+        let stops = placed_stops(&[path(&[1, 2, 3], &[]), path(&[3, 2, 1], &[]), path(&[1, 5, 4], &[])], &objects);
+        assert_eq!(stops.iter().map(|s| (s.id, s.trip, s.stop)).collect::<Vec<_>>(), vec![(1, 0, 0), (2, 0, 1), (3, 0, 2), (4, 2, 2)]);
+        assert_eq!(stops[3].at, DVec2::new(400.0, 0.0));
+    }
+
+    #[test]
+    fn a_lane_the_duty_drives_again_is_drawn_once() {
+        let mut lanes = HashMap::new();
+        for (k, s) in [10i64, 11, 12].iter().enumerate() {
+            lanes.insert((0, 0, *s, 0u16), k);
+        }
+        let roads = Roads { lanes, ..Default::default() };
+        let (mut found, mut pieces) = (0, 0);
+        // the second trip comes back over 11 and 10, and names a spline the map lacks (99)
+        let drawn = route_lanes(&roads, &[path(&[], &[10, 11]), path(&[], &[11, 10, 99, 12])], &mut found, &mut pieces);
+        assert_eq!(drawn, vec![0, 1, 2]);
+        assert_eq!((found, pieces), (5, 6));
+    }
+
+    #[test]
+    fn the_map_keeps_up_with_the_hand_at_any_scale() {
+        for scale in [1.0f32, 1.5, 2.0] {
+            let mut m = map();
+            m.mpp = 2.0;
+            let r = Rect::new(0.0, 0.0, 800.0, 600.0);
+            let at = Vec2::new(400.0, 300.0);
+            let p = |at: Vec2, pressed: bool, down: bool, released: bool| Pointer { at, pressed, released, down, wheel: 0.0, blocked: false };
+            m.think(r, r, scale, p(at, true, true, false));
+            let before = m.world_at(at);
+            m.think(r, r, scale, p(at + Vec2::new(50.0, 0.0), false, true, false));
+            // the world point that was under the mouse is under it still
+            let after = m.world_at(at + Vec2::new(50.0, 0.0));
+            assert!((after - before).length() < 1e-6, "{scale}: {before} → {after}");
+            m.think(r, r, scale, p(at + Vec2::new(50.0, 0.0), false, false, true));
+        }
+    }
+
+    #[test]
+    fn the_buttons_zoom_about_the_middle_and_frame_the_route_again() {
+        let mut m = map();
+        m.fit = false;
+        m.mpp = 4.0;
+        m.center = DVec2::new(50.0, 0.0);
+        m.zoom_by(0.5);
+        assert_eq!((m.mpp, m.center), (2.0, DVec2::new(50.0, 0.0)));
+        assert!(m.manual);
+        m.zoom_by(0.0001);
+        assert_eq!(m.mpp, MPP_MIN);
+        m.refit();
+        assert!(m.fit && !m.manual);
     }
 
     #[test]
@@ -957,7 +1337,7 @@ mod tests {
     #[test]
     fn a_zoom_in_progress_keeps_the_plan_it_has() {
         let mut m = map();
-        let built = Key { global: PathBuf::from("maps/Grundorf/global.cfg"), trip: String::new(), tolerance: 2.0f32.to_bits() };
+        let built = Key { global: PathBuf::from("maps/Grundorf/global.cfg"), trips: Vec::new(), tolerance: 2.0f32.to_bits(), editor: None, accent: 0 };
         let finer = Key { tolerance: 1.0f32.to_bits(), ..built.clone() };
         let plan = || Some(Plan { key: built.clone(), verts: Vec::new(), count: 0, uploaded: true });
         m.plan = plan();

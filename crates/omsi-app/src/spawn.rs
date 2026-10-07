@@ -210,6 +210,10 @@ pub(crate) fn spawn_player(
     host.initial_ident = ident;
     // (the paint scheme's variables are there for the scripts' {init})
     host.paint_scheme = Some(paint_scheme(&vt, args.paint.as_deref()));
+    // and so are the bus options (`--setvar`) over them: set again over the livery's below,
+    // and once more after the first frames
+    let options = setvars(args.setvar.as_deref());
+    host.start_vars = options.clone();
     let mut vehicle = omsi_sim::VehicleInstance::new(vt.clone(), host);
     // place at the entry point
     if let Some(ep) = world
@@ -275,6 +279,9 @@ pub(crate) fn spawn_player(
         None => log::info!("paint: the model's own textures"),
     }
     vehicle.apply_paint_vars(scheme);
+    for (k, v) in &options {
+        vehicle.set_var(k, *v);
+    }
     log::info!("gearbox: {}", if vehicle.ty.program.manual_gearbox() { "manual (gates)" } else { "automatic or none" });
     if let Some(sp) = &args.spawn {
         let v: Vec<f64> = sp
@@ -309,7 +316,7 @@ pub(crate) fn spawn_player(
                 renderer,
                 scene,
                 t,
-                scheme.filter(|i| *i < t.paint_schemes.len()),
+                part_scheme(&vt, scheme, t),
                 &render,
             )
         })
@@ -326,6 +333,21 @@ pub(crate) fn spawn_player(
                 .ok()
                 .map(|i| (i.width, i.height, i.rgba))
         });
+    }
+    // the display font the player chose for the bus (`--display-font`, the launcher's bus
+    // step) on its destination displays
+    if let Some(font) = args.display_font.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+        let n = vehicle.apply_display_font(font, &mut world.fonts.lock(), &|p| {
+            omsi_texture::decode_file(p)
+                .ok()
+                .map(|i| (i.width, i.height, i.rgba))
+        });
+        log::info!("display font \"{font}\": {n} destination display(s) of the bus");
+        // and the matrices its scripts draw with fonts they ask for by name (the Krüger
+        // matrices): the chosen font takes those fonts' places
+        for (script, fonts) in vehicle.apply_script_display_font(Some(font)) {
+            log::info!("display font \"{font}\": the {fonts} letter font(s) of {} (a matrix the bus's script draws)", script.display());
+        }
     }
     // number / ident were installed before {init}; do not rewrite them here.
     // ground following through the loaded tiles (road surfaces first, then terrain)
@@ -458,6 +480,7 @@ pub(crate) fn spawn_player(
         duty_typed: false,
         html_next_stop: None,
         ibis_background: false,
+        ibis_auto: crate::settings::Settings::load().ibis_auto,
         arm: Default::default(),
         blinker_key_state: 0,
         blinker_cancel: crate::settings::Settings::load().blinker_cancel,
@@ -465,12 +488,10 @@ pub(crate) fn spawn_player(
     for _ in 0..3 {
         p.vehicle.update(1.0 / 30.0);
     }
-    if let Some(sv) = &args.setvar {
-        for kv in sv.split(',') {
-            if let Some((k, v)) = kv.split_once('=') {
-                if !p.vehicle.set_var(k.trim(), omsi_cfg::parse_f32(v)) {
-                    log::warn!("variable {k} not found");
-                }
+    if !options.is_empty() {
+        for (k, v) in &options {
+            if !p.vehicle.set_var(k, *v) {
+                log::warn!("variable {k} not found");
             }
         }
         p.vehicle.update(1.0 / 30.0);
@@ -665,6 +686,27 @@ pub(crate) fn paint_scheme(vt: &omsi_sim::VehicleType, paint: Option<&str>) -> O
         );
     }
     found
+}
+
+/// The paint scheme of a coupled part (an articulated bus's rear section) for the lead's
+/// `scheme`: the part's scheme of the same name, as OMSI pairs the repaints of both parts by
+/// their name; a part without one keeps the same place in its list (as before, when the parts'
+/// folders list the same repaints in the same order).
+pub(crate) fn part_scheme(lead: &omsi_sim::VehicleType, scheme: Option<usize>, part: &omsi_sim::VehicleType) -> Option<usize> {
+    let i = scheme?;
+    let named = lead.paint_schemes.get(i).and_then(|s| part.paint_schemes.iter().position(|p| p.name.eq_ignore_ascii_case(&s.name)));
+    named.or_else(|| (i < part.paint_schemes.len()).then_some(i))
+}
+
+/// The variables of `--setvar` (`name=value,…`, the launcher's bus options): names trimmed,
+/// pieces without a name or an `=` left out.
+pub(crate) fn setvars(arg: Option<&str>) -> Vec<(String, f32)> {
+    arg.into_iter()
+        .flat_map(|sv| sv.split(','))
+        .filter_map(|kv| kv.split_once('='))
+        .filter(|(k, _)| !k.trim().is_empty())
+        .map(|(k, v)| (k.trim().to_string(), omsi_cfg::parse_f32(v)))
+        .collect()
 }
 
 /// Where the map's `global.cfg` recorded an entry point (x, height, y within its tile), in

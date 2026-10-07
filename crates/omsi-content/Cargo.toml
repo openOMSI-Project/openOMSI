@@ -8,3 +8,5 @@ description = "Smaller OMSI content formats: weather, environment, fonts, langua
 [dependencies]
 omsi-cfg = { path = "../omsi-cfg" }
 log.workspace = true
+# display fonts from TrueType/OpenType files, made into dots (`dotfont`)
+ab_glyph = "0.2"

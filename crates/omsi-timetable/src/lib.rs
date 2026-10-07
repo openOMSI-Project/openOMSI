@@ -3,6 +3,8 @@
 use omsi_cfg::CfgFile;
 use std::path::{Path, PathBuf};
 
+pub mod write;
+
 /// `Busstops.cfg` `[busstop]`: name, index within the group, object id, ?, ?, ?
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BusStopEntry {
@@ -278,10 +280,7 @@ impl Line {
 
     /// Write the line to `path`, in the code page of the file it replaces (else Windows-1252).
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        let page = std::fs::read(path).map(|b| omsi_cfg::codepage::detect(&b)).unwrap_or(omsi_cfg::codepage::CodePage::Windows1252);
-        let text = self.to_text();
-        let (bytes, _, _) = page.encoding().encode(&text);
-        std::fs::write(path, bytes)
+        write::write_text(path, &self.to_text())
     }
 }
 

@@ -90,15 +90,8 @@ pub(crate) fn run_offscreen(
     let mut duty: Option<schedule::PlayerDuty> = None;
     // why the duty asked for cannot be driven (the picture's HUD says it too)
     let mut duty_error: Option<String> = None;
-    if let (Some(sch), Some(line), Some(p)) = (schedule.as_mut(), &args.line, player.as_mut()) {
-        match sch.player_duty(
-            &world,
-            line,
-            args.tour.as_deref().unwrap_or(""),
-            parse_time(&args.time),
-            args.trip.as_deref(),
-            args.whole_tour,
-        ) {
+    if let (Some(sch), Some(_), Some(p)) = (schedule.as_mut(), &args.line, player.as_mut()) {
+        match crate::duty_start::player_duty(sch, &world, &args, parse_time(&args.time)) {
             Ok(mut d) => {
                 if let Some(k) = args.duty_trip {
                     d.start_at(k, args.duty_first_stop);
@@ -2677,6 +2670,8 @@ pub(crate) fn run_offscreen(
             let mut nav = navigator::Navigator::new(true, settings.ui_opacity, &settings.navigator_corner);
             nav.schedule = omsi_cfg::env::var_os("OMSI_NAV_SCHEDULE").is_some();
             nav.show_ai = settings.nav_ai;
+            nav.set_rect(&settings.nav_rect);
+            crate::stop_signs::set_style(crate::stop_signs::Style::from_setting(&settings.stop_style));
             if omsi_cfg::env::var_os("OMSI_NAV_MAP").is_some() {
                 nav.toggle_map();
             }
@@ -2703,6 +2698,7 @@ pub(crate) fn run_offscreen(
                 terminus,
                 stops,
                 delay: duty.as_ref().map(|_| p.vehicle.host.tt_delay as f64),
+                duty: duty.as_ref(),
                 passengers: humans_off.as_ref().map(|h| h.riding()),
                 stop_requested: navigator::stop_requested(&p.vehicle),
                 time: clock.time,

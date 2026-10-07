@@ -81,6 +81,9 @@ pub struct Vehicle {
     pub friendly_name_inv: Vec<String>,
     pub description: String,
     pub ai_veh_type: i32,
+    /// The file has an `[ai_veh_type]`: a vehicle made for the AI traffic (a fire engine, a
+    /// lorry, a taxi in a `.bus`), without a cab to drive from - the launchers do not offer it.
+    pub ai_only: bool,
     pub number_file: Option<String>,
     /// `[registration_automatic]`: prefix and postfix around the fleet number.
     pub registration_automatic: Option<(String, String)>,
@@ -291,7 +294,10 @@ impl Vehicle {
                 }
                 "friendlyname_inv" => v.friendly_name_inv = (0..3).map(|_| r.str().to_string()).collect(),
                 "description" => v.description = r.until("[end]").join("\n"),
-                "ai_veh_type" => v.ai_veh_type = r.i32(),
+                "ai_veh_type" => {
+                    v.ai_veh_type = r.i32();
+                    v.ai_only = true;
+                }
                 "number" => v.number_file = Some(r.str().to_string()),
                 // Omsi.exe (TRoadVehicle.LoadFromFile 0x7cddf5, 0x7cde6e) reads these lines
                 // as they come, whatever they say: the automatic mode's prefix and postfix

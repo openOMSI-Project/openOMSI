@@ -237,6 +237,190 @@ impl Hof {
     pub fn terminus_by_code(&self, code: i32) -> Option<&Terminus> {
         self.termini.iter().find(|t| t.code == code)
     }
+
+    /// The depot file as OMSI reads it (`\r\n` line ends; the caller picks the code page):
+    /// `[name]`, `[servicetrip]`, `[global_strings]`, the two string counts with `comments`'
+    /// notes on the strings, then the termini, the stops, the IBIS trips with their stop lists
+    /// and the IBIS stops. What [`Hof::parse`] reads of it is this `Hof` again (`path` aside).
+    ///
+    /// A record (`[addterminus]`, `[addbusstop]`) is read with its line ends cut off, so a
+    /// text ending in spaces - a centred sign padded on the right, as the spreadsheet exports
+    /// have them - keeps them only in a list (`[addterminus_list]`, `[addbusstop_list]`):
+    /// termini and stops are written as a list when one of their texts needs it (and none
+    /// holds a tab, which a list cannot).
+    pub fn to_text(&self, comments: &Comments) -> String {
+        let mut o = String::with_capacity(4096 + self.termini.len() * 160);
+        let line = |o: &mut String, s: &str| {
+            o.push_str(&one_line(s));
+            o.push_str("\r\n");
+        };
+        for c in &comments.head {
+            line(&mut o, &comment(c));
+        }
+        if !comments.head.is_empty() {
+            o.push_str("\r\n");
+        }
+        o.push_str("[name]\r\n");
+        line(&mut o, &self.name);
+        o.push_str("\r\n");
+        if !self.service_trip.is_empty() {
+            o.push_str("[servicetrip]\r\n");
+            line(&mut o, &self.service_trip);
+            o.push_str("\r\n");
+        }
+        if !self.global_strings.is_empty() {
+            o.push_str(&format!("[global_strings]\r\n{}\r\n", self.global_strings.len()));
+            for s in &self.global_strings {
+                line(&mut o, s);
+            }
+            o.push_str("\r\n");
+        }
+        // (a file without the count reads every column of its lists: as many as the widest)
+        let nt = if self.string_count_terminus > 0 { self.string_count_terminus } else { self.termini.iter().map(|t| t.strings.len()).max().unwrap_or(0) };
+        let nb = if self.string_count_busstop > 0 { self.string_count_busstop } else { self.bus_stops.iter().map(|b| b.strings.len()).max().unwrap_or(0) };
+        let notes = |o: &mut String, prefix: &str, notes: &[String]| {
+            let mut any = false;
+            for (k, n) in notes.iter().enumerate().filter(|(_, n)| !n.trim().is_empty()) {
+                o.push_str(&format!("\t{prefix}string{k}:\t{}\r\n", one_line(n.trim())));
+                any = true;
+            }
+            if any {
+                o.push_str("\r\n");
+            }
+        };
+        o.push_str(&format!("stringcount_terminus\r\n{nt}\r\n\r\n"));
+        notes(&mut o, "", &comments.terminus);
+        o.push_str(&format!("stringcount_busstop\r\n{nb}\r\n\r\n"));
+        // (not `string0:` alone: that is how the terminus strings' notes are told)
+        notes(&mut o, "busstop ", &comments.busstop);
+        let fit = |s: &[String], n: usize| -> Vec<String> {
+            let mut v: Vec<String> = s.iter().take(n).map(|x| one_line(x)).collect();
+            v.resize(n, String::new());
+            v
+        };
+        let list = |texts: Vec<&String>, names: Vec<&String>| texts.iter().any(|t| t.trim_end() != t.as_str()) && !texts.iter().chain(names.iter()).any(|t| t.contains('\t'));
+        if list(self.termini.iter().flat_map(|t| t.strings.iter().take(nt)).collect(), self.termini.iter().map(|t| &t.texture_id).collect()) {
+            o.push_str("[addterminus_list]\r\n");
+            for t in &self.termini {
+                let flag = if t.all_exit { "{ALLEX}" } else { "" };
+                o.push_str(&format!("{flag}\t{}\t{}", t.code, one_line(t.texture_id.trim())));
+                for s in fit(&t.strings, nt) {
+                    o.push('\t');
+                    o.push_str(&s);
+                }
+                o.push_str("\r\n");
+            }
+            o.push_str("[end]\r\n\r\n");
+        } else {
+            for t in &self.termini {
+                o.push_str(if t.all_exit { "[addterminus_allexit]\r\n" } else { "[addterminus]\r\n" });
+                o.push_str(&format!("{}\r\n", t.code));
+                line(&mut o, &t.texture_id);
+                for s in fit(&t.strings, nt) {
+                    line(&mut o, &s);
+                }
+                o.push_str("\r\n");
+            }
+        }
+        if list(self.bus_stops.iter().flat_map(|b| b.strings.iter().take(nb)).collect(), self.bus_stops.iter().map(|b| &b.ident).collect()) {
+            o.push_str("[addbusstop_list]\r\n");
+            for b in &self.bus_stops {
+                o.push_str(&one_line(b.ident.trim()));
+                for s in fit(&b.strings, nb) {
+                    o.push('\t');
+                    o.push_str(&s);
+                }
+                o.push_str("\r\n");
+            }
+            o.push_str("[end]\r\n\r\n");
+        } else {
+            for b in &self.bus_stops {
+                o.push_str("[addbusstop]\r\n");
+                line(&mut o, &b.ident);
+                for s in fit(&b.strings, nb) {
+                    line(&mut o, &s);
+                }
+                o.push_str("\r\n");
+            }
+        }
+        for (k, t) in self.info_trips.iter().enumerate() {
+            o.push_str("[infosystem_trip]\r\n");
+            for s in [&t.code, &t.name, &t.route, &t.line] {
+                line(&mut o, s);
+            }
+            o.push_str("\r\n");
+            if let Some(stops) = self.info_busstop_lists.get(k).filter(|l| !l.is_empty()) {
+                o.push_str(&format!("[infosystem_busstop_list]\r\n{}\r\n", stops.len()));
+                for s in stops {
+                    line(&mut o, s);
+                }
+                o.push_str("\r\n");
+            }
+        }
+        for b in &self.info_busstops {
+            o.push_str("[infosystem_busstop]\r\n");
+            for k in 0..3 {
+                line(&mut o, b.get(k).map(String::as_str).unwrap_or(""));
+            }
+            o.push_str("\r\n");
+        }
+        o
+    }
+}
+
+/// The comment lines [`Hof::to_text`] writes: at the head of the file, and the notes on what
+/// each terminus string and each stop string is for (`string0: IBIS-Display`, as the stock
+/// files have them - what the line editor knows the strings by, `linehof::notes`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Comments {
+    pub head: Vec<String>,
+    pub terminus: Vec<String>,
+    pub busstop: Vec<String>,
+}
+
+/// A text as one line of a depot file: no line breaks in it.
+fn one_line(s: &str) -> String {
+    if s.contains(['\r', '\n']) {
+        s.replace("\r\n", " ").replace(['\r', '\n'], " ")
+    } else {
+        s.to_string()
+    }
+}
+
+/// A comment line: indented, and so never read as a keyword or a string count.
+fn comment(s: &str) -> String {
+    let s = one_line(s.trim());
+    if s.is_empty() {
+        String::new()
+    } else {
+        format!("\t{s}")
+    }
+}
+
+/// The folder the depot files of a bus in `bus_dir` are read from: its own when it has any
+/// there (in any content root), else its pack's - the folder right under `Vehicles` - when
+/// that has some, as the bus list and the launcher's depot tiles have them.
+pub fn depot_dir(bus_dir: &Path) -> PathBuf {
+    if has_own_depot_files(bus_dir) {
+        return bus_dir.to_path_buf();
+    }
+    let comps: Vec<std::path::Component> = bus_dir.components().collect();
+    if let Some(i) = comps.iter().rposition(|c| c.as_os_str().to_string_lossy().eq_ignore_ascii_case("vehicles")) {
+        if comps.len() > i + 2 {
+            let pack: PathBuf = comps[..i + 2].iter().collect();
+            if has_own_depot_files(&pack) {
+                return pack;
+            }
+        }
+    }
+    bus_dir.to_path_buf()
+}
+
+/// Whether `dir` has depot files of its own, in any content root (the shared `HOFs/` folder,
+/// which `depot_files` adds for every vehicle, aside: it would make every bus seem to have
+/// some, and a pack's never be read).
+fn has_own_depot_files(dir: &Path) -> bool {
+    omsi_cfg::mirrored_dirs(dir).iter().any(|d| omsi_cfg::vfs::read_dir_paths(d).iter().any(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("hof"))))
 }
 
 /// The `.hof` files available to a vehicle. Files next to the vehicle come first, merged
@@ -318,10 +502,16 @@ pub fn closest_name(names: &[&str], hints: &[&str]) -> Option<usize> {
     best.map(|(i, _)| i)
 }
 
+/// A depot file of the player's own (openOMSI's depot editor's, `oo_…`), given to a bus for the
+/// drives that name it: never taken for another one in its place.
+pub fn is_players(path: &Path) -> bool {
+    path.file_stem().and_then(|s| s.to_str()).and_then(|s| s.get(..3)).is_some_and(|p| p.eq_ignore_ascii_case("oo_"))
+}
+
 /// The depot file of `dir` that belongs to the place `hints` name (see [`closest_name`]),
-/// by its file name or its `[name]`.
+/// by its file name or its `[name]` (one of the player's own only by its name: `is_players`).
 pub fn depot_like(dir: &Path, hints: &[&str]) -> Option<Hof> {
-    let files = depot_files(dir);
+    let files: Vec<PathBuf> = depot_files(dir).into_iter().filter(|f| !is_players(f)).collect();
     let names: Vec<String> = files
         .iter()
         .map(|f| {
@@ -441,6 +631,145 @@ mod tests {
         assert_eq!(h.termini[1].terminus_stop.as_deref(), Some("U Ruhleben"));
         assert_eq!(h.termini[1].strings, vec!["RUHLEBEN", "U-BAHNHOF", "RUHLEBEN  "]);
         assert_eq!(h.terminus_by_code(282).map(|t| t.texture_id.as_str()), Some("U Ruhleben"));
+    }
+
+    /// The head of a stock depot file as OMSI ships it: comments, notes on the strings, the
+    /// spreadsheet's trailing tabs, an "everybody out" terminus, umlauts, an IBIS trip with
+    /// its stops and one without (Windows-1252 when written).
+    const STOCK: &str = "\t########################\r\n\t\tHOF-Datei\r\n\r\n\tEnthält die diversen Informationen zum Einsatz für diesen Hof.\r\n\r\n\
+        [name]\r\nGrundorf\r\n\r\n[servicetrip]\r\nBetriebsfahrt\r\n\r\n[global_strings]\t\r\n4\t\r\nGrundorf\t\r\n\r\nGrundorf\r\n4\r\n\r\n\
+        stringcount_terminus\r\n8\r\n\r\n\tstring0:\tIBIS-Display & Rollband-Textur\r\n\tstring5:\tIBIS2-Display (Klarname in Groß-/Kleinschreibung), max 20 Zeichen\r\n\r\n\
+        stringcount_busstop\r\n4\r\n\r\n\
+        [addterminus_allexit]\r\n13\r\nBetriebsfahrt\r\nBETRIEBSFAHRT\r\n                \r\n BETRIEBSFAHRT\r\n BETRIEBSFAHRT\r\nBetriebsfahrt.tga\r\nBetriebsfahrt\r\n\r\n\r\n................\r\n\r\n\
+        [addterminus]\r\n103\r\nThalesstr\r\nTHALESSTRASSE\r\n THALESSTRASSE\r\n- FERNSEHTURM -\r\n THALESSTRASSE\r\nGru_Thalesstr.tga\r\nThalesstraße\r\n\r\n\r\n................\r\n\r\n\
+        [addbusstop]\r\nBauernhof\r\nNORDS. BAUERNHOF\r\nNordspitze\r\nBauernhof\r\nNordsp. Bauernhof\r\n....................\r\n\r\n\
+        [addbusstop]\r\nGaussdorf\r\nGAUSSDORF\r\nGaussdorf\r\n\r\nGaussdorf\r\n\r\n\
+        [infosystem_trip]\r\n7601\r\nBAUERNHOF-KRANKENHAUS\r\n105\r\nTML\r\n\r\n................\r\n\r\n\
+        [infosystem_busstop_list]\r\n2\r\nBauernhof\r\nGaussdorf\r\n\r\n\
+        [infosystem_trip]\r\n455900\r\nIVU\r\n81\r\n455\r\n\r\n\
+        [infosystem_busstop]\r\nGAUSSDORF\r\nGaussdorf\r\nMitte\r\n";
+
+    fn same(a: &Hof, b: &Hof) {
+        let (mut a, mut b) = (a.clone(), b.clone());
+        a.path = PathBuf::new();
+        b.path = PathBuf::new();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn a_depot_file_written_reads_back_as_it_was() {
+        let h = Hof::parse(&CfgFile::from_str("Grundorf.hof", STOCK));
+        assert_eq!((h.termini.len(), h.bus_stops.len(), h.info_trips.len(), h.info_busstops.len()), (2, 2, 2, 1));
+        assert_eq!(h.global_strings, vec!["Grundorf", "", "Grundorf", "4"]);
+        let notes = Comments { head: vec!["openOMSI depot file".into()], terminus: vec!["IBIS-Display".into(), String::new(), "Front, 2. Zeile".into()], busstop: vec!["IBIS".into()] };
+        let text = h.to_text(&notes);
+        let back = Hof::parse(&CfgFile::from_str("x.hof", &text));
+        same(&h, &back);
+        assert!(text.contains("[addterminus_allexit]\r\n13\r\nBetriebsfahrt\r\n"), "{text}");
+        assert!(text.contains("\tstring2:\tFront, 2. Zeile\r\n") && text.contains("\tbusstop string0:\tIBIS\r\n"));
+        // written again: the same text
+        assert_eq!(back.to_text(&notes), text);
+        // in Windows-1252, as OMSI reads it
+        let page = omsi_cfg::codepage::CodePage::Windows1252.encoding();
+        let (bytes, _, lossy) = page.encode(&text);
+        assert!(!lossy);
+        assert!(bytes.windows(2).any(|w| w == [b'a', 0xDF]), "Thalesstraße in one byte");
+        same(&h, &Hof::parse(&CfgFile::from_bytes("x.hof", &bytes)));
+    }
+
+    #[test]
+    fn texts_padded_on_the_right_are_written_as_a_list() {
+        let text = "stringcount_terminus\r\n3\r\nstringcount_busstop\r\n2\r\n\r\n[addterminus_list]\r\n{ALLEX}\t13\tBetriebsfahrt\tBETRIEBSFAHRT\t\tBETRIEBSFAHRT\t\t\r\n\t282\tU Ruhleben\tRUHLEBEN\tU-BAHNHOF\tRUHLEBEN  \t\t\t\r\n[end]\r\n\
+            [addbusstop_list]\r\nRuhleben\tRUHLEBEN  \tU Ruhleben\r\n[end]\r\n";
+        let h = Hof::parse(&CfgFile::from_str("Spandau.hof", text));
+        let out = h.to_text(&Comments::default());
+        assert!(out.contains("[addterminus_list]\r\n{ALLEX}\t13\tBetriebsfahrt\t") && out.contains("[addbusstop_list]"), "{out}");
+        let back = Hof::parse(&CfgFile::from_str("x.hof", &out));
+        same(&h, &back);
+        assert_eq!(back.termini[1].strings[2], "RUHLEBEN  ");
+        // nothing padded: records
+        let mut plain = h.clone();
+        plain.termini[1].strings[2] = "RUHLEBEN".into();
+        plain.bus_stops[0].strings[0] = "RUHLEBEN".into();
+        let out = plain.to_text(&Comments::default());
+        assert!(out.contains("[addterminus]\r\n282\r\nU Ruhleben\r\n") && !out.contains("_list]"), "{out}");
+        same(&plain, &Hof::parse(&CfgFile::from_str("x.hof", &out)));
+        // a line break typed into a text is no second line
+        plain.termini[1].strings[0] = "RUH\r\nLEBEN".into();
+        let back = Hof::parse(&CfgFile::from_str("x.hof", &plain.to_text(&Comments::default())));
+        assert_eq!(back.termini[1].strings[0], "RUH LEBEN");
+        assert_eq!(back.termini.len(), 2);
+    }
+
+    #[test]
+    fn a_pack_buses_depot_files_are_the_packs() {
+        let base = std::env::temp_dir().join(format!("omsi_hof_dir_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let put = |rel: &str| {
+            let p = base.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, "[name]\r\nX\r\n").unwrap();
+        };
+        put("Vehicles/Pack/Grundorf.hof");
+        put("Vehicles/Pack/Solo/solo.bus");
+        put("Vehicles/Pack/Own/Spandau.hof");
+        put("Vehicles/Lone/Sub/x.bus");
+        assert_eq!(depot_dir(&base.join("Vehicles/Pack/Solo")), base.join("Vehicles/Pack"));
+        assert_eq!(depot_dir(&base.join("Vehicles/Pack/Own")), base.join("Vehicles/Pack/Own"));
+        assert_eq!(depot_dir(&base.join("Vehicles/Pack")), base.join("Vehicles/Pack"));
+        assert_eq!(depot_dir(&base.join("Vehicles/Lone/Sub")), base.join("Vehicles/Lone/Sub"), "no depot file anywhere: its own folder");
+        // the player's own given to a bus is taken by its name only, never for the place
+        let mine = base.join("Vehicles/Lone/Sub/oo_Grundorf_mine.hof");
+        std::fs::write(&mine, "[name]\r\nGrundorf - mine\r\n").unwrap();
+        assert!(is_players(&mine) && !is_players(&base.join("Vehicles/Pack/Grundorf.hof")));
+        assert!(depot_like(&base.join("Vehicles/Lone/Sub"), &["Grundorf"]).is_none());
+        assert!(depot_in(&base.join("Vehicles/Lone/Sub"), "oo_Grundorf_mine").is_some());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Every depot file of an installation (`OMSI_HOF_DIR`, e.g. OMSI 2's `Vehicles`) written
+    /// and read back: what is read is what was there. Run by hand:
+    /// `OMSI_HOF_DIR=... cargo test -p omsi-vehicle -- --ignored every_installed`.
+    #[test]
+    #[ignore]
+    fn every_installed_depot_file_reads_back() {
+        let Some(dir) = std::env::var_os("OMSI_HOF_DIR") else { return };
+        fn walk(d: &Path, out: &mut Vec<PathBuf>) {
+            for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("hof")) {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(Path::new(&dir), &mut files);
+        assert!(!files.is_empty());
+        for f in &files {
+            let bytes = std::fs::read(f).unwrap();
+            let h = Hof::parse(&CfgFile::from_bytes(f, &bytes));
+            let text = h.to_text(&Comments::default());
+            let back = Hof::parse(&CfgFile::from_str(f, &text));
+            let mut want = h.clone();
+            // (a file without a count is written with one: its widest list)
+            if want.string_count_terminus == 0 {
+                want.string_count_terminus = back.string_count_terminus;
+                for t in &mut want.termini {
+                    t.strings.resize(back.string_count_terminus, String::new());
+                }
+            }
+            if want.string_count_busstop == 0 {
+                want.string_count_busstop = back.string_count_busstop;
+            }
+            for b in &mut want.bus_stops {
+                b.strings.resize(back.string_count_busstop, String::new());
+            }
+            want.info_busstop_lists.truncate(want.info_trips.len());
+            same(&want, &back);
+        }
+        eprintln!("{} depot files read back", files.len());
     }
 
     #[test]

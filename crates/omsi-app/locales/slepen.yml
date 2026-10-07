@@ -1,0 +1,11 @@
+_version: 2
+# The planning's dragging (crate::launcher::company::planning): drivers and buses onto the
+# chart, and duties and tours onto the drivers and buses. The English text is the key.
+
+"Tap one, then a duty - or drag it there; or drag a duty here.":
+  nl: "Tik er een aan, dan een dienst - of sleep hem erheen; of sleep een dienst hierheen."
+  de: "Einen antippen, dann einen Dienst - oder dorthin ziehen; oder einen Dienst hierher ziehen."
+  fr: "Touchez-en un, puis un service - ou faites-le glisser ; ou glissez un service ici."
+  ru: "Нажмите на одного, затем на смену - или перетащите; или перетащите смену сюда."
+  uk: "Натисніть на одного, потім на зміну - або перетягніть; або перетягніть зміну сюди."
+  pl: "Stuknij jednego, potem służbę - albo przeciągnij go tam; albo przeciągnij tu służbę."

@@ -370,3 +370,115 @@ mod cube_tests {
         assert_eq!(img.rgba[c + 2], 4 * 40);
     }
 }
+
+// --- writing ----------------------------------------------------------------------------------
+//
+// A DirectX 9 DDS as D3DX writes one and OMSI 2 reads it: the 128-byte header (no DX10 one), a
+// DXT1 or DXT5 four-character code, and the whole mip chain down to 1 x 1, each level's blocks
+// one after the other.
+
+const DDSD_CAPS: u32 = 0x1;
+const DDSD_HEIGHT: u32 = 0x2;
+const DDSD_WIDTH: u32 = 0x4;
+const DDSD_PIXELFORMAT: u32 = 0x1000;
+const DDSD_MIPMAPCOUNT: u32 = 0x20000;
+const DDSD_LINEARSIZE: u32 = 0x80000;
+const DDPF_FOURCC: u32 = 0x4;
+const DDSCAPS_COMPLEX: u32 = 0x8;
+const DDSCAPS_TEXTURE: u32 = 0x1000;
+const DDSCAPS_MIPMAP: u32 = 0x400000;
+
+/// Bytes of one level of `w` x `h` pixels in a block format.
+pub fn level_bytes(w: u32, h: u32, format: crate::bc::Bc) -> usize {
+    w.max(1).div_ceil(4) as usize * h.max(1).div_ceil(4) as usize * format.block_bytes()
+}
+
+/// The 128 bytes in front of the blocks: `levels` mip levels of a `w` x `h` picture.
+pub fn header(w: u32, h: u32, levels: u32, format: crate::bc::Bc) -> [u8; 128] {
+    let mut k = [0u8; 128];
+    let mut put = |o: usize, v: u32| k[o..o + 4].copy_from_slice(&v.to_le_bytes());
+    put(4, 124);
+    put(8, DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_MIPMAPCOUNT | DDSD_LINEARSIZE);
+    put(12, h);
+    put(16, w);
+    put(20, level_bytes(w, h, format) as u32);
+    // (depth 1 for a flat texture, as D3DX and the NVIDIA tools write it)
+    put(24, 1);
+    put(28, levels);
+    put(76, 32);
+    put(80, DDPF_FOURCC);
+    put(108, DDSCAPS_TEXTURE | if levels > 1 { DDSCAPS_COMPLEX | DDSCAPS_MIPMAP } else { 0 });
+    k[..4].copy_from_slice(b"DDS ");
+    k[84..88].copy_from_slice(match format {
+        crate::bc::Bc::Bc1 { .. } => b"DXT1",
+        crate::bc::Bc::Bc2 => b"DXT3",
+        crate::bc::Bc::Bc3 => b"DXT5",
+    });
+    k
+}
+
+/// An sRGB RGBA picture as a DDS file with its whole mip chain (each level a box in linear
+/// light of the one above, see `bc::downsample`), encoded in `format`.
+pub fn encode(rgba: &[u8], w: u32, h: u32, format: crate::bc::Bc) -> Vec<u8> {
+    let levels = crate::gpu::mip_count(w, h);
+    let mut out = header(w, h, levels, format).to_vec();
+    let (mut pic, mut lw, mut lh) = (std::borrow::Cow::Borrowed(rgba), w.max(1), h.max(1));
+    for l in 0..levels {
+        let (blocks, _, _) = crate::bc::encode(&pic, lw, lh, format);
+        debug_assert_eq!(blocks.len(), level_bytes(lw, lh, format));
+        out.extend_from_slice(&blocks);
+        if l + 1 < levels {
+            let (next, nw, nh) = crate::bc::downsample(&pic, lw, lh);
+            (pic, lw, lh) = (std::borrow::Cow::Owned(next), nw, nh);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod writer_tests {
+    use crate::bc::Bc;
+
+    fn picture(w: u32, h: u32, alpha: bool) -> Vec<u8> {
+        (0..w * h).flat_map(|i| {
+            let (x, y) = (i % w, i / w);
+            [(x * 255 / w.max(2)) as u8, (y * 255 / h.max(2)) as u8, 90, if alpha && x < w / 2 { 40 } else { 255 }]
+        }).collect()
+    }
+
+    #[test]
+    fn a_written_dds_has_the_header_omsi_reads_and_the_whole_chain() {
+        let (w, h) = (64u32, 32u32);
+        let bytes = super::encode(&picture(w, h, false), w, h, Bc::Bc1 { punch: false });
+        assert_eq!(&bytes[..4], b"DDS ");
+        let at = |o: usize| u32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+        assert_eq!((at(4), at(12), at(16), at(28)), (124, h, w, 7), "size, height, width, levels down to 1x1");
+        assert_eq!(&bytes[84..88], b"DXT1");
+        assert_eq!(at(20) as usize, 16 * 8 * 8, "the top level's bytes");
+        assert_eq!(at(108), 0x1000 | 0x8 | 0x400000, "caps: texture, complex, mip-mapped");
+        assert_eq!(at(24), 1, "depth 1, as OMSI's own textures");
+        // the levels exactly: 64x32, 32x16, ... 1x1
+        let mut n = 128;
+        let (mut lw, mut lh) = (w, h);
+        for _ in 0..7 {
+            n += super::level_bytes(lw, lh, Bc::Bc1 { punch: false });
+            (lw, lh) = ((lw / 2).max(1), (lh / 2).max(1));
+        }
+        assert_eq!(bytes.len(), n);
+        // and it reads back as the picture
+        let img = super::decode(&bytes).unwrap();
+        assert_eq!((img.width, img.height), (w, h));
+        let src = picture(w, h, false);
+        let err: f64 = img.rgba.iter().zip(&src).map(|(a, b)| (*a as f64 - *b as f64).abs()).sum::<f64>() / src.len() as f64;
+        assert!(err < 6.0, "mean error {err}");
+    }
+
+    #[test]
+    fn a_picture_with_alpha_goes_into_dxt5_and_keeps_it() {
+        let (w, h) = (16u32, 8u32);
+        let bytes = super::encode(&picture(w, h, true), w, h, Bc::Bc3);
+        assert_eq!(&bytes[84..88], b"DXT5");
+        let img = super::decode(&bytes).unwrap();
+        assert!((img.rgba[3] as i32 - 40).abs() <= 2 && img.rgba[(w as usize - 1) * 4 + 3] == 255);
+    }
+}

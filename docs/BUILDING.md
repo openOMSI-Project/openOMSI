@@ -49,9 +49,10 @@ Plain cargo works too: `cargo build --release -p omsi-app` builds `target/releas
 
 ## Icons
 
-The application icon is made from the logos in `assets/logos`:
-`assets/icons/app/openomsi.svg` (Windows/Linux) and `openomsi-macos.svg` (macOS, with the
-standard margin). `openomsi.ico` is embedded into the Windows executables at build time
+The application icon is the logo's mark - the ring with the bus front, on the navy square:
+`assets/icons/app/openomsi.svg` (Windows/Linux), `openomsi-macos.svg` (macOS, with the
+standard margin) and `openomsi-small.svg` (the 16 to 32 pixel pictures, with a thicker ring
+and a simpler bus); the wordmarks are in `assets/logos`. `openomsi.ico` is embedded into the Windows executables at build time
 (`build.rs`, `winresource`), `openomsi.icns` goes into the macOS bundle, and
 `openomsi-256.png` is the window icon on Windows and Linux. To regenerate them after changing
 the SVGs (needs `cargo install resvg`):

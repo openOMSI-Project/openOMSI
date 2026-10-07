@@ -122,7 +122,7 @@ img, video { max-width: 100%; height: auto; }
   display: flex; align-items: center; gap: 8px; padding: 0 12px;
   background: var(--appbar); color: var(--appbar-fg); border-bottom: 1px solid var(--appbar-border);
 }
-.brand img { height: 30px; display: block; margin-left: 4px; }
+.brand img { height: 40px; display: block; margin-left: 4px; }
 .spacer { flex: 1; }
 .icon-btn {
   width: 48px; height: 48px; border: 0; border-radius: 50%; background: none; color: inherit;

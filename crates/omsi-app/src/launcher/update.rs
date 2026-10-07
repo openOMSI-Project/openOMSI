@@ -73,7 +73,7 @@ impl Launcher {
                             log::info!("update: {} installed, the new launcher starts", r.version);
                             event_loop.exit();
                         }
-                        Err(e) => self.state.set_status(format!("openOMSI {} is installed; start it again yourself ({e}).", r.version), true),
+                        Err(e) => self.state.set_status(omsi_ui::tr("openOMSI %{version} is installed; start it again yourself (%{error}).").replace("%{version}", &r.version).replace("%{error}", &e.to_string()), true),
                     }
                 }
             }
@@ -113,12 +113,12 @@ impl Launcher {
         let buttons_y = inner.bottom() - 40.0;
         match status {
             Status::Available(rel) => {
-                self.ui.icon("system_update", icon_at, 26.0, ACCENT);
-                self.ui.text_in(&format!("openOMSI {} is available", rel.version), title_r, 18.0, Weight::Bold, TEXT, Align::Left);
+                self.ui.icon("system_update", icon_at, 26.0, accent());
+                self.ui.text_in(&omsi_ui::tr("openOMSI %{version} is available").replace("%{version}", &rel.version), title_r, 18.0, Weight::Bold, TEXT, Align::Left);
                 let text = if cfg!(target_os = "android") {
-                    format!("You have {current}. Update now? The launcher downloads the new version ({}) from GitHub and Android installs it; openOMSI then starts again - your mods and settings stay as they are.", mb(rel.size))
+                    omsi_ui::tr("You have %{current}. Update now? The launcher downloads the new version (%{size}) from GitHub and Android installs it; openOMSI then starts again - your mods and settings stay as they are.").replace("%{current}", current).replace("%{size}", &mb(rel.size))
                 } else {
-                    format!("You have {current}. Update now? The launcher downloads the new version ({}) from GitHub, puts it in place of this one and starts again - your mods and settings stay as they are.", mb(rel.size))
+                    omsi_ui::tr("You have %{current}. Update now? The launcher downloads the new version (%{size}) from GitHub, puts it in place of this one and starts again - your mods and settings stay as they are.").replace("%{current}", current).replace("%{size}", &mb(rel.size))
                 };
                 self.ui.paragraph(&text, body_at, inner.w, 13.0, Weight::Regular, TEXT_DIM);
                 let mut auto = self.setting("update_auto", false);
@@ -137,21 +137,21 @@ impl Launcher {
                 }
             }
             Status::Downloading { release, done, total } => {
-                self.ui.icon("download", icon_at, 26.0, ACCENT);
-                self.ui.text_in(&format!("Downloading openOMSI {}", release.version), title_r, 18.0, Weight::Bold, TEXT, Align::Left);
+                self.ui.icon("download", icon_at, 26.0, accent());
+                self.ui.text_in(&omsi_ui::tr("Downloading openOMSI %{version}").replace("%{version}", &release.version), title_r, 18.0, Weight::Bold, TEXT, Align::Left);
                 let frac = if total > 0 { done as f32 / total as f32 } else { 0.0 };
-                self.ui.paragraph(&format!("{} of {} from github.com/{}", mb(done), mb(total), updater::REPO), body_at, inner.w, 13.0, Weight::Regular, TEXT_DIM);
+                self.ui.paragraph(&omsi_ui::tr("%{done} of %{total} from %{source}").replace("%{done}", &mb(done)).replace("%{total}", &mb(total)).replace("%{source}", &format!("github.com/{}", updater::REPO)), body_at, inner.w, 13.0, Weight::Regular, TEXT_DIM);
                 self.ui.progress(Rect::new(inner.x, body_at.y + 40.0, inner.w, 10.0), frac, true);
             }
             Status::Installing(release) | Status::Restarting(release) => {
-                self.ui.icon("install_desktop", icon_at, 26.0, ACCENT);
-                self.ui.text_in(&format!("Installing openOMSI {}", release.version), title_r, 18.0, Weight::Bold, TEXT, Align::Left);
+                self.ui.icon("install_desktop", icon_at, 26.0, accent());
+                self.ui.text_in(&omsi_ui::tr("Installing openOMSI %{version}").replace("%{version}", &release.version), title_r, 18.0, Weight::Bold, TEXT, Align::Left);
                 self.ui.paragraph("The new version is put in place; the launcher starts again in a moment.", body_at, inner.w, 13.0, Weight::Regular, TEXT_DIM);
                 self.ui.progress(Rect::new(inner.x, body_at.y + 40.0, inner.w, 10.0), 1.0, true);
             }
             Status::WaitingForInstaller(release) => {
-                self.ui.icon("install_mobile", icon_at, 26.0, ACCENT);
-                self.ui.text_in(&format!("Installing openOMSI {}", release.version), title_r, 18.0, Weight::Bold, TEXT, Align::Left);
+                self.ui.icon("install_mobile", icon_at, 26.0, accent());
+                self.ui.text_in(&omsi_ui::tr("Installing openOMSI %{version}").replace("%{version}", &release.version), title_r, 18.0, Weight::Bold, TEXT, Align::Left);
                 self.ui.paragraph("Android asks whether to update openOMSI: press Update there. The app then starts again by itself.", body_at, inner.w, 13.0, Weight::Regular, TEXT_DIM);
                 self.ui.progress(Rect::new(inner.x, body_at.y + 60.0, inner.w, 10.0), 1.0, true);
             }
@@ -185,12 +185,12 @@ impl Launcher {
             return;
         }
         let fade = (t / 0.3).min(1.0).min((9.0 - t) / 0.6).clamp(0.0, 1.0);
-        let text = format!("Updated to openOMSI {v}");
+        let text = omsi_ui::tr("Updated to openOMSI %{version}").replace("%{version}", &v);
         let w = self.ui.width(&text, 13.5, Weight::Bold) + 60.0;
         let r = Rect::new(self.ui.size.x - w - 20.0, 18.0, w, 42.0);
         self.ui.p().rounded(r, 8.0, PANEL.alpha(0.97 * fade));
-        self.ui.p().rounded_border(r, 8.0, 1.0, ACCENT.alpha(0.6 * fade));
-        self.ui.icon("check_circle", Vec2::new(r.x + 22.0, r.center().y), 20.0, ACCENT.alpha(fade));
+        self.ui.p().rounded_border(r, 8.0, 1.0, accent().alpha(0.6 * fade));
+        self.ui.icon("check_circle", Vec2::new(r.x + 22.0, r.center().y), 20.0, accent().alpha(fade));
         self.ui.text_in(&text, Rect::new(r.x + 40.0, r.y, w - 48.0, r.h), 13.5, Weight::Bold, TEXT.alpha(fade), Align::Left);
     }
 }
@@ -272,7 +272,7 @@ impl Launcher {
         } else {
             "Copy the report (the end of the game's log), or open a GitHub issue with it: it tells what went wrong on this computer."
         };
-        let text = format!("{what}\n\n{hint}");
+        let text = format!("{what}\n\n{}", omsi_ui::tr(hint));
         let th = self.ui.paragraph_height(&text, w - 48.0, 13.0, Weight::Regular).min(size.y * 0.5);
         let h = (140.0 + th).min(size.y - 24.0);
         let r = Rect::new((size.x - w) * 0.5, (size.y - h) * 0.5, w, h);

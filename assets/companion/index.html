@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- viewport-fit=cover: the page runs on behind the notch and the round corners. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0e1522" />
+    <!-- Put on the home screen it opens without an address bar, like an app. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="openOMSI" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icon.svg" />
+    <link rel="stylesheet" href="style.css" />
+    <title>openOMSI</title>
+  </head>
+  <body>
+    <!-- The phone: pairing, signing on, the duty, the navigator. Drawn by app.js. -->
+    <main id="app"></main>
+    <!-- A screen of the bus, full size, as a touchscreen. -->
+    <section id="screen" hidden></section>
+    <!-- The report at the end of a trip. -->
+    <div id="modal" hidden></div>
+    <div id="pill" role="status" hidden></div>
+    <!-- The navigator's map (map.js) before the page that shows it (app.js). -->
+    <script src="map.js" defer></script>
+    <script src="app.js" defer></script>
+  </body>
+</html>

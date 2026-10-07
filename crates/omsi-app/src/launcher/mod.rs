@@ -8,20 +8,43 @@
 //! lists, timetables, profiles, installs, running games) is `omsi-launcher-core`, the same
 //! functions `omsi-launcher --cli` offers a terminal.
 
+mod accent_pick;
+mod busclass;
+mod busoptions;
+mod busphoto;
+mod buspick;
+mod company;
+mod daytime;
+mod depoteditor;
+mod displayfont;
 pub(crate) mod drive;
+mod editor_hub;
+pub(crate) mod flow;
+mod freedrive;
+mod hof;
+mod intro;
+mod lineeditor;
+mod lineroute;
+pub(crate) mod livery;
+mod mapchoice;
 pub(crate) mod mapview;
 pub mod mobile;
 pub mod phone;
 mod multiplayer;
+mod ownlines;
 pub(crate) mod pages;
+pub(crate) mod tour;
+mod shiftsheet;
 mod showroom;
 mod state;
 #[cfg_attr(not(target_os = "android"), allow(unused_imports))]
 pub(crate) use state::crash_of;
 mod theme;
 mod timetable;
+mod transition;
 mod ui;
 mod update;
+mod welcome;
 
 use glam::Vec2;
 use omsi_launcher_lib as core;
@@ -50,9 +73,19 @@ pub enum Page {
     Tutorials,
     Timetable,
     Setup,
+    /// The editor hub: the line editor, the livery editor, the timetable, the map's objects.
+    Editor,
+    /// The line editor (lineeditor).
+    Lines,
+    /// The depot editor (depoteditor): depot files of the player's own.
+    Depots,
+    /// The livery studio (see `livery`): a bus painted in 3D.
+    Livery,
+    /// The bus company (see `company`).
+    Company,
 }
 
-const PAGES: [(Page, &str, &str); 10] = [
+const PAGES: [(Page, &str, &str); 15] = [
     (Page::Drive, "Drive", "directions_bus"),
     (Page::Multiplayer, "Multiplayer", "groups"),
     (Page::Profile, "Profile", "badge"),
@@ -63,6 +96,11 @@ const PAGES: [(Page, &str, &str); 10] = [
     (Page::Tutorials, "Tutorials", "help"),
     (Page::Timetable, "Timetable", "schedule"),
     (Page::Setup, "Setup", "folder_open"),
+    (Page::Editor, "Editor", "construction"),
+    (Page::Lines, "Line editor", "route"),
+    (Page::Depots, "Depot editor", "departure_board"),
+    (Page::Livery, "Livery", "livery_fill"),
+    (Page::Company, "Bus company", "garage"),
 ];
 
 #[cfg(not(target_os = "android"))]
@@ -87,8 +125,35 @@ impl Clipboard {
     }
 }
 
-/// Width of the left rail (points).
-pub const RAIL_W: f32 = 236.0;
+/// The setup world's pictures: the photos of the ways to drive and the start's ground (Omsi-Hub's),
+/// and the welcome's pictures of the new launcher and the classic one.
+const PICTURES: [(&str, &[u8]); 8] = [
+    ("mode-company", include_bytes!("../../../../assets/launcher/bedrijf.jpg")),
+    ("mode-shift", include_bytes!("../../../../assets/launcher/dienst.jpg")),
+    ("mode-tour", include_bytes!("../../../../assets/launcher/omloop.jpg")),
+    ("mode-free", include_bytes!("../../../../assets/launcher/vrij.jpg")),
+    ("mode-editor", include_bytes!("../../../../assets/launcher/editor.jpg")),
+    ("ground-start", include_bytes!("../../../../assets/launcher/start-nacht.jpg")),
+    ("ui-new", include_bytes!("../../../../assets/launcher/ui-nieuw.jpg")),
+    ("ui-classic", include_bytes!("../../../../assets/launcher/ui-klassiek.jpg")),
+];
+
+/// The pictures decoded on a thread of their own (the window opens meanwhile; a tile shows
+/// its colour until its photo is there).
+fn decode_pictures() -> std::sync::mpsc::Receiver<(&'static str, image::RgbaImage)> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for (name, bytes) in PICTURES {
+            match image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg) {
+                Ok(img) => {
+                    let _ = tx.send((name, img.to_rgba8()));
+                }
+                Err(e) => log::warn!("launcher picture {name}: {e}"),
+            }
+        }
+    });
+    rx
+}
 
 /// How often the launcher made its device again after losing it (see `recover_device`).
 static LAUNCHER_RECOVERIES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -103,22 +168,40 @@ pub struct Launcher {
     state: state::State,
     showroom: showroom::Showroom,
     page: Page,
-    page_anim: f32,
     pub drive: drive::DriveView,
+    /// The free drive's start point step (`freedrive`).
+    pub free: freedrive::FreeView,
+    /// The bus step's tiles and the bus offered for the duty (see `buspick`).
+    pub buspick: buspick::BusPickView,
+    /// The installed buses' kinds, makers and models, for the buses of a line (see
+    /// `busclass`).
+    pub busclasses: busclass::BusClasses,
     /// The launcher made for a phone (see `phone`).
     pub phone: phone::PhoneView,
     pub pages: pages::PagesView,
     pub mp: multiplayer::MultiplayerView,
+    /// The map step: its view, its search, and the maps' pictures and facts (see `mapchoice`).
+    pub mapchoice: mapchoice::MapChoiceView,
+    /// The livery studio (see `livery`).
+    pub livery: livery::LiveryView,
+    /// The bus company's pages (see `company`).
+    pub company: company::CompanyView,
     /// Server icons in the interface pipeline (by server address), and those decoded but
     /// not yet uploaded.
     pub icons: std::collections::HashMap<String, usize>,
     pub icons_pending: Vec<(String, image::RgbaImage)>,
+    /// The setup world's pictures (the modes' photos, the start's ground) on the GPU, with
+    /// their size; and those still being decoded.
+    pub pictures: std::collections::HashMap<&'static str, (usize, u32, u32)>,
+    pictures_rx: Option<std::sync::mpsc::Receiver<(&'static str, image::RgbaImage)>>,
     last: Instant,
     modifiers: ui::Modifiers,
     /// Right or left drag over the showroom.
     dragging: Option<Vec2>,
     clipboard: Option<Clipboard>,
     exit_after: Option<f32>,
+    /// The launcher closes and opens again (another launcher was chosen, see `restart`).
+    restart: bool,
     shot: Option<(f32, std::path::PathBuf)>,
     started: Instant,
     /// `OMSI_LAUNCHER_INPUT="t=2 click 400,300; t=3 type Bauern; t=4 key Enter; t=5 shot a.png;
@@ -155,6 +238,16 @@ pub struct Launcher {
     ime: bool,
     /// Updates from the GitHub releases (see `crate::updater`, `update.rs`).
     pub update: crate::updater::Updater,
+    /// The opening, played over the first frames once per launch (see `intro`).
+    intro: intro::Intro,
+    /// The bus that drives across between two screens (see `transition`).
+    transition: transition::Transition,
+    /// The first start's welcome, in place of the page while it is open (see `welcome`).
+    welcome: welcome::Welcome,
+    /// The guided tour over the launcher, while it runs (see `tour`).
+    tour: tour::Tour,
+    /// openOMSI's mark over the start's greeting (see `intro::Logo`).
+    start_logo: intro::Logo,
     #[cfg(not(target_os = "android"))]
     discord: Option<crate::discord::Discord>,
     #[cfg(not(target_os = "android"))]
@@ -186,13 +279,20 @@ impl Launcher {
         state: state::State::new(),
         showroom: showroom::Showroom::new(),
         page: Page::Drive,
-        page_anim: 1.0,
         drive: drive::DriveView::default(),
+        free: freedrive::FreeView::default(),
+        buspick: Default::default(),
+        busclasses: Default::default(),
         phone: phone::PhoneView::default(),
         pages: pages::PagesView::default(),
         mp: multiplayer::MultiplayerView::default(),
+        mapchoice: mapchoice::MapChoiceView::new(),
+        livery: Default::default(),
+        company: Default::default(),
         icons: Default::default(),
         icons_pending: Vec::new(),
+        pictures: std::collections::HashMap::new(),
+        pictures_rx: Some(decode_pictures()),
         last: Instant::now(),
         modifiers: ui::Modifiers::default(),
         dragging: None,
@@ -200,6 +300,7 @@ impl Launcher {
         // OMSI_LAUNCHER_EXIT=secs, OMSI_LAUNCHER_SHOT=secs:file.png, OMSI_LAUNCHER_PAGE=mods:
         // looking at the window without a person at it
         exit_after: omsi_cfg::env::var("OMSI_LAUNCHER_EXIT").ok().and_then(|v| v.parse().ok()),
+        restart: false,
         shot: omsi_cfg::env::var("OMSI_LAUNCHER_SHOT").ok().and_then(|v| v.split_once(':').map(|(t, f)| (t.parse().unwrap_or(5.0), std::path::PathBuf::from(f)))),
         started: Instant::now(),
         script: omsi_cfg::env::var("OMSI_LAUNCHER_INPUT")
@@ -231,6 +332,11 @@ impl Launcher {
         page_max: 0.0,
         ime: false,
         update: Default::default(),
+        intro: intro::Intro::new(),
+        transition: transition::Transition::new(),
+        welcome: welcome::Welcome::closed(),
+        tour: tour::Tour::default(),
+        start_logo: Default::default(),
         #[cfg(not(target_os = "android"))]
         discord: None,
         #[cfg(not(target_os = "android"))]
@@ -251,6 +357,8 @@ impl Launcher {
         let why = state::root_problem(&app.state.config.root);
         app.state.set_status(why, true);
     }
+    // the first start (`welcome_done` not set yet): the welcome, in place of the page
+    app.welcome = welcome::Welcome::at_start(&app.state.settings, &app.state.config.root);
     if let Ok(p) = omsi_cfg::env::var("OMSI_LAUNCHER_PAGE") {
         if let Some((pg, _, _)) = PAGES.iter().find(|(_, n, _)| n.eq_ignore_ascii_case(p.split(':').next().unwrap_or(""))) {
             app.page = *pg;
@@ -282,8 +390,12 @@ impl Launcher {
             // controllers, settings:3 Sound)
             app.pages.controls_tab = step;
             app.pages.settings_tab = step.min(pages::SETTINGS_TABS.len() - 1);
+            // (and the bus company's: "bus company:7" its fleet map)
+            app.company.tab = step.min(company::TABS.len() - 1);
         }
     }
+    // (`OMSI_LAUNCHER_LIVERY=<bus file>`: the livery studio at once)
+    livery::from_env(&mut app);
     app
     }
 
@@ -302,6 +414,11 @@ impl Launcher {
         self.map_gen = 0;
         self.mapview.drop_gpu();
         self.icons.clear();
+        self.pictures.clear();
+        self.pictures_rx = Some(decode_pictures());
+        self.mapchoice.drop_gpu();
+        self.livery.drop_gpu();
+        self.state.display_fonts.drop_gpu();
     }
 
     /// The window, its surface and the renderer, given up for the game (a phone plays in the
@@ -489,6 +606,7 @@ impl ApplicationHandler for Launcher {
                         }
                         self.ui.input.down = down;
                     }
+                    MouseButton::Middle => self.livery.middle = down,
                     MouseButton::Right => {
                         self.ui.input.right_down = down;
                         if down {
@@ -508,6 +626,11 @@ impl ApplicationHandler for Launcher {
                     MouseScrollDelta::LineDelta(x, y) => Vec2::new(x, y),
                     MouseScrollDelta::PixelDelta(p) => Vec2::new(p.x as f32, p.y as f32) / 40.0,
                 };
+                // Ctrl with the wheel sizes the launcher, as it zooms a page in a browser
+                if self.modifiers.state().control_key() && d.y != 0.0 {
+                    self.zoom_by(if d.y > 0.0 { 0.05 } else { -0.05 });
+                    return;
+                }
                 self.ui.input.wheel += d;
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -516,6 +639,8 @@ impl ApplicationHandler for Launcher {
                     if self.modifiers.key(code, event.state == ElementState::Pressed) {
                         self.modifiers.apply(&mut self.ui.input);
                     }
+                    // (the livery studio holds O for its before and after)
+                    livery::key(self, code, event.state == ElementState::Pressed);
                 }
                 if event.state != ElementState::Pressed {
                     return;
@@ -529,6 +654,19 @@ impl ApplicationHandler for Launcher {
                         self.ui.input.keys.push(Key::Escape);
                     }
                     return;
+                }
+                // Ctrl +, Ctrl - and Ctrl 0: the launcher's size, as in a browser
+                if cmd {
+                    let by = match event.physical_key {
+                        PhysicalKey::Code(KeyCode::Equal | KeyCode::NumpadAdd) => Some(0.1),
+                        PhysicalKey::Code(KeyCode::Minus | KeyCode::NumpadSubtract) => Some(-0.1),
+                        PhysicalKey::Code(KeyCode::Digit0 | KeyCode::Numpad0) => Some(0.0),
+                        _ => None,
+                    };
+                    if let Some(by) = by {
+                        self.zoom_by(by);
+                        return;
+                    }
                 }
                 if let PhysicalKey::Code(code) = event.physical_key {
                     self.ui.input.raw_key = Some(code);
@@ -563,6 +701,8 @@ impl ApplicationHandler for Launcher {
                     }
                 }
             }
+            // a picture dropped on the livery studio is the studio's
+            WindowEvent::DroppedFile(path) if self.page == Page::Livery => livery::dropped(self, path),
             WindowEvent::DroppedFile(path) => {
                 // a mod folder or supported archive dropped on the window is installed
                 self.page = Page::Mods;
@@ -594,7 +734,7 @@ impl ApplicationHandler for Launcher {
             0.5
         } else if !self.focused && omsi_cfg::env::var_os("OMSI_BACKGROUND").is_none() {
             0.1
-        } else if self.last_input.elapsed().as_secs_f32() > 3.0 && self.dragging.is_none() && self.script.is_empty() {
+        } else if self.last_input.elapsed().as_secs_f32() > 3.0 && self.dragging.is_none() && self.script.is_empty() && !self.ui.moving {
             // idle: 20 frames a second keep the preview and the progress bars moving
             0.05
         } else {
@@ -637,16 +777,32 @@ impl Launcher {
         let dpi = w.scale_factor() as f32;
         let s = w.inner_size();
         let (lw, lh) = (s.width as f32 / dpi, s.height as f32 / dpi);
+        // the player's own size on top (Settings, Ctrl+wheel, Ctrl +/- and Ctrl 0)
+        let own = self.own_scale() as f32;
         if mobile::mobile() {
             // a phone held across: the text at least at the system's own size - smaller, it
             // was hard to read and the buttons hard to hit (the pages scroll where the screen
             // is lower than they are, and lay themselves out for its width), a tablet larger
-            return dpi * (lh / 400.0).clamp(1.0, 1.35);
+            return dpi * (lh / 400.0).clamp(1.0, 1.35) * own;
         }
-        // (the height counts a little less: on a wide, low screen - 2560 x 1080 - the text
-        // stayed the size of a 1440 x 880 window's, tiny across the width; the pages scroll or
-        // keep their width, see `draw_ui`)
-        dpi * (lw / 1440.0).min(lh / 820.0).clamp(0.8, 2.2)
+        // the system's own size, as Omsi-Hub's pages have it: a larger window shows more, not
+        // the same larger (scaled up to fill a 2560 x 1440 window, the bus step held eight
+        // tiles where Omsi-Hub shows twenty); only a window under 1440 x 820 draws smaller
+        dpi * (lw / 1440.0).min(lh / 820.0).clamp(0.8, 1.0) * own
+    }
+
+    /// The size the player set for the launcher (`launcher_scale`, 1 = the system's).
+    fn own_scale(&self) -> f64 {
+        core::launcher_scale(self.state.settings.get("launcher_scale").and_then(|v| v.as_f64()))
+    }
+
+    /// Make the launcher larger or smaller (`by` 0: back to the system's size), as a browser
+    /// zooms a page: kept in the settings, and said in the status line.
+    fn zoom_by(&mut self, by: f64) {
+        let to = if by == 0.0 { 1.0 } else { core::launcher_scale(Some(self.own_scale() + by)) };
+        self.state.settings["launcher_scale"] = serde_json::json!(to);
+        self.state.settings_dirty = 0.3;
+        self.state.set_status(omsi_ui::tr("Launcher size: %{pct} (Ctrl+wheel, Ctrl 0 for the normal size)").replace("%{pct}", &format!("{:.0}%", to * 100.0)), false);
     }
 
     /// The graphics device was lost (#274: an AMD Radeon's DX12 driver gave up while the
@@ -853,16 +1009,26 @@ impl Launcher {
         let look = showroom::Look { root: std::path::PathBuf::from(&self.state.config.root), map: c.map.clone(), bus: c.bus.clone(), paint: c.paint.clone(), weather: c.weather.clone(), time: c.time, date: c.date.clone() };
         // (not while a game runs: the launcher looked at meanwhile loads no bus onto the card)
         if !look.bus.is_empty() && !look.map.is_empty() && !self.state.in_game() {
+            // (with the bus options chosen for it, put on over the livery)
+            self.showroom.dress(self.state.bus_options.for_preview(&look.bus));
+            // (and its destination displays in the display font chosen for it)
+            self.showroom.letter(self.state.display_fonts.font_for(&look.bus));
             self.showroom.want(look);
         }
         if let Some(r) = self.renderer.as_ref() {
             self.showroom.update(r, dt);
         }
+        livery::update(self, dt);
 
         // --- the interface
         self.preview_rect = None;
         self.map_rect = None;
         self.ui.begin(size, scale, dt);
+        // (the setting `animations`: off, every eased value is where it ends at once)
+        self.ui.motion = self.state.settings.get("animations").and_then(|v| v.as_bool()).unwrap_or(true);
+        // (the accent colour as the settings have it: a choice recolours everything at once)
+        crate::accent::set_from_setting(self.state.settings.get("accent").and_then(|v| v.as_str()));
+        crate::accent::set_dark(self.state.settings.get("dark_mode").and_then(|v| v.as_bool()).unwrap_or(false));
         self.draw_ui();
         if mobile::mobile() {
             // what no list took of a finger's drag scrolls the page
@@ -899,9 +1065,14 @@ impl Launcher {
                 }
             }
         }
+        // the livery studio's bus and its shapes' pictures
+        if let Some(gpu) = self.gpu.as_mut() {
+            livery::gpu(&mut self.livery, renderer, gpu, scale);
+        }
         // the map picture, drawn again when what it shows, where it looks or the zoom's own
         // thinness changed
         if self.map_rect.is_some() {
+            self.mapview.stop_style = crate::stop_signs::Style::from_setting(self.state.settings.get("stop_style").and_then(|v| v.as_str()).unwrap_or("de"));
             if let Some(view) = self.mapview.picture(renderer) {
                 if let Some(gpu) = self.gpu.as_mut() {
                     if self.map_gen != self.mapview.generation {
@@ -926,8 +1097,25 @@ impl Launcher {
                 self.icons.insert(addr, id);
             }
         }
+        // the setup world's pictures, as they are decoded
+        if let (Some(rx), Some(gpu)) = (self.pictures_rx.as_ref(), self.gpu.as_mut()) {
+            while let Ok((name, img)) = rx.try_recv() {
+                let (w, h) = img.dimensions();
+                let tex = renderer.device.create_texture(&wgpu::TextureDescriptor { label: Some("launcher picture"), size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8UnormSrgb, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+                renderer.queue.write_texture(tex.as_image_copy(), &img, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) }, wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
+                let view = tex.create_view(&Default::default());
+                let id = gpu.add_view(&renderer.device, &view, (w, h));
+                self.pictures.insert(name, (id, w, h));
+            }
+        }
+        // the maps' own pictures for the map step, as they are read
+        if let Some(gpu) = self.gpu.as_mut() {
+            self.mapchoice.upload(&renderer.device, &renderer.queue, gpu);
+            // (and the bus step's display font signs, as they are drawn)
+            self.state.display_fonts.upload(&renderer.device, &renderer.queue, gpu);
+        }
         let draws: Vec<Draw> = ranges.iter().enumerate().map(|(k, (r, tex))| Draw { buffer: 0, range: r.clone(), layer: k, texture: *tex }).collect();
-        let bg = wgpu::Color { r: 0.0056, g: 0.0056, b: 0.0056, a: 1.0 };
+        let bg = wgpu::Color { r: 0.0027, g: 0.0037, b: 0.0091, a: 1.0 };
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.upload(&renderer.device, &renderer.queue, 0, &verts);
             gpu.upload_atlas(&renderer.queue, &mut self.ui.atlas);
@@ -969,6 +1157,25 @@ impl Launcher {
         if self.exit_after.map(|e| self.started.elapsed().as_secs_f32() >= e).unwrap_or(false) {
             event_loop.exit();
         }
+        if self.restart {
+            self.restart = false;
+            // the same program with the same arguments, in a process of its own; this one ends
+            match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn()) {
+                Ok(_) => event_loop.exit(),
+                Err(e) => self.state.set_status(omsi_ui::tr("The launcher could not open again: %{error}").replace("%{error}", &e.to_string()), true),
+            }
+        }
+    }
+
+    /// Close the launcher and open it again - after another launcher (`launcher_ui`) was
+    /// chosen, which only a new start can switch to. The settings are written first.
+    pub fn restart_launcher(&mut self) {
+        if let Err(e) = core::save_settings(&self.state.settings) {
+            self.state.set_status(omsi_ui::tr("The settings were not saved: %{error}").replace("%{error}", &e.to_string()), true);
+            return;
+        }
+        self.state.settings_dirty = 0.0;
+        self.restart = true;
     }
 
     fn run_script(&mut self) {
@@ -1062,10 +1269,13 @@ impl Launcher {
     }
 
     fn draw_ui(&mut self) {
+        // the opening lies over everything while it plays: the page under it gets no mouse or
+        // keys meanwhile (a click skips it), and they are put back once the page is drawn
+        let opening = self.intro.begin(&mut self.ui);
+        transition::before_page(self);
         if self.page != Page::Controls || self.pages.controls_tab != 1 {
             self.pages.pads.cancel_feedback_test();
         }
-        let size = self.ui.size;
         let mobile = mobile::mobile();
         // the storage browser (or the update dialog) lies over the page: the page sees no
         // finger meanwhile
@@ -1086,45 +1296,47 @@ impl Launcher {
             self.ui.input.text.clear();
             i
         });
-        // a phone: the launcher made for it, not the desktop's pages
-        if mobile {
+        // the guided tour lies over the page (under the dialogs): meanwhile the page gets no
+        // mouse and no keys, the tour has them
+        let touring = tour::begin(self);
+        // (the bar's palette lies over the page: the page gets no mouse where it is)
+        let palette = accent_pick::shield(self);
+        // a phone: the launcher made for it, not the desktop's pages (the welcome, while it is
+        // open, in place of either)
+        let in_welcome = welcome::draw(self, opening.is_some());
+        if mobile && !in_welcome {
             if self.page == Page::Setup && !omsi_cfg::missing_original_essentials(std::path::Path::new(&self.state.config.root)).is_empty() && self.phone.page.is_none() {
                 self.phone.tab = phone::Tab::More;
                 self.phone.page = Some(Page::Setup);
             }
             phone::draw(self);
         } else {
-        let rail_w = RAIL_W;
-        self.page_anim = (self.page_anim + self.ui.dt / 0.15).min(1.0);
-        // (no wider than a page reads well: on a wide screen the rest is margin, the page
-        // in the middle - the panels stretched across 2000 px with their text at one end)
-        let (margin, top) = if mobile { (36.0, 14.0) } else { (64.0, 28.0) };
-        let avail = size.x - rail_w - margin;
-        let w = avail.min(1760.0);
-        let seen = size.y - top - 40.0;
-        // (a phone: laid out for a taller screen, scrolled)
-        let h = if mobile { seen.max(mobile::PAGE_H) } else { seen };
-        self.page_max = (h - seen).max(0.0);
-        self.page_scroll = self.page_scroll.clamp(0.0, self.page_max);
-        let content = Rect::new(rail_w + margin * 0.5 + (avail - w) * 0.5, top - self.page_scroll, w, h);
-        let e = 1.0 - (1.0 - self.page_anim).powi(3);
-        let content = Rect::new(content.x + 8.0 * (1.0 - e), content.y, content.w, content.h);
-        match self.page {
-            Page::Drive => drive::draw(self, content),
-            Page::Multiplayer => multiplayer::draw(self, content),
-            Page::Profile => pages::profile(self, content),
-            Page::Settings => pages::settings(self, content),
-            Page::Controls => pages::controls(self, content),
-            Page::Sessions => pages::sessions(self, content),
-            Page::Mods => pages::mods(self, content),
-            Page::Tutorials => pages::tutorials(self, content),
-            Page::Timetable => timetable::draw(self, content),
-            Page::Setup => pages::setup(self, content),
+        // (the desktop's pages fit the window: nothing of the page as a whole scrolls)
+        self.page_max = 0.0;
+        self.page_scroll = 0.0;
+        // the setup world: the Drive page's steps on the map, the other pages in a sheet
+        // under the same bar (no rail: the bar and the start's buttons are the way round)
+        if !in_welcome {
+            match self.page {
+                Page::Drive => flow::draw(self),
+                Page::Livery => livery::draw(self),
+                p => {
+                    let title = PAGES.iter().find(|x| x.0 == p).map(|x| x.1).unwrap_or("");
+                    flow::page(self, p, title);
+                }
+            }
         }
-        // the rail over the page (a scrolled page passes under it)
-        self.rail();
         self.status_bar();
         }
+        if let Some(i) = palette {
+            self.ui.input = i;
+        }
+        accent_pick::popover(self);
+        // (the welcome just over: the page comes up out of the dark)
+        welcome::cover(self);
+        // (a change of screen this frame: the bus, over the page and under the dialogs)
+        transition::after_page(self);
+        tour::draw(self, touring);
         self.draw_updated_notice();
         if let Some(i) = saved {
             self.ui.input = i;
@@ -1145,6 +1357,10 @@ impl Launcher {
         if !mobile && self.state.in_game() && !self.awake() {
             self.draw_game_banner();
         }
+        if let Some(i) = opening {
+            self.ui.input = i;
+        }
+        self.intro.draw(&mut self.ui);
     }
 
     /// Over the launcher's last picture while a game runs: why the launcher does not move.
@@ -1160,7 +1376,7 @@ impl Launcher {
         let r = Rect::new((size.x - w) * 0.5, (size.y - h) * 0.5, w, h);
         self.ui.panel(r);
         let inner = Rect::new(r.x + 24.0, r.y + 20.0, r.w - 48.0, r.h - 40.0);
-        self.ui.icon("directions_bus", Vec2::new(inner.x + 14.0, inner.y + 14.0), 26.0, ACCENT);
+        self.ui.icon("directions_bus", Vec2::new(inner.x + 14.0, inner.y + 14.0), 26.0, accent());
         self.ui.text_in("The game is running", Rect::new(inner.x + 38.0, inner.y, inner.w - 38.0, 28.0), 18.0, Weight::Bold, TEXT, Align::Left);
         self.ui.paragraph(text, Vec2::new(inner.x, inner.y + 40.0), inner.w, 13.0, Weight::Regular, TEXT_DIM);
     }
@@ -1169,6 +1385,7 @@ impl Launcher {
     /// dragged on it turns the bus, the wheel zooms.
     pub fn preview(&mut self, r: Rect) {
         self.preview_rect = Some(r);
+        self.showroom.set_stage(showroom::WHOLE);
         self.ui.solid(r);
         self.ui.p().rounded(r, RADIUS, FIELD);
         match (self.preview_tex, self.showroom.has_picture()) {
@@ -1197,11 +1414,12 @@ impl Launcher {
     pub fn map_background(&mut self, r: Rect) {
         self.map_rect = Some(r);
         let status = self.mapview.status();
+        let radius = if r.x <= 0.0 && r.y <= 0.0 { 0.0 } else { RADIUS };
         match (self.map_tex, status.is_empty()) {
-            (Some(tex), true) => self.ui.image(r, tex, RADIUS),
+            (Some(tex), true) => self.ui.image(r, tex, radius),
             _ => {
                 self.ui.solid(r);
-                self.ui.p().rounded(r, RADIUS, omsi_ui::Color::rgba(13, 13, 13, 1.0));
+                self.ui.p().rounded(r, radius, GROUND);
                 let t = if status.is_empty() { "Loading…" } else { status };
                 self.ui.text_in(t, Rect::new(r.x, r.y + r.h * 0.5 - 12.0, r.w, 24.0), 13.5, Weight::Regular, TEXT_FAINT, Align::Center);
             }
@@ -1235,19 +1453,29 @@ impl Launcher {
         }
     }
 
-    /// The bus across `r`, the whole page behind the panels. `focus` is where the panels end,
-    /// as a share of the window: the showroom frames the bus in what is left of it.
-    pub fn preview_full(&mut self, r: Rect, focus: f32) {
+    /// The bus across `r`, the whole page behind the panels, standing in `stage`: the part of
+    /// `r` the panels leave free. The showroom frames it in the middle of that part, as large
+    /// as it fits, and turns and zooms it round that middle.
+    pub fn preview_full(&mut self, r: Rect, stage: Rect) {
         self.preview_rect = Some(r);
-        self.showroom.focus_x = focus.clamp(0.2, 0.95);
+        let shares = showroom::stage_in(r, stage);
+        self.showroom.set_stage(shares);
+        let stage = Rect::new(r.x + shares[0] * r.w, r.y + shares[1] * r.h, (shares[2] - shares[0]) * r.w, (shares[3] - shares[1]) * r.h);
+        let radius = if r.x <= 0.0 && r.y <= 0.0 { 0.0 } else { RADIUS };
         match (self.preview_tex, self.showroom.has_picture()) {
-            (Some(tex), true) => self.ui.image(r, tex, RADIUS),
+            (Some(tex), true) => self.ui.image(r, tex, radius),
             _ => {
                 self.ui.solid(r);
-                self.ui.p().rounded(r, RADIUS, FIELD);
+                self.ui.p().rounded(r, radius, if radius == 0.0 { GROUND } else { FIELD });
                 let t = if self.showroom.error.is_some() { "No preview" } else { "Loading…" };
-                self.ui.text_in(t, Rect::new(r.x, r.y + r.h * 0.5 - 12.0, r.w, 24.0), 13.0, Weight::Regular, TEXT_FAINT, Align::Center);
+                self.ui.text_in(t, Rect::new(stage.x, stage.center().y - 12.0, stage.w, 24.0), 13.0, Weight::Regular, TEXT_FAINT, Align::Center);
             }
+        }
+        // (another bus or livery on its way: the one before stays in view meanwhile)
+        if self.showroom.busy && self.showroom.has_picture() {
+            let c = Vec2::new(stage.right() - 14.0, stage.y + 14.0);
+            let a = self.ui.time * 5.0;
+            self.ui.p().arc(c, 6.0, 8.0, a, a + 4.2, TEXT_SOFT);
         }
     }
 
@@ -1264,8 +1492,16 @@ impl Launcher {
 
     pub fn go(&mut self, p: Page) {
         if self.page != p {
+            // (the line editor's layer goes with it, and the company's fleet map's: the map is
+            // the duty's again)
+            if self.page == Page::Lines || self.page == Page::Company {
+                self.mapview.editor_off();
+            }
+            // (the line editor works for the bus company only when the company opened it)
+            if p == Page::Lines && self.page != Page::Company {
+                self.pages.lines.leave_company();
+            }
             self.page = p;
-            self.page_anim = 0.0;
             self.page_scroll = 0.0;
             self.phone.page = match p {
                 Page::Drive => { self.phone.tab = phone::Tab::Play; None }
@@ -1282,63 +1518,6 @@ impl Launcher {
         }
     }
 
-    fn rail(&mut self) {
-        let size = self.ui.size;
-        let rail = Rect::new(0.0, 0.0, RAIL_W, size.y);
-        self.ui.solid(rail);
-        self.ui.p().rect(rail, RAIL);
-        self.ui.p().rect(Rect::new(RAIL_W - 1.0, 0.0, 1.0, size.y), EDGE);
-        self.ui.text("openOMSI", Vec2::new(24.0, 46.0), 20.0, Weight::Bold, TEXT, Align::Left);
-        self.ui.text(crate::startup::VERSION, Vec2::new(24.0, 64.0), 12.0, Weight::Regular, TEXT_DIM, Align::Left);
-        let mut y = 96.0;
-        let running = self.state.instances.iter().filter(|i| i.running).count();
-        let jobs = self.state.jobs.iter().filter(|j| j.finished.is_none()).count();
-        for (p, name, icon) in PAGES {
-            let r = Rect::new(12.0, y, RAIL_W - 24.0, 38.0);
-            let id = ui::id_of(&format!("nav-{name}"));
-            let (h, _, clicked) = self.ui.interact(id, r);
-            if clicked {
-                self.go(p);
-            }
-            let sel = self.page == p;
-            if sel {
-                self.ui.p().rounded(r, 6.0, SELECTED);
-                self.ui.p().rounded(Rect::new(r.x, r.y + 10.0, 2.0, r.h - 20.0), 1.0, ACCENT);
-            } else if h {
-                self.ui.p().rounded(r, 6.0, HOVER);
-            }
-            let c = if sel { TEXT } else if h { TEXT_SOFT } else { TEXT_DIM };
-            self.ui.icon(icon, Vec2::new(r.x + 20.0, r.center().y), 18.0, c);
-            self.ui.text_in(name, Rect::new(r.x + 40.0, r.y, r.w - 70.0, r.h), 13.5, if sel { Weight::Medium } else { Weight::Regular }, c, Align::Left);
-            let count = match p {
-                Page::Sessions => running,
-                Page::Mods => jobs,
-                _ => 0,
-            };
-            if count > 0 {
-                self.ui.text_in(&count.to_string(), Rect::new(r.right() - 30.0, r.y, 20.0, r.h), 12.0, Weight::Bold, if p == Page::Sessions { OK } else { ACCENT }, Align::Right);
-            }
-            y += 42.0;
-        }
-        // the driver, quietly at the bottom
-        let card = Rect::new(12.0, size.y - 64.0, RAIL_W - 24.0, 48.0);
-        let id = ui::id_of("rail-profile");
-        let (h, _, clicked) = self.ui.interact(id, card);
-        if clicked {
-            self.go(Page::Profile);
-        }
-        if h {
-            self.ui.p().rounded(card, 6.0, HOVER);
-        }
-        let (level, name) = match &self.state.profile {
-            Some(p) => (p.level, p.name.clone()),
-            None => (1, self.state.config.profile.clone()),
-        };
-        self.ui.icon("account_circle", Vec2::new(card.x + 22.0, card.center().y), 24.0, TEXT_DIM);
-        self.ui.text_in(if name.is_empty() { "No driver" } else { &name }, Rect::new(card.x + 42.0, card.y + 6.0, card.w - 48.0, 18.0), 13.0, Weight::Medium, TEXT, Align::Left);
-        self.ui.text_in(&format!("Level {level}"), Rect::new(card.x + 42.0, card.y + 24.0, card.w - 48.0, 16.0), 11.5, Weight::Regular, TEXT_DIM, Align::Left);
-    }
-
     fn status_bar(&mut self) {
         let (text, err, at) = self.state.status.clone();
         if text.is_empty() {
@@ -1348,29 +1527,17 @@ impl Launcher {
         if fade <= 0.0 {
             return;
         }
+        // (on a pill of the map buttons' dark: the line lies on the ground's photo, the map or
+        // the bus, and was hard to read there; a phone has its own toast, see `phone`)
         let size = self.ui.size;
         let first = text.lines().next().unwrap_or("").to_string();
-        let rail_w = if mobile::mobile() { mobile::RAIL_W_MOBILE } else { RAIL_W };
-        let r = Rect::new(rail_w + 20.0, size.y - 30.0, size.x - rail_w - 40.0, 24.0);
-        if mobile::mobile() {
-            // (readable over a page scrolled under it)
-            self.ui.p().rect(Rect::new(rail_w, size.y - 34.0, size.x - rail_w, 34.0), RAIL.alpha(0.92));
-        }
-        let c = if err { DANGER } else { TEXT_DIM };
-        self.ui.text_in(&first, r, 12.0, Weight::Regular, c.alpha(fade), Align::Left);
+        let w = (self.ui.width(&first, 12.0, Weight::Medium) + 28.0).min(size.x * 0.6);
+        let left = if mobile::mobile() { mobile::RAIL_W_MOBILE } else { 0.0 } + 22.0;
+        let r = Rect::new(left, size.y - 29.0, w, 23.0);
+        self.ui.p().rounded(r, r.h * 0.5, ON_MAP.alpha(fade));
+        let c = if err { DANGER.lighten(0.2) } else { TEXT_SOFT };
+        self.ui.text_in(&first, Rect::new(r.x + 14.0, r.y, r.w - 22.0, r.h), 12.0, Weight::Medium, c.alpha(fade), Align::Left);
         self.ui.tooltip(r, &text);
-    }
-
-    /// A page's title and what it is for.
-    pub fn page_title(&mut self, r: Rect, title: &str, sub: &str) -> Rect {
-        self.ui.text(title, Vec2::new(r.x, r.y + 22.0), 22.0, Weight::Bold, TEXT, Align::Left);
-        if !sub.is_empty() {
-            // (a narrow window: the line stops short of the tabs some pages put top right,
-            // it ran under them on a phone)
-            let w = if r.w < 1100.0 { r.w - 340.0 } else { r.w };
-            self.ui.text_in(sub, Rect::new(r.x, r.y + 34.0, w, 20.0), 12.5, Weight::Regular, TEXT_DIM, Align::Left);
-        }
-        Rect::new(r.x, r.y + 64.0, r.w, (r.h - 64.0).max(0.0))
     }
 }
 

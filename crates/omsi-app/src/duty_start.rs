@@ -22,11 +22,28 @@ pub(crate) fn take_preopened(map: &Path, date: i32) -> Option<World> {
     }
 }
 
+/// The player's duty as the command line asks for it: a free drive along one route of a
+/// line (`--free-line`), one put together of several tours (`--duty-leg`), else a tour of a
+/// line (`--line`, `--tour`, `--trip`).
+pub(crate) fn player_duty(sch: &mut schedule::Schedule, world: &World, args: &Args, now: f64) -> Result<schedule::PlayerDuty, String> {
+    if let Some(route) = args.free_line.as_deref().filter(|r| !r.trim().is_empty()) {
+        return sch.free_line_duty(world, args.line.as_deref().unwrap_or(""), route, now);
+    }
+    if args.duty_legs.is_empty() {
+        let line = args.line.as_deref().unwrap_or("");
+        sch.player_duty(world, line, args.tour.as_deref().unwrap_or(""), now, args.trip.as_deref(), args.whole_tour)
+    } else {
+        sch.player_plan(world, &args.duty_legs)
+    }
+}
+
 /// With a duty (`--schedule --line`): the trip it starts with and the stop of it (`args.
 /// duty_trip`, `args.duty_first_stop`), and with `--auto-entry` the entry point nearest to
 /// that stop by road (`args.entry`).
 pub(crate) fn place_on_duty(args: &mut Args) {
-    let Some(line) = args.line.clone() else { return };
+    if args.line.is_none() {
+        return;
+    }
     if !args.schedule || args.bus.is_none() || args.spawn.is_some() || args.is_resuming() {
         return;
     }
@@ -52,7 +69,7 @@ pub(crate) fn place_on_duty(args: &mut Args) {
     let world = &keep.0.as_ref().unwrap().2;
     let mut sch = schedule::Schedule::new(&args.root, world, &clock);
     let now = parse_time(&args.time);
-    let Ok(mut duty) = sch.player_duty(world, &line, args.tour.as_deref().unwrap_or(""), now, args.trip.as_deref(), args.whole_tour) else { return };
+    let Ok(mut duty) = player_duty(&mut sch, world, args, now) else { return };
     let map = world.navigation_map();
     duty.learn_places(&map.places);
     let mut net = omsi_sim::traffic::Network { lanes: map.lanes, ..Default::default() };
@@ -149,7 +166,7 @@ pub(crate) fn place_on_duty(args: &mut Args) {
                 let from = schedule::hhmm(now);
                 args.time = format!("{:02}:{:02}:00", (leave / 3600.0) as i64 % 24, (leave / 60.0) as i64 % 60);
                 log::info!("duty start: the tour's first trip leaves at {}: the clock goes from {from} to {}", schedule::hhmm(trip.departure), args.time);
-                args.clock_moved = Some(format!("The tour starts at {}: the clock was moved from {from} to {}", schedule::hhmm(trip.departure), &args.time[..5]));
+                args.clock_moved = Some(omsi_ui::tr("The tour starts at %{time}: the clock was moved from %{from} to %{to}").replace("%{time}", &schedule::hhmm(trip.departure)).replace("%{from}", &from).replace("%{to}", &args.time[..5]));
             }
             return;
         }

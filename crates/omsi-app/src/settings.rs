@@ -30,6 +30,11 @@ pub struct Settings {
     /// Which corner the navigator sits in: `bottom-left` (default), `bottom-right`,
     /// `top-left` or `top-right`.
     pub navigator_corner: String,
+    /// The navigator's place and size as the player dragged them (`nav_rect`, see
+    /// `omsi_launcher_lib::nav_rect_parts`; empty: the corner and its own size).
+    pub nav_rect: String,
+    /// The duty board under the navigator's map (`nav_board`).
+    pub nav_board: bool,
     /// How passengers board: `auto` - they pay at the cash desk and take the ticket
     /// themselves; `pay` - they wait at the desk for the driver to sell the ticket (the
     /// ticket key or the printer); `walk` - they just walk into the saloon (a flat-fare
@@ -118,6 +123,9 @@ pub struct Settings {
     pub nav_ai: bool,
     /// The driver may get up from the seat and walk about (Ctrl+Shift+G).
     pub get_up: bool,
+    /// The game types a duty's line, route and destination into the player's IBIS (at the
+    /// start, at every next trip, with Shift+U); off, the driver types them.
+    pub ibis_auto: bool,
     /// Uncompressed texture files are compressed on loading where that leaves the picture
     /// close (DXT files always stay compressed on a GPU that takes them).
     pub texture_compression: bool,
@@ -168,6 +176,15 @@ pub struct Settings {
     /// The interface grows with a window taller than 1080 lines (`ui::size_factor`); off,
     /// it keeps its size on any window, as before.
     pub ui_scale_window: bool,
+    /// The navigator's own size on top of the interface's (`nav_scale`, 1 = as the interface).
+    pub nav_scale: f32,
+    /// The stop signs on the navigator's map: "de", "uk" or "fr" (`stop_style`).
+    pub stop_style: String,
+    /// The interface's accent colour, `#rrggbb` (`accent`; the logo's orange unless chosen).
+    pub accent: String,
+    /// Signing on in the navigator with the personnel number and the code, then the duty
+    /// order (`nav_signon`); off, the driver is signed on and the duty signed for by itself.
+    pub nav_signon: bool,
     /// Clouds in the sky (volumetric with enhanced graphics, OMSI's cloud layer without).
     pub clouds: bool,
     /// Windy trees: the trees' foliage bends and sways in the weather's wind and its gusts
@@ -369,7 +386,7 @@ impl Settings {
     }
     /// The defaults of a computer.
     fn desktop() -> Self {
-        Self { msaa: 4, anisotropy: 8, ssao: true, shadows: true, shadow_size: 2048, shadow_blobs: true, navigator: true, ui_opacity: 0.85, notes: true, ui_scale: 1.0, ui_scale_window: true, navigator_corner: "bottom-left".into(), boarding: "auto".into(), detail_textures: true, exact_fare: true, enhanced: false, graphics: "vanilla_plus".into(), triple: Default::default(), triple_span: true, triple_hud_center: true, vr: false, vr_scale: 0.65, vr_head_smoothing_ms: 0.0, vr_mirror_rate: 16.0, vr_desktop_mirror: true, fullscreen: false, vsync: true, volume: 0.6, drive_keys: "simple".into(), post_aa: "fxaa".into(), render_scale: 0.0, language: "ENG".into(), pax_voices: "all".into(), nav_arrows: false, nav_ai: true, get_up: false, texture_compression: true, texture_memory: 0, auto_clutch: true, momentary_gears: false, auto_shift: false, min_obj_size: 0.013, max_obj_dist: -1.0, max_fps: 0, chat: true, chat_size: 1.0, tooltips: true, name_tags: true, show_fps: false, clouds: true, windy_trees: true, pax_density: 1.0, vol_ai: 1.0, vol_scenery: 1.0, mirror_size: 256, mirror_hud: 0, mirror_refresh: "full".into(), doppler: true, driver: true, maintenance: 0, ai_unsched_factor: 1.0, ai_max_scheduled: 0, ai_max_parked: 0, ai_max_humans: 200, collision_vehicles: true, collision_objects: true, collision_pedestrians: true, head_movement: true, driverview_smooth: true, hands_in_cab: false, alt_view: true, precision_zoom: false, time_speed: 1.0, time_sync: false, metar_sync: false, metar_station: String::new(), machine_translation: false, shadow_casters: "all".into(), ctrl_deadzone: 0.0, right_stick_look: true, pad_steer_smooth: 120.0, pad_steer_linear: false, arrows_switch_cams: false, ctrl_off: String::new(), steering_linear: false, old_steering: false, red_steer_spd: false, reflections: true, led_glow: 6, led_mips: 1.3, mouse_sens: 1.0, graphics_api: "auto".into(), ff_invert: false, ff_enabled: true, ff_road_vib: 1.0, ff_engine_vib: 1.0, ff_fade: 0.28, brake_hold: true, mouse_steering: false, mouse_right_off: false, mouse_smooth: true, look_sens: 1.0, look_smoothing_ms: 0.0, blinker_cancel: true, wheel_range: 900.0, wheel_lock: 0.0, fov: 0.0, camera_collision: true, steer_look: false, steer_look_angle: 30.0, steer_look_response: 0.25, head_idle: 0.0, head_idle_pace: 1.0, pedal_throttle: 1.0, pedal_brake: 1.0, seat: [0.0; 3], seat_pitch_deg: 0.0, head_tracking: false, head_tracking_port: 4242, head_tracking_invert: String::new(), discord_status: true, discord_app_id: String::new(), voice_chat: true, info_bar: false }
+        Self { msaa: 4, anisotropy: 8, ssao: true, shadows: true, shadow_size: 2048, shadow_blobs: true, navigator: true, ui_opacity: 0.85, notes: true, ui_scale: 1.0, ui_scale_window: true, navigator_corner: "bottom-left".into(), boarding: "auto".into(), detail_textures: true, exact_fare: true, enhanced: false, graphics: "vanilla_plus".into(), triple: Default::default(), triple_span: true, triple_hud_center: true, vr: false, vr_scale: 0.65, vr_head_smoothing_ms: 0.0, vr_mirror_rate: 16.0, vr_desktop_mirror: true, fullscreen: false, vsync: true, volume: 0.6, drive_keys: "simple".into(), post_aa: "fxaa".into(), render_scale: 0.0, language: "ENG".into(), pax_voices: "all".into(), nav_arrows: false, nav_ai: true, get_up: false, texture_compression: true, texture_memory: 0, auto_clutch: true, momentary_gears: false, auto_shift: false, min_obj_size: 0.013, max_obj_dist: -1.0, max_fps: 0, chat: true, chat_size: 1.0, tooltips: true, name_tags: true, show_fps: false, clouds: true, windy_trees: true, pax_density: 1.0, vol_ai: 1.0, vol_scenery: 1.0, mirror_size: 256, mirror_hud: 0, mirror_refresh: "full".into(), doppler: true, driver: true, maintenance: 0, ai_unsched_factor: 1.0, ai_max_scheduled: 0, ai_max_parked: 0, ai_max_humans: 200, collision_vehicles: true, collision_objects: true, collision_pedestrians: true, head_movement: true, driverview_smooth: true, hands_in_cab: false, alt_view: true, precision_zoom: false, time_speed: 1.0, time_sync: false, metar_sync: false, metar_station: String::new(), machine_translation: false, shadow_casters: "all".into(), ctrl_deadzone: 0.0, right_stick_look: true, pad_steer_smooth: 120.0, pad_steer_linear: false, arrows_switch_cams: false, ctrl_off: String::new(), steering_linear: false, old_steering: false, red_steer_spd: false, reflections: true, led_glow: 6, led_mips: 1.3, mouse_sens: 1.0, graphics_api: "auto".into(), ff_invert: false, ff_enabled: true, ff_road_vib: 1.0, ff_engine_vib: 1.0, ff_fade: 0.28, brake_hold: true, mouse_steering: false, mouse_right_off: false, mouse_smooth: true, look_sens: 1.0, look_smoothing_ms: 0.0, blinker_cancel: true, wheel_range: 900.0, wheel_lock: 0.0, fov: 0.0, camera_collision: true, steer_look: false, steer_look_angle: 30.0, steer_look_response: 0.25, head_idle: 0.0, head_idle_pace: 1.0, pedal_throttle: 1.0, pedal_brake: 1.0, seat: [0.0; 3], seat_pitch_deg: 0.0, head_tracking: false, head_tracking_port: 4242, head_tracking_invert: String::new(), discord_status: true, discord_app_id: String::new(), voice_chat: true, info_bar: false, nav_scale: 1.0, stop_style: "de".into(), accent: omsi_launcher_lib::ACCENT_DEFAULT.into(), nav_signon: false, nav_rect: String::new(), nav_board: true, ibis_auto: true }
     }
 }
 
@@ -523,6 +540,7 @@ impl Settings {
                 "nav_arrows" => s.nav_arrows = b(v),
                 "nav_ai" => s.nav_ai = b(v),
                 "get_up" => s.get_up = b(v),
+                "ibis_auto" => s.ibis_auto = b(v),
                 "texture_compression" => s.texture_compression = b(v),
                 "auto_clutch" | "automatic_clutch" => s.auto_clutch = b(v),
                 "momentary_gears" | "gear_buttons_hold" => s.momentary_gears = b(v),
@@ -623,6 +641,13 @@ impl Settings {
                 "fov" => s.fov = v.parse::<f32>().ok().filter(|x| x.is_finite()).map(|x| if x < 20.0 { 0.0 } else { x.min(120.0) }).unwrap_or(s.fov),
                 "mouse_sens" => s.mouse_sens = v.parse::<f32>().ok().filter(|x| x.is_finite()).map(|x| x.clamp(0.1, 3.0)).unwrap_or(s.mouse_sens),
                 "ui_scale_window" => s.ui_scale_window = b(v),
+                "nav_scale" => s.nav_scale = omsi_launcher_lib::nav_scale(v.parse::<f64>().ok()) as f32,
+                "stop_style" => s.stop_style = omsi_launcher_lib::stop_style(v).to_string(),
+                "accent" => s.accent = omsi_launcher_lib::accent_text(v),
+                "nav_signon" => s.nav_signon = b(v),
+                "nav_board" => s.nav_board = b(v),
+                "nav_rect" => s.nav_rect = omsi_launcher_lib::nav_rect(v),
+
                 "notes" => s.notes = b(v),
                 "info_bar" => s.info_bar = b(v),
                 "chat_size" => s.chat_size = v.parse::<f32>().ok().filter(|x| x.is_finite()).map(|x| x.clamp(0.5, 3.0)).unwrap_or(s.chat_size),
@@ -656,6 +681,13 @@ impl Settings {
             log::info!("settings: boarding=pay from an old settings file taken as auto (choose pay again in the launcher to keep it)");
             s.boarding = "auto".into();
         }
+        // (a navigator dragged before it could be sized: `navigator_corner = at x,y`, #940 -
+        // that place is the rect's, as the launcher reads it)
+        if let Some(at) = omsi_launcher_lib::corner_placed_at(&s.navigator_corner) {
+            let (old, size) = omsi_launcher_lib::nav_rect_parts(&s.nav_rect);
+            s.nav_rect = omsi_launcher_lib::nav_rect_text(old.or(Some(at)), size);
+            s.navigator_corner = "bottom-left".into();
+        }
         s
     }
 
@@ -669,8 +701,8 @@ impl Settings {
             SETTINGS_VERSION, self.msaa, self.anisotropy, self.ssao as u8, self.shadows as u8, self.shadow_size, self.shadow_blobs as u8, self.navigator as u8, self.ui_opacity, self.navigator_corner, self.boarding, self.detail_textures as u8, self.exact_fare as u8, self.enhanced as u8, self.graphics, self.vr as u8, self.vr_scale, self.fullscreen as u8, self.vsync as u8, self.volume, self.drive_keys, self.post_aa, self.render_scale_text(), self.language, self.texture_compression as u8, self.texture_memory, self.auto_clutch as u8, self.momentary_gears as u8, self.min_obj_size, if self.max_obj_dist < 0.0 { "auto".to_string() } else { self.max_obj_dist.to_string() }, self.max_fps, self.chat as u8, self.tooltips as u8, self.name_tags as u8, self.show_fps as u8, self.clouds as u8, self.pax_density, self.vol_ai, self.vol_scenery, self.mirror_size, self.mirror_hud, self.mirror_refresh, self.doppler as u8, self.driver as u8, self.driverview_smooth as u8
         );
         text.push_str(&format!(
-            "vr_head_smoothing_ms={}\nvr_mirror_rate={}\nvr_desktop_mirror={}\nled_glow={}\nled_mips={}\nui_scale={}\nui_scale_window={}\nchat_size={}\nnotes={}\nff_road_vib={}\nff_engine_vib={}\nff_fade={}\n",
-            self.vr_head_smoothing_ms, self.vr_mirror_rate, self.vr_desktop_mirror as u8, self.led_glow, self.led_mips, self.ui_scale, self.ui_scale_window as u8, self.chat_size, self.notes as u8, self.ff_road_vib, self.ff_engine_vib, self.ff_fade,
+            "vr_head_smoothing_ms={}\nvr_mirror_rate={}\nvr_desktop_mirror={}\nled_glow={}\nled_mips={}\nui_scale={}\nui_scale_window={}\nnav_scale={}\nstop_style={}\nchat_size={}\nnotes={}\nff_road_vib={}\nff_engine_vib={}\nff_fade={}\nnav_board={}\nnav_rect={}\n",
+            self.vr_head_smoothing_ms, self.vr_mirror_rate, self.vr_desktop_mirror as u8, self.led_glow, self.led_mips, self.ui_scale, self.ui_scale_window as u8, self.nav_scale, self.stop_style, self.chat_size, self.notes as u8, self.ff_road_vib, self.ff_engine_vib, self.ff_fade, self.nav_board as u8, self.nav_rect,
         ));
         text.push_str(&format!(
             "triple_hud_center={}\ntriple_fov_deg={}\nfov={}\n",
@@ -926,6 +958,18 @@ mod tests {
         assert!(Settings::default().voice_chat);
         let s = Settings { voice_chat: false, ..Default::default() };
         assert_eq!(Settings::from_text(&s.to_text()), s);
+    }
+
+    /// The duty board under the navigator is on unless switched off; the navigator's dragged
+    /// place and size round-trip, and a place dragged before it could be sized becomes the
+    /// rect's (#940's `navigator_corner = at x,y`).
+    #[test]
+    fn the_navigator_rect_and_board_round_trip_and_migrate() {
+        assert!(Settings::default().nav_board && Settings::default().nav_rect.is_empty());
+        let s = Settings { nav_board: false, nav_rect: "0.5000,0.2500,0.4000,0.6000".into(), ..Default::default() };
+        assert_eq!(Settings::from_text(&s.to_text()), s);
+        let old = Settings::from_text("navigator_corner=at 0.1,0.9\n");
+        assert_eq!((old.navigator_corner.as_str(), old.nav_rect.as_str()), ("bottom-left", "0.1000,0.9000,-,-"));
     }
 
     #[test]

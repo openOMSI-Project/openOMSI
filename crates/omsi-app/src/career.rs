@@ -23,7 +23,8 @@ const JOLT_WEIGHT: f64 = 0.1;
 const SEESAW_WEIGHT: f64 = 0.05;
 /// Kilometres that wear the penalty down by one (P −= km / 30).
 const PENALTY_KM: f64 = 30.0;
-/// A stop's arrival later than this (s) is late, its departure earlier than minus that early.
+/// A stop's arrival later than this (s) is late, its departure earlier than minus that early
+/// (the trip's report judges its stops the same way).
 pub(crate) const LATE_ARRIVAL: f64 = 180.0;
 pub(crate) const EARLY_DEPARTURE: f64 = -120.0;
 
@@ -336,11 +337,10 @@ impl Career {
     /// launcher adds it up into the driver's hours, experience and level (the process id
     /// keeps two games that end in the same second apart).
     pub fn write_session(&self, map: &str, bus: &str, line: Option<&str>, tour: Option<&str>) -> std::io::Result<()> {
-        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_default();
-        let dir = home.join(".openomsi").join("sessions");
+        let dir = data_dir().join("sessions");
         std::fs::create_dir_all(&dir)?;
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let driver = self.driver.as_ref().map(|d| d.name.clone()).or_else(|| self.path.as_ref().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))).unwrap_or_else(|| "Driver".into());
+        let driver = self.driver_name();
         let v = serde_json::json!({
             "time": now,
             "driver": driver,
@@ -369,5 +369,70 @@ impl Career {
         std::fs::write(&path, serde_json::to_vec_pretty(&v)?)?;
         log::info!("session written to {}", path.display());
         Ok(())
+    }
+
+    /// The name the sessions and the trips are written under: the personnel file's, else
+    /// its file's.
+    pub fn driver_name(&self) -> String {
+        self.driver.as_ref().map(|d| d.name.trim().to_string()).filter(|n| !n.is_empty()).or_else(|| self.path.as_ref().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))).unwrap_or_else(|| "Driver".into())
+    }
+
+    /// Add a trip the player just finished (`trip_report`) to the driver's trips in
+    /// `~/.openomsi/trips`, where the launcher's service record reads them: written as the
+    /// trip ends, so that a game that does not close cleanly keeps it.
+    pub fn write_trip(&self, run: &omsi_launcher_lib::TripRun, map: &str, bus: &str) -> std::io::Result<PathBuf> {
+        self.write_trip_in(&data_dir(), run, map, bus)
+    }
+
+    /// `write_trip` into the data folder `data`.
+    pub fn write_trip_in(&self, data: &Path, run: &omsi_launcher_lib::TripRun, map: &str, bus: &str) -> std::io::Result<PathBuf> {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let run = omsi_launcher_lib::TripRun { time: now, driver: self.driver_name(), map: map.to_string(), bus: bus.to_string(), ..run.clone() };
+        let path = omsi_launcher_lib::append_trip(data, &run).map_err(std::io::Error::other)?;
+        log::info!("trip written to {}: line {} to {}, {} stops ({} early, {} late)", path.display(), run.line, run.terminus, run.stops, run.early, run.late);
+        Ok(path)
+    }
+}
+
+/// openOMSI's own data folder, `~/.openomsi` (the launcher's `data_dir`).
+fn data_dir() -> PathBuf {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_default();
+    home.join(".openomsi")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A trip is written under the driver's name with the map, the bus and the time, into the
+    /// folder given (never the real one in a test).
+    #[test]
+    fn a_trip_is_written_for_the_driver() {
+        let data = std::env::temp_dir().join(format!("omsi-career-trip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        let career = Career { driver: Some(Driver { name: "Luc".into(), ..Default::default() }), ..Default::default() };
+        let run = omsi_launcher_lib::TripRun { line: "5".into(), terminus: "Rathaus".into(), stops: 12, late: 1, ..Default::default() };
+        career.write_trip_in(&data, &run, "maps/Spandau/global.cfg", "Vehicles/SD200/SD200.bus").unwrap();
+        let read = omsi_launcher_lib::trips_of(&data, "luc");
+        assert_eq!(read.len(), 1);
+        assert_eq!((read[0].driver.as_str(), read[0].map.as_str(), read[0].line.as_str(), read[0].stops, read[0].late), ("Luc", "maps/Spandau/global.cfg", "5", 12, 1));
+        assert!(read[0].time > 1_600_000_000);
+        // (without a personnel file: the file's name, else "Driver")
+        let stem = Career { path: Some(PathBuf::from("Drivers/Anna.odr")), ..Default::default() };
+        assert_eq!(stem.driver_name(), "Anna");
+        assert_eq!(Career::default().driver_name(), "Driver");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// OMSI's limits: a stop is late more than three minutes after its arrival, early more
+    /// than two before its departure, both rounded to the second.
+    #[test]
+    fn stops_are_counted_as_omsi_counts_them() {
+        let mut c = Career::default();
+        c.stop_served(180.4, 0.0);
+        c.stop_served(181.0, 0.0);
+        c.stop_served(0.0, -120.4);
+        c.stop_served(0.0, -121.0);
+        assert_eq!(c.stops, [4, 1, 1]);
     }
 }

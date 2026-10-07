@@ -853,6 +853,49 @@ struct RgbaRef<'a> {
     rgba: &'a [u8],
 }
 
+/// A texture's picture on its way to the CPU ([`Renderer::start_readback`]).
+pub struct Readback {
+    buffer: wgpu::Buffer,
+    stride: u32,
+    width: u32,
+    height: u32,
+    bgra: bool,
+    state: Arc<std::sync::atomic::AtomicU8>,
+}
+
+impl Readback {
+    /// The picture as RGBA rows from the top, once the GPU has copied it: None while it has
+    /// not, `Some(None)` when the copy failed (or the picture was taken already).
+    pub fn take(&self) -> Option<Option<(u32, u32, Vec<u8>)>> {
+        match self.state.load(std::sync::atomic::Ordering::Acquire) {
+            0 => None,
+            1 => {
+                self.state.store(3, std::sync::atomic::Ordering::Release);
+                let (w, h) = (self.width as usize, self.height as usize);
+                let mut out = Vec::with_capacity(w * h * 4);
+                {
+                    let data = self.buffer.slice(..).get_mapped_range();
+                    for y in 0..h {
+                        let row = &data[y * self.stride as usize..][..w * 4];
+                        if self.bgra {
+                            for p in row.chunks_exact(4) {
+                                out.extend_from_slice(&[p[2], p[1], p[0], 255]);
+                            }
+                        } else {
+                            for p in row.chunks_exact(4) {
+                                out.extend_from_slice(&[p[0], p[1], p[2], 255]);
+                            }
+                        }
+                    }
+                }
+                self.buffer.unmap();
+                Some(Some((self.width, self.height, out)))
+            }
+            _ => Some(None),
+        }
+    }
+}
+
 pub struct GpuTexture {
     #[allow(dead_code)]
     texture: wgpu::Texture,
@@ -5414,6 +5457,47 @@ impl Renderer {
 
     /// A texture the scene can be rendered into (`render_to_texture`), e.g. a rear-view mirror.
     pub fn add_render_texture(&self, scene: &mut Scene, width: u32, height: u32) -> TextureId {
+        self.add_render_texture_with(scene, width, height, wgpu::TextureUsages::empty())
+    }
+
+    /// A render texture whose picture can be read back without waiting for the GPU
+    /// ([`Renderer::start_readback`]): the phone companion's live pictures of a bus's devices.
+    pub fn add_readable_render_texture(&self, scene: &mut Scene, width: u32, height: u32) -> TextureId {
+        self.add_render_texture_with(scene, width, height, wgpu::TextureUsages::COPY_SRC)
+    }
+
+    /// Which texture sits in slot `id` of the scene (a slot is reused, and a new scene has
+    /// other textures in the same slots): compare it to the one a slot was made with.
+    pub fn texture_generation(&self, scene: &Scene, id: TextureId) -> Option<u64> {
+        scene.textures.get(id).map(|t| t.gen)
+    }
+
+    /// Copy texture `id` (made by [`Renderer::add_readable_render_texture`], drawn this frame)
+    /// into a buffer the CPU reads once the GPU got there; nothing waits for it.
+    pub fn start_readback(&self, scene: &Scene, id: TextureId) -> Option<Readback> {
+        let t = scene.textures.get(id)?;
+        if !t.texture.usage().contains(wgpu::TextureUsages::COPY_SRC) {
+            return None;
+        }
+        let (w, h) = t.size;
+        let stride = (w * 4).div_ceil(256) * 256;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: (stride * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("readback") });
+        enc.copy_texture_to_buffer(
+            t.texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride), rows_per_image: None } },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        // 0 waiting, 1 mapped, 2 failed
+        let state = Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let s = state.clone();
+        enc.map_buffer_on_submit(&buffer, wgpu::MapMode::Read, .., move |r| s.store(if r.is_ok() { 1 } else { 2 }, std::sync::atomic::Ordering::Release));
+        self.queue.submit([enc.finish()]);
+        let bgra = matches!(t.texture.format(), wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Bgra8Unorm);
+        Some(Readback { buffer, stride, width: w, height: h, bgra, state })
+    }
+
+    fn add_render_texture_with(&self, scene: &mut Scene, width: u32, height: u32, extra: wgpu::TextureUsages) -> TextureId {
         let (width, height) = fit_size(width.max(1), height.max(1), self.device.limits().max_texture_dimension_2d);
         let size = wgpu::Extent3d {
             width,
@@ -5427,7 +5511,7 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: self.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | extra,
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());

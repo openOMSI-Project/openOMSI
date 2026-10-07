@@ -1,8 +1,15 @@
-//! Updates from the project's GitHub releases (github.com/openOMSI-Project/openOMSI).
+//! Updates from this fork's GitHub releases (github.com/Luc-nbr/openOMSI: openOMSI with the
+//! Omsi-Hub interface - the project's own releases would replace that interface).
 //!
-//! Every push to main publishes a release `v<MAJOR.MINOR.COMMIT>` with one archive per
-//! platform (see .github/workflows/release.yml). The launcher asks the GitHub API for the
-//! latest release when it starts (setting `update_check`), and when it is newer than this
+//! Every hour the fork takes the project's new commits (github.com/openOMSI-Project/openOMSI,
+//! main) into its `beta` when they merge cleanly and the tests pass
+//! (.github/workflows/omsihub-sync.yml), and every change to `beta` publishes a release
+//! `v<MAJOR.MINOR.COMMIT>.<OURS>` - the openOMSI version it is on and the fork's own commits
+//! on top - with the Windows archive (omsihub-release.yml). So the project's updates reach
+//! the players with the interface kept. Only releases with such a four-number version are
+//! taken (`is_hub_version`): one of the project's kind - its own workflows run on the fork's
+//! `main` too - would replace the interface. The launcher asks the GitHub API for the
+//! releases when it starts (setting `update_check`), and when the newest is newer than this
 //! build it offers it - or, with `update_auto`, installs it at once:
 //!
 //! * **Windows, macOS, Linux**: the archive is downloaded (and checked against the SHA-256
@@ -43,9 +50,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// The project on GitHub.
-pub const REPO: &str = "openOMSI-Project/openOMSI";
-pub const REPO_URL: &str = "https://github.com/openOMSI-Project/openOMSI";
-const LATEST_API: &str = "https://api.github.com/repos/openOMSI-Project/openOMSI/releases/latest";
+pub const REPO: &str = "Luc-nbr/openOMSI";
+pub const REPO_URL: &str = "https://github.com/Luc-nbr/openOMSI";
+// (the list, not `releases/latest`: that one may be a release of the project's kind)
+const LATEST_API: &str = "https://api.github.com/repos/Luc-nbr/openOMSI/releases?per_page=30";
 
 /// A release newer than this build, with the file for this platform.
 #[derive(Clone, Debug, PartialEq)]
@@ -224,9 +232,11 @@ fn version_parts(v: &str) -> Vec<u64> {
     v.trim().trim_start_matches(['v', 'V']).split(['.', '-', '+']).map_while(|p| p.parse::<u64>().ok()).collect()
 }
 
-/// A pull request's test build: `release.yml` gives it the version `<release>-pr<number>`.
+/// A pull request's test build: `release.yml` gives it the version `<release>-pr<number>`;
+/// and a build of the Omsi-Hub interface for testing (`<release>-hub<number>`, Luc's fork):
+/// the project's releases, which do not have that interface, would replace it.
 pub fn is_test_build(version: &str) -> bool {
-    version.contains("-pr")
+    version.contains("-pr") || version.contains("-hub")
 }
 
 /// Whether `candidate` is a newer version than `current`.
@@ -331,7 +341,7 @@ fn short_error(e: &ureq::Error) -> String {
 pub fn latest() -> anyhow::Result<Option<Release>> {
     let url = omsi_cfg::env::var("OMSI_UPDATE_URL").unwrap_or_else(|_| LATEST_API.to_string());
     match fetch_text(&url).and_then(|t| Ok(serde_json::from_str::<serde_json::Value>(&t)?)) {
-        Ok(v) => parse_release(&v, current_version()),
+        Ok(v) => newest_hub_release(&v, current_version()),
         // (the API: an address over its limit gets 403 for an hour, and some networks reach
         // github.com but not api.github.com - github.com says the latest tag as well)
         Err(e) if url == LATEST_API => {
@@ -353,7 +363,7 @@ fn latest_from_site() -> anyhow::Result<Option<Release>> {
         anyhow::bail!("github.com named no release ({})", r.get_url());
     }
     let version = tag.trim_start_matches(['v', 'V']).to_string();
-    if is_test_build(current_version()) || !newer(&version, current_version()) {
+    if is_test_build(current_version()) || !is_hub_version(&version) || !newer(&version, current_version()) {
         return Ok(None);
     }
     let Some(name) = asset_name(&version) else { return Ok(None) };
@@ -367,12 +377,42 @@ fn latest_from_site() -> anyhow::Result<Option<Release>> {
     Ok(Some(Release { version, page: format!("{REPO_URL}/releases/tag/{tag}"), notes: String::new(), asset_name: name, asset_url: url, size, sha256: None }))
 }
 
+/// A version of the fork's own releases: the openOMSI version and the fork's commits on top
+/// (`0.2.2.23`, scripts/omsihub-version.sh) - four numbers where the project's have three.
+pub fn is_hub_version(v: &str) -> bool {
+    let parts: Vec<&str> = v.split('.').collect();
+    parts.len() == 4 && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The newest of the fork's releases in the GitHub API's answer (the list of releases, or one
+/// release) when newer than `current` and with this platform's file.
+fn newest_hub_release(v: &serde_json::Value, current: &str) -> anyhow::Result<Option<Release>> {
+    if is_test_build(current) {
+        log::info!("update check: {current} is a test build, no release is offered");
+        return Ok(None);
+    }
+    let one = [v.clone()];
+    let list = v.as_array().map(Vec::as_slice).unwrap_or(&one);
+    let mut best: Option<Release> = None;
+    for r in list {
+        if !is_hub_version(r["tag_name"].as_str().unwrap_or("").trim_start_matches(['v', 'V'])) {
+            continue;
+        }
+        if let Ok(Some(x)) = parse_release(r, current) {
+            if best.as_ref().is_none_or(|b| newer(&x.version, &b.version)) {
+                best = Some(x);
+            }
+        }
+    }
+    Ok(best)
+}
+
 /// A release described as the GitHub API does, when newer than `current`.
 fn parse_release(v: &serde_json::Value, current: &str) -> anyhow::Result<Option<Release>> {
     let tag = v["tag_name"].as_str().ok_or_else(|| anyhow::anyhow!("the release has no tag"))?;
     let version = tag.trim_start_matches(['v', 'V']).to_string();
     if is_test_build(current) {
-        log::info!("update check: {current} is a pull request's test build, {version} is not offered");
+        log::info!("update check: {current} is a test build, {version} is not offered");
         return Ok(None);
     }
     if v["draft"].as_bool() == Some(true) || v["prerelease"].as_bool() == Some(true) || !newer(&version, current) {
@@ -917,6 +957,28 @@ mod tests {
         // a pull request's test build keeps itself, however new the release
         assert!(parse_release(&v, "0.1.7-pr12").unwrap().is_none());
         assert!(is_test_build("0.1.1313-pr1192") && !is_test_build("0.1.1313"));
+        // (and an Omsi-Hub test build)
+        assert!(is_test_build("0.1.1554-hub16") && parse_release(&v, "0.1.7-hub16").unwrap().is_none());
+    }
+
+    /// The fork's builds take the newest of its own releases (four numbers) from the list,
+    /// never one of the project's kind (three), a pre-release or a draft.
+    #[test]
+    fn the_newest_omsi_hub_release_of_the_list() {
+        let name = asset_name("0.0.0.0").unwrap().replace("0.0.0.0", "{v}");
+        let rel = |tag: &str, pre: bool| {
+            let v = tag.trim_start_matches('v');
+            serde_json::json!({"tag_name": tag, "prerelease": pre, "assets": [{"name": name.replace("{v}", v), "browser_download_url": format!("https://x/{v}"), "size": 1}]})
+        };
+        let list = serde_json::json!([rel("v0.2.40", false), rel("v0.2.3.30", true), rel("v0.2.3.27", false), rel("v0.2.2.25", false), rel("Beta-15", true)]);
+        let r = newest_hub_release(&list, "0.2.2.23").unwrap().unwrap();
+        assert_eq!(r.version, "0.2.3.27");
+        assert!(newest_hub_release(&list, "0.2.3.27").unwrap().is_none());
+        assert!(newest_hub_release(&list, "0.2.2-hub18").unwrap().is_none());
+        // (one release, as `OMSI_UPDATE_URL` may give it)
+        assert_eq!(newest_hub_release(&rel("v0.2.2.25", false), "0.2.2.23").unwrap().unwrap().version, "0.2.2.25");
+        assert!(newest_hub_release(&rel("v0.2.40", false), "0.2.2.23").unwrap().is_none());
+        assert!(is_hub_version("0.2.2.23") && !is_hub_version("0.2.23") && !is_hub_version("0.2.2-hub18") && !is_hub_version("0.2.2.x"));
     }
 
     /// A server on this computer that cuts the first answer off half way (as a connection

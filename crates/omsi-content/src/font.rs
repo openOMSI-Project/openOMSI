@@ -236,6 +236,58 @@ impl FontAtlas {
         self.render_unscaled(text, w, h, full_color, rgb, align)
     }
 
+    /// `render_aligned` in a font that is not the display's own (a display font the player
+    /// chose): every line keeps the place a line of the display's own font has - `line_h`
+    /// pixels high, the block of lines centred as `render_aligned` centres it - and this
+    /// font's letters are scaled to fill it ([`fit_scale`]: whole times for a font that is
+    /// smaller, so that a pixel font stays crisp; shrunk only when it is taller than the line).
+    /// A line that would then run off the texture's edge is drawn smaller, as a real sign
+    /// writes a long destination in a narrower size.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_fitted(&self, text: &str, w: u32, h: u32, full_color: bool, rgb: [u8; 3], align: TextAlign, line_h: u32) -> Vec<u8> {
+        let mut out = vec![0u8; (w * h * 4) as usize];
+        let line_h = line_h.max(1);
+        let lines: Vec<&str> = text.split('@').collect();
+        let block = line_h as i32 * lines.len() as i32;
+        // (one line is centred as `render_unscaled` centres its glyphs, rounding to nought;
+        // a block of lines from its top as `render_aligned` places them)
+        let top = if lines.len() == 1 { (h as i32 - block) / 2 } else { (h as i32 - block).max(0) / 2 };
+        let scale = fit_scale(line_h as f32, self.font.height.max(1) as f32);
+        for (i, line) in lines.iter().enumerate() {
+            let y0 = top + i as i32 * line_h as i32;
+            if y0 >= h as i32 {
+                break;
+            }
+            self.draw_line_scaled(line, &mut out, w, h, y0, line_h, scale, full_color, rgb, align);
+        }
+        out
+    }
+
+    /// One line of `render_fitted` into `out` (`w` x `h`), in the slot of `line_h` rows from
+    /// row `slot`.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_line_scaled(&self, line: &str, out: &mut [u8], w: u32, h: u32, slot: i32, line_h: u32, scale: f32, full_color: bool, rgb: [u8; 3], align: TextAlign) {
+        let advance = self.text_width(line);
+        let gap = self.font.gap;
+        let visible = (advance - gap.max(0)).max(0);
+        if visible <= 0 {
+            return;
+        }
+        // too wide for the texture at this size: as large as fits
+        let mut s = scale;
+        if visible as f32 * s > w as f32 {
+            s = fit_scale(w as f32, visible as f32).min(s);
+        }
+        // the line in the font's own size, from its left edge
+        let (tw, th) = (advance.max(1) as u32, self.font.height.max(1) as u32);
+        let src = self.render_unscaled(line, tw, th, full_color, rgb, TextAlign { orientation: 1, grid: 1 });
+        let dw = (tw as f32 * s).round().max(1.0) as i32;
+        let dh = (th as f32 * s).round().max(1.0) as i32;
+        let x0 = align.offset(w as i32, dw, (gap as f32 * s).round() as i32);
+        let y0 = slot + (line_h as i32 - dh) / 2;
+        resample_into(&src, tw, th, out, w, h, x0, y0, dw, dh);
+    }
+
     fn visible_glyph_height(&self) -> u32 {
         let mut max_rows = 0u32;
         for glyph in &self.font.chars {
@@ -310,6 +362,94 @@ impl FontAtlas {
     }
 }
 
+/// How many times a font `font_h` pixels high is drawn to fill a line `line_h` high: as many
+/// whole times as fit (a pixel font magnified by a whole number stays crisp - every pixel of
+/// it becomes a square of pixels - where 1.5 times would smear every other row), and only a
+/// font taller than the line shrunk to exactly its height (the one case where no whole
+/// number fits; a smaller size of the same font is the better choice then, see
+/// `omsi_sim::texttex::FontLibrary::display_atlas`).
+pub fn fit_scale(line_h: f32, font_h: f32) -> f32 {
+    if !(line_h > 0.0 && font_h > 0.0) {
+        return 1.0;
+    }
+    let s = line_h / font_h;
+    if s >= 1.0 {
+        // (a hair under a whole number from rounding is still that number)
+        (s + 1e-4).floor()
+    } else {
+        s
+    }
+}
+
+/// `src` (`sw` x `sh` RGBA) scaled to `dw` x `dh` and laid over `out` (`w` x `h`) at (`x0`,
+/// `y0`), clipped at its edges. Every pixel of the result is the average of the part of `src`
+/// under it (weighted by its coverage, the colours by their alpha): for a whole-number
+/// magnification exactly the source pixel, so a pixel font comes out with hard edges; shrunk,
+/// the letters stay as heavy as they were instead of losing rows.
+#[allow(clippy::too_many_arguments)]
+pub fn resample_into(src: &[u8], sw: u32, sh: u32, out: &mut [u8], w: u32, h: u32, x0: i32, y0: i32, dw: i32, dh: i32) {
+    if sw == 0 || sh == 0 || dw <= 0 || dh <= 0 {
+        return;
+    }
+    let (fx, fy) = (sw as f32 / dw as f32, sh as f32 / dh as f32);
+    // the source pixels under a destination pixel's span [a, b) and how much of each
+    let span = |a: f32, b: f32, n: u32| -> Vec<(usize, f32)> {
+        let mut v = Vec::new();
+        let mut i = a.floor().max(0.0) as i64;
+        while (i as f32) < b && i < n as i64 {
+            let lo = a.max(i as f32);
+            let hi = b.min(i as f32 + 1.0);
+            if hi > lo {
+                v.push((i as usize, hi - lo));
+            }
+            i += 1;
+        }
+        v
+    };
+    let cols: Vec<Vec<(usize, f32)>> = (0..dw).map(|x| span(x as f32 * fx, (x + 1) as f32 * fx, sw)).collect();
+    for y in 0..dh {
+        let oy = y0 + y;
+        if oy < 0 || oy >= h as i32 {
+            continue;
+        }
+        let rows = span(y as f32 * fy, (y + 1) as f32 * fy, sh);
+        for (x, col) in cols.iter().enumerate() {
+            let ox = x0 + x as i32;
+            if ox < 0 || ox >= w as i32 {
+                continue;
+            }
+            let (mut a, mut r, mut g, mut b, mut total) = (0.0f32, 0.0, 0.0, 0.0, 0.0);
+            for &(sy, wy) in &rows {
+                for &(sx, wx) in col {
+                    let k = wx * wy;
+                    let si = (sy * sw as usize + sx) * 4;
+                    // (the colours as the text textures hold them: already laid over nothing,
+                    // so weighted by their area alone)
+                    a += src[si + 3] as f32 * k;
+                    r += src[si] as f32 * k;
+                    g += src[si + 1] as f32 * k;
+                    b += src[si + 2] as f32 * k;
+                    total += k;
+                }
+            }
+            if a <= 0.0 || total <= 0.0 {
+                continue;
+            }
+            let cover = (a / total).round().clamp(0.0, 255.0) as u8;
+            if cover == 0 {
+                continue;
+            }
+            let di = ((oy as u32 * w + ox as u32) * 4) as usize;
+            let inv = 1.0 - cover as f32 / 255.0;
+            let px = |c: f32, o: u8| (c / total + o as f32 * inv).round().clamp(0.0, 255.0) as u8;
+            out[di] = px(r, out[di]);
+            out[di + 1] = px(g, out[di + 1]);
+            out[di + 2] = px(b, out[di + 2]);
+            out[di + 3] = out[di + 3].max(cover);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,6 +495,96 @@ mod tests {
         assert_eq!(font.glyph(' '), None);
         // space_width should fall back to '0' width (8)
         assert_eq!(font.space_width(), 8);
+    }
+
+    /// A font of one solid letter `w` x `h`, its glyph a checkerboard when `checker`.
+    fn block_font(w: i32, h: i32, gap: i32, checker: bool) -> FontAtlas {
+        let font = Font { name: format!("Block {h}"), height: h, gap, chars: vec![FontChar { ch: 'A', x0: 0, x1: w, y: 0 }], ..Default::default() };
+        let alpha: Vec<u8> = (0..h).flat_map(|y| (0..w).flat_map(move |x| if !checker || (x + y) % 2 == 0 { [255u8; 4] } else { [0u8; 4] })).collect();
+        FontAtlas::new(font, w as u32, h as u32, alpha.clone(), alpha)
+    }
+
+    /// The rows and columns with ink, and every alpha value drawn.
+    fn ink(img: &[u8], w: u32, h: u32) -> (Vec<u32>, Vec<u32>, Vec<u8>) {
+        let mut rows = Vec::new();
+        let mut cols = Vec::new();
+        let mut alphas = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let a = img[((y * w + x) * 4 + 3) as usize];
+                if a > 0 {
+                    if !rows.contains(&y) {
+                        rows.push(y);
+                    }
+                    if !cols.contains(&x) {
+                        cols.push(x);
+                    }
+                    if !alphas.contains(&a) {
+                        alphas.push(a);
+                    }
+                }
+            }
+        }
+        cols.sort();
+        (rows, cols, alphas)
+    }
+
+    #[test]
+    fn a_display_font_is_magnified_by_whole_numbers_and_shrunk_only_to_fit() {
+        assert_eq!(fit_scale(16.0, 7.0), 2.0);
+        assert_eq!(fit_scale(14.0, 7.0), 2.0);
+        assert_eq!(fit_scale(21.0, 7.0), 3.0);
+        assert_eq!(fit_scale(7.0, 7.0), 1.0);
+        assert_eq!(fit_scale(13.0, 7.0), 1.0, "1.86 times would smear a pixel font");
+        assert_eq!(fit_scale(8.0, 16.0), 0.5);
+        assert_eq!(fit_scale(0.0, 7.0), 1.0);
+    }
+
+    #[test]
+    fn a_smaller_pixel_font_fills_the_line_and_stays_crisp() {
+        let a = block_font(5, 7, 1, true);
+        let img = a.render_fitted("A", 40, 16, false, [255, 200, 0], TextAlign::default(), 16);
+        let (rows, cols, alphas) = ink(&img, 40, 16);
+        // twice the size, in the middle of the line, every pixel a whole 2x2 square
+        assert_eq!(rows, (1..15).collect::<Vec<_>>());
+        assert_eq!(cols, (15..25).collect::<Vec<_>>());
+        assert_eq!(alphas, [255]);
+        for y in 1..15u32 {
+            for x in 15..25u32 {
+                let lit = img[((y * 40 + x) * 4 + 3) as usize] > 0;
+                assert_eq!(lit, ((x - 15) / 2 + (y - 1) / 2) % 2 == 0, "({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn a_taller_font_is_shrunk_into_the_line_without_overflowing() {
+        let a = block_font(20, 32, 2, false);
+        let img = a.render_fitted("A", 64, 16, false, [255, 255, 255], TextAlign::default(), 16);
+        let (rows, cols, _) = ink(&img, 64, 16);
+        assert_eq!(rows.len(), 16);
+        assert_eq!(cols.len(), 10);
+        // a line of two: each in its own slot of the texture, as the display's own font has them
+        let small = block_font(5, 7, 1, false);
+        let two = small.render_fitted("A@A", 20, 40, false, [255, 255, 255], TextAlign::default(), 16);
+        let (rows, _, _) = ink(&two, 20, 40);
+        let expect: Vec<u32> = (5..19).chain(21..35).collect();
+        assert_eq!(rows, expect);
+    }
+
+    #[test]
+    fn a_line_too_wide_at_that_size_is_drawn_smaller_to_fit() {
+        let a = block_font(5, 7, 1, false);
+        // "AAAAA" is 29 px wide in the font: twice that does not fit 40 px, once does
+        let img = a.render_fitted("AAAAA", 40, 16, false, [255, 255, 255], TextAlign { orientation: 1, grid: 1 }, 16);
+        let (rows, cols, _) = ink(&img, 40, 16);
+        assert_eq!(rows.len(), 7);
+        assert_eq!(cols.first().copied(), Some(0));
+        assert!(cols.last().is_some_and(|x| *x < 40));
+        // the bus's own placement: right aligned
+        let right = a.render_fitted("A", 40, 16, false, [255, 255, 255], TextAlign { orientation: 2, grid: 1 }, 16);
+        let (_, cols, _) = ink(&right, 40, 16);
+        assert_eq!(cols.last().copied(), Some(39));
     }
 
     #[test]

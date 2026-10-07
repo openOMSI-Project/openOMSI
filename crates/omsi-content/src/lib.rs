@@ -1,5 +1,6 @@
 //! The smaller content formats.
 
+pub mod dotfont;
 pub mod driver;
 pub mod envir;
 pub mod font;

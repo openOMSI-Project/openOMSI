@@ -1,0 +1,107 @@
+# Omsi-Hub (this fork, github.com/Luc-nbr/openOMSI): takes the openOMSI project's new
+# commits (github.com/openOMSI-Project/openOMSI, main) into beta every hour - when they merge
+# and the workspace tests pass - and publishes the result (omsihub-release.yml). So the
+# project's updates reach the fork's players with the Omsi-Hub interface kept.
+# A conflict (or a failing test) stops it with the run marked failed and GitHub mails the
+# fork's owner: beta is then merged by hand, after which the hourly run goes on by itself.
+# A Cargo.lock that both sides changed is taken from the project and brought up to date.
+# (Scheduled runs only start on the repository's default branch: beta.)
+# The secret OMSIHUB_TOKEN (a token with the `repo` and `workflow` rights), when set, pushes
+# the merge: the workflow's own token may not push the project's changes to its workflows.
+name: Omsi-Hub sync with openOMSI
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: omsihub-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      new: ${{ steps.c.outputs.new }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: beta
+          fetch-depth: 0
+      - id: c
+        run: |
+          git remote add upstream https://github.com/openOMSI-Project/openOMSI.git
+          git fetch --no-tags upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing new in openOMSI's main." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+            { echo "### New in openOMSI's main"; git log --no-merges --format='- %s' HEAD..upstream/main | head -40; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  merge:
+    needs: check
+    if: needs.check.outputs.new == 'true'
+    runs-on: windows-latest
+    steps:
+      # (the files as they are in git: the shell scripts would get Windows line ends)
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          ref: beta
+          fetch-depth: 0
+          token: ${{ secrets.OMSIHUB_TOKEN || github.token }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: omsihub-x64
+      - name: Merge openOMSI's main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/openOMSI-Project/openOMSI.git
+          git fetch --no-tags upstream main
+          last=$(git log -1 --format=%H upstream/main -- VERSION)
+          up="$(git show upstream/main:VERSION | tr -d ' \r\n').$(git rev-list --count --invert-grep --fixed-strings --grep='[skip ci]' --grep='[skip actions]' "$last..upstream/main")"
+          if ! git merge --no-edit -m "Merge openOMSI $up into beta" upstream/main; then
+            conflicts=$(git diff --name-only --diff-filter=U)
+            if [ "$conflicts" = "Cargo.lock" ]; then
+              git checkout --theirs Cargo.lock
+              cargo metadata --format-version 1 > /dev/null
+              git add Cargo.lock
+              git commit --no-edit
+            else
+              echo "::error::openOMSI $up does not merge into beta by itself - merge it by hand. Conflicts: $(echo $conflicts)"
+              git merge --abort
+              exit 1
+            fi
+          fi
+          # (a lock file both sides changed without a conflict may still lack a dependency)
+          if ! cargo metadata --locked --format-version 1 > /dev/null 2>&1; then
+            cargo metadata --format-version 1 > /dev/null
+            git add Cargo.lock
+            git commit --amend --no-edit
+          fi
+          echo "### Merged openOMSI $up into beta" >> "$GITHUB_STEP_SUMMARY"
+      # (the language check needs every text in the six languages of the interface: a text
+      # the project adds shows in English until it is translated)
+      - name: Workspace regression tests
+        run: cargo test --locked --workspace --no-fail-fast -- --skip locale_check
+      - name: Push
+        shell: bash
+        run: git push origin HEAD:beta
+
+  release:
+    needs: merge
+    uses: ./.github/workflows/omsihub-release.yml
+    with:
+      tested: true

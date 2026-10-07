@@ -7,9 +7,19 @@
 //! `install` runs mod installs as background jobs, `index` caches the content lists and
 //! tells the page when they changed, `instances` keeps track of the games started.
 
+pub mod busfonts;
+pub mod busoptions;
+pub mod company;
+pub mod compose;
+pub mod depot;
 pub mod index;
 pub mod install;
 pub mod instances;
+pub mod linehof;
+pub mod lines;
+pub mod owndepot;
+pub mod service;
+pub mod ttstore;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -363,6 +373,12 @@ fn bases() -> Vec<PathBuf> {
         v.push(r);
     }
     v
+}
+
+/// The content roots the lists are made of, highest first (`bases`), and the OMSI folder -
+/// for the line editor's depot files (`linehof`), which are written into the first.
+pub fn depot_roots() -> (Vec<PathBuf>, Option<PathBuf>) {
+    (bases(), root().ok())
 }
 
 /// Entries of `rel` (e.g. "Vehicles") across the content folder and the OMSI 2 folder;
@@ -909,7 +925,7 @@ pub fn list_vehicles_progress(progress: impl Fn(&[VehicleInfo], usize, usize)) -
     let lang = content_language();
     let folders = merged_folders("Vehicles");
     let shared_hofs = shared_depot_names();
-    let keys: Vec<String> = folders.iter().map(|(_, dirs)| format!("bus4|{lang}|{}", dirs.iter().map(|d| d.to_string_lossy()).collect::<Vec<_>>().join("|"))).collect();
+    let keys: Vec<String> = folders.iter().map(|(_, dirs)| format!("bus6|{lang}|{}", dirs.iter().map(|d| d.to_string_lossy()).collect::<Vec<_>>().join("|"))).collect();
     let read = |(folder, dirs): &(String, Vec<PathBuf>), key: &String| -> Vec<VehicleInfo> {
         // the stamp covers every copy of the folder and their direct entries (Model/,
         // Texture/ ...); the paint folders the entry read are its dependencies
@@ -950,13 +966,13 @@ pub fn list_vehicles_progress(progress: impl Fn(&[VehicleInfo], usize, usize)) -
         // what was read is kept every few seconds: a first reading left half-way (the
         // launcher closed) starts from there the next time
         if saved.elapsed().as_secs() >= 10 {
-            index::save("bus4|", None);
+            index::save("bus5|", None);
             saved = std::time::Instant::now();
         }
         progress(&batch, done, total);
         out.extend(batch);
     }
-    index::save("bus4|", Some(&keys));
+    index::save("bus5|", Some(&keys));
     if out.is_empty() {
         log_empty("Vehicles", ".bus file");
     }
@@ -1009,7 +1025,9 @@ fn read_vehicle_folder(folder: &str, dirs: &[PathBuf], lang: &str) -> (Vec<Vehic
     // else those of the pack's own)
     let hof_dir = |f: &PathBuf| rel_of.get(f).map(|r| r.rsplit_once('/').map(|(d, _)| d.to_ascii_lowercase()).unwrap_or_default()).unwrap_or_default();
     let mut hofs_in: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-    for f in files.iter().filter(|f| f.extension().map(|e| e.eq_ignore_ascii_case("hof")).unwrap_or(false)) {
+    // (the player's own depot files, given to the bus for the drives that name them, are not
+    // counted as its: `omsi_vehicle::hof::is_players`)
+    for f in files.iter().filter(|f| f.extension().map(|e| e.eq_ignore_ascii_case("hof")).unwrap_or(false) && !omsi_vehicle::hof::is_players(f)) {
         // (the name alone: UK depot files carry megabytes of trips)
         if let Some(name) = omsi_vehicle::Hof::read_name(f) {
             hofs_in.entry(hof_dir(f)).or_default().push(name.trim().to_string());
@@ -1024,6 +1042,12 @@ fn read_vehicle_folder(folder: &str, dirs: &[PathBuf], lang: &str) -> (Vec<Vehic
         let model = v.model.as_ref().map(|m| omsi_cfg::resolve_path(v.dir(), m));
         if !model.as_ref().map(|m| omsi_cfg::vfs::is_file(m)).unwrap_or(false) {
             log_line(&format!("vehicles: {} - its model {} is missing, not listed", f.display(), model.map(|m| m.display().to_string()).unwrap_or_else(|| "(none)".into())));
+            continue;
+        }
+        // (a vehicle made for the AI traffic - `[ai_veh_type]`: Bad Huegelsdorf's fire engines,
+        // the lorries and taxis of other packs - has no cab to drive from)
+        if v.ai_only {
+            log_line(&format!("vehicles: {} is a vehicle for the AI traffic ([ai_veh_type]) - not listed", f.display()));
             continue;
         }
         let rel = format!("Vehicles/{}/{}", folder, rel_of.get(f).cloned().unwrap_or_else(|| f.file_name().unwrap().to_string_lossy().to_string()));
@@ -1168,6 +1192,9 @@ fn encoding_latin1(b: &[u8]) -> String {
 #[derive(Serialize, Clone, Debug)]
 pub struct StopInfo {
     pub name: String,
+    /// The stop's map object: a trip ending where another begins meets it there (see
+    /// `compose`).
+    pub id: i64,
     pub arr: f64,
     pub dep: f64,
 }
@@ -1312,20 +1339,36 @@ fn lines_on(map_dir: &Path, date: &str) -> Result<Vec<LineInfo>> {
     let calendar = omsi_map::Calendar::load(&map_dir.join("Holidays.txt")).unwrap_or_default();
     let day_bit = if calendar.is_holiday(code) { 1 << 7 } else { 1 << weekday(code) };
     let school_bit = if calendar.in_holiday_range(code) { 1 << 8 } else { 1 << 9 };
+    // (the player's own lines: the map's calendar too, and where it has no school holidays or
+    // no public holidays the line registry's periods and the common holidays - a school line
+    // is in the depot in the holidays even where the map does not name them)
+    let own_calendar = data.lines.iter().any(|l| lines::is_own_file(&l.name)).then(|| {
+        let folder = map_dir.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+        let periods = lines::load_registry(&lines::registry_path(&folder)).school_holidays;
+        service::DayCalendar::new(&calendar, &periods)
+    });
     let mut out = Vec::new();
     for l in &data.lines {
         let mut termini: Vec<String> = Vec::new();
         let mut tours = Vec::new();
+        let own = own_calendar.as_ref().filter(|_| lines::is_own_file(&l.name));
         for t in &l.tours {
             let mask = t.extra.trim().parse::<i32>().unwrap_or(1023);
-            let runs_on = |c: i32| {
-                let day = if calendar.is_holiday(c) { 1 << 7 } else { 1 << weekday(c) };
-                let school = if calendar.in_holiday_range(c) { 1 << 8 } else { 1 << 9 };
-                mask & day != 0 && mask & school != 0
+            let runs_on = |c: i32| match own {
+                Some(cal) => service::mask_runs(mask, cal.day(c).bits()),
+                None => {
+                    let day = if calendar.is_holiday(c) { 1 << 7 } else { 1 << weekday(c) };
+                    let school = if calendar.in_holiday_range(c) { 1 << 8 } else { 1 << 9 };
+                    mask & day != 0 && mask & school != 0
+                }
+            };
+            let runs = match own {
+                Some(_) => runs_on(code),
+                None => mask & day_bit != 0 && mask & school_bit != 0,
             };
             // (and yesterday's night tour: its trips past 24:00 run today, #1576)
             let night = t.trips.iter().any(|tt| tt.departure >= 24.0 * 60.0);
-            let runs = (mask & day_bit != 0 && mask & school_bit != 0) || (night && runs_on(day_before(code)));
+            let runs = runs || (night && runs_on(day_before(code)));
             let next_run = (0..400).map(|k| add_days(code, k)).find(|c| runs_on(*c)).map(|c| format!("{:04}-{:02}-{:02}", c / 10000, c / 100 % 100, c % 100));
             let mut trips = Vec::new();
             for tt in &t.trips {
@@ -1356,7 +1399,7 @@ fn lines_on(map_dir: &Path, date: &str) -> Result<Vec<LineInfo>> {
                         .map(|b| b.name.trim().to_string())
                         .or_else(|| legacy.iter().find(|x| x.0 == *id).map(|x| x.1.clone()).filter(|n| !n.is_empty()))
                         .unwrap_or_else(|| format!("stop {id}"));
-                    stops.push(StopInfo { name, arr: t_at, dep: if i == 0 { departure } else { t_at } });
+                    stops.push(StopInfo { name, id: *id, arr: t_at, dep: if i == 0 { departure } else { t_at } });
                     if i < lens.len() {
                         acc += lens[i];
                     }
@@ -1548,6 +1591,482 @@ pub struct Profile {
     pub rating_tickets: f64,
     pub sessions: Vec<Session>,
     pub exists: bool,
+    /// What every run comes to (`sessions` holds only the last forty).
+    pub record: Record,
+    /// The trips the game judged at their ends (`trips_of`), the newest first: the last
+    /// twenty, and what all of them come to.
+    pub trips: Vec<TripRun>,
+    pub trip_totals: TripTotals,
+}
+
+/// A driver's runs beyond the totals, for the service record: how many there are, since
+/// when, the records, where and with which bus they drive most, and at which hour their runs
+/// end.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct Record {
+    pub runs: usize,
+    /// When the first run ended (Unix time; 0 without one).
+    pub first: u64,
+    pub longest: Option<Session>,
+    pub furthest: Option<Session>,
+    pub busiest: Option<Session>,
+    /// The run with the most of its stops served on time (of those with five stops or more).
+    pub most_punctual: Option<Session>,
+    /// The three maps and buses driven most: (the session's map or bus, runs).
+    pub maps: Vec<(String, usize)>,
+    pub buses: Vec<(String, usize)>,
+    /// Runs by the hour of the day (local time) they ended at.
+    pub hours: [usize; 24],
+    pub jolts: i64,
+    /// Kilometres of the runs whose distance can be believed (see `believable_km`).
+    pub km: f64,
+}
+
+/// Whether a run's distance can have been driven in its time: a broken odometer reading
+/// once gave an hour's run two million kilometres (Omsi-Hub's rule: at most 100 km/h, and
+/// any distance up to 10 km).
+fn believable_km(s: &Session) -> bool {
+    let km = s.metres / 1000.0;
+    km.is_finite() && km > 0.0 && km <= (s.seconds / 3600.0 * 100.0).max(10.0)
+}
+
+/// The record of `runs`, their hours shifted by `utc_offset` seconds into local time.
+pub fn record_of(runs: &[Session], utc_offset: i64) -> Record {
+    let best = |key: &dyn Fn(&Session) -> Option<f64>| runs.iter().filter_map(|s| key(s).filter(|v| v.is_finite()).map(|v| (v, s))).max_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, s)| s.clone());
+    let top = |name: &dyn Fn(&Session) -> &str| {
+        let mut count: Vec<(String, usize)> = Vec::new();
+        for s in runs {
+            let n = name(s);
+            if n.is_empty() {
+                continue;
+            }
+            match count.iter_mut().find(|c| c.0 == n) {
+                Some(c) => c.1 += 1,
+                None => count.push((n.to_string(), 1)),
+            }
+        }
+        // (the most first; equal counts in the order first driven)
+        count.sort_by(|a, b| b.1.cmp(&a.1));
+        count.truncate(3);
+        count
+    };
+    let mut hours = [0usize; 24];
+    for s in runs {
+        hours[((s.time as i64 + utc_offset).rem_euclid(86400) / 3600) as usize] += 1;
+    }
+    Record {
+        runs: runs.len(),
+        first: runs.iter().map(|s| s.time).min().unwrap_or(0),
+        longest: best(&|s| (s.seconds > 0.0).then_some(s.seconds)),
+        furthest: best(&|s| believable_km(s).then_some(s.metres)),
+        busiest: best(&|s| (s.tickets > 0).then_some(s.tickets as f64)),
+        most_punctual: best(&|s| (s.stops >= 5).then(|| (s.stops - s.early - s.late).max(0) as f64 / s.stops as f64)),
+        maps: top(&|s| s.map.as_str()),
+        buses: top(&|s| s.bus.as_str()),
+        hours,
+        jolts: runs.iter().map(|s| s.jolts as i64).sum(),
+        km: runs.iter().filter(|s| believable_km(s)).map(|s| s.metres / 1000.0).sum(),
+    }
+}
+
+/// This machine's distance from UTC in seconds now, to the quarter hour.
+pub fn utc_offset() -> i64 {
+    let Some((y, mo, d, h, mi)) = local_now() else { return 0 };
+    let utc = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|t| t.as_secs() as i64).unwrap_or(0);
+    // days from the civil date (Howard Hinnant)
+    let (y, m) = if mo <= 2 { (y as i64 - 1, mo as i64 + 9) } else { (y as i64, mo as i64 - 3) };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + (153 * m + 2) / 5 + d as i64 - 1;
+    let local = (era * 146097 + doe - 719468) * 86400 + h as i64 * 3600 + mi as i64 * 60;
+    ((local - utc) as f64 / 900.0).round() as i64 * 900
+}
+
+// ---------------------------------------------------------------------------------------
+// trips: every trip of a duty the game judged at its end (`omsi-app`'s `trip_report`), a
+// line each in ~/.openomsi/trips/<driver>.jsonl - written as the trip ends, not with the
+// session, so that a game that does not close cleanly keeps the trips it drove
+
+/// One trip as the game judged it at its end: the stops served and how many of them early
+/// and late as OMSI 2 counts them (left more than two minutes before the timetable, arrived
+/// more than three after), how far off the timetable it ran, and what happened on the way.
+#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
+#[serde(default)]
+pub struct TripRun {
+    /// When it ended (Unix time).
+    pub time: u64,
+    pub driver: String,
+    pub map: String,
+    pub bus: String,
+    /// The line (empty: an empty run) and tour it was driven on, and where it went.
+    pub line: String,
+    pub tour: String,
+    pub terminus: String,
+    /// Its place in the duty (1 = the first) and the duty's trips.
+    pub trip: usize,
+    pub trips: usize,
+    /// When it was to leave its first stop and reach its last (seconds of the day).
+    pub departure: f64,
+    pub arrival: f64,
+    /// A free drive along a line: its stops are followed, not judged.
+    pub free: bool,
+    /// It reached its last stop (else the duty went on from its last leg).
+    pub completed: bool,
+    /// The stops it had to serve, and those served (on a free drive: reached).
+    pub planned: i32,
+    pub stops: i32,
+    pub early: i32,
+    pub late: i32,
+    /// The stop furthest off the timetable (s, negative early) and the average of them all.
+    pub worst: Option<f64>,
+    pub average: Option<f64>,
+    /// Seconds and metres driven from its first stop, jolts and collisions on the way, and
+    /// the passengers who got on.
+    pub seconds: f64,
+    pub metres: f64,
+    pub jolts: i32,
+    pub crashes: i32,
+    pub passengers: i32,
+    /// What the game's drive watch saw on the way (`omsi-app`'s `drive_watch`; a trip of an
+    /// older game has none): red lights run and speed cameras that flashed, with what they
+    /// cost in fines (cents), and the trip's comfort - hard braking, hard starts and stops
+    /// that jerked the passengers. `watched`: the watch ran.
+    pub watched: bool,
+    pub red_lights: i32,
+    pub speeding: i32,
+    pub fines: i64,
+    pub hard_brakes: i32,
+    pub hard_starts: i32,
+    pub rough_stops: i32,
+    pub offences: Vec<company::career::Offence>,
+}
+
+impl TripRun {
+    /// Its stops served neither early nor late.
+    pub fn on_time(&self) -> i32 {
+        (self.stops - self.early - self.late).max(0)
+    }
+
+    /// It was driven to a timetable and served a stop.
+    pub fn timed(&self) -> bool {
+        !self.free && self.stops > 0
+    }
+}
+
+/// What a driver's trips come to, for the service record.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct TripTotals {
+    /// The trips, and those of them driven to a timetable (a free drive keeps none).
+    pub trips: usize,
+    pub timed: usize,
+    /// Their stops served, and of those early and late (on time is the rest).
+    pub stops: i32,
+    pub early: i32,
+    pub late: i32,
+    /// The average delay over all those stops (s, negative early), and the stop furthest
+    /// off the timetable on any trip (either way).
+    pub average: Option<f64>,
+    pub worst: Option<f64>,
+    /// Trips of five stops or more without a stop early or late.
+    pub spotless: usize,
+}
+
+/// What `trips` come to.
+pub fn trip_totals(trips: &[TripRun]) -> TripTotals {
+    let timed: Vec<&TripRun> = trips.iter().filter(|t| t.timed()).collect();
+    // (the average of the trips' averages weighed by their stops: a trip of thirty stops
+    // says more than one of three)
+    let weighed: Vec<(f64, i32)> = timed.iter().filter_map(|t| t.average.filter(|a| a.is_finite()).map(|a| (a, t.stops))).collect();
+    let n: i32 = weighed.iter().map(|w| w.1).sum();
+    TripTotals {
+        trips: trips.len(),
+        timed: timed.len(),
+        stops: timed.iter().map(|t| t.stops).sum(),
+        early: timed.iter().map(|t| t.early).sum(),
+        late: timed.iter().map(|t| t.late).sum(),
+        average: (n > 0).then(|| weighed.iter().map(|(a, k)| a * *k as f64).sum::<f64>() / n as f64),
+        worst: timed.iter().filter_map(|t| t.worst).filter(|w| w.is_finite()).max_by(|a, b| a.abs().total_cmp(&b.abs())),
+        spotless: timed.iter().filter(|t| t.stops >= 5 && t.early == 0 && t.late == 0).count(),
+    }
+}
+
+/// The file of a driver's trips in the data folder `data` (`~/.openomsi`):
+/// `trips/<name>.jsonl`, the name in lower case and without what a file name cannot hold
+/// ("Luc" and "luc" are one driver, as the profiles have them).
+pub fn trips_file(data: &Path, driver: &str) -> PathBuf {
+    let name: String = driver.trim().to_lowercase().chars().map(|c| if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_') { c } else { '_' }).collect();
+    let name = if name.trim().is_empty() { "driver".to_string() } else { name };
+    data.join("trips").join(format!("{name}.jsonl"))
+}
+
+/// Add a trip to its driver's file (`trips_file`).
+pub fn append_trip(data: &Path, t: &TripRun) -> Result<PathBuf> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let path = trips_file(data, &t.driver);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut f = std::fs::OpenOptions::new().create(true).read(true).append(true).open(&path)?;
+    // (a line a game left half written - it was ended in the middle of writing - gets its
+    // end first: this trip is not lost with it)
+    let mut line = String::new();
+    if f.seek(SeekFrom::End(0))? > 0 {
+        f.seek(SeekFrom::End(-1))?;
+        let mut last = [0u8];
+        f.read_exact(&mut last)?;
+        if last[0] != b'\n' {
+            line.push('\n');
+        }
+    }
+    line.push_str(&serde_json::to_string(t)?);
+    line.push('\n');
+    f.write_all(line.as_bytes())?;
+    Ok(path)
+}
+
+/// A driver's trips in the data folder `data`, the newest first (a line that cannot be read
+/// is left out).
+pub fn trips_of(data: &Path, driver: &str) -> Vec<TripRun> {
+    let text = std::fs::read_to_string(trips_file(data, driver)).unwrap_or_default();
+    let me = driver.trim().to_lowercase();
+    let mut out: Vec<TripRun> = text.lines().filter(|l| !l.trim().is_empty()).filter_map(|l| serde_json::from_str::<TripRun>(l).ok()).filter(|t| t.driver.trim().is_empty() || t.driver.trim().to_lowercase() == me).collect();
+    // (written in the order they ended: of two in the same second the later line first)
+    out.reverse();
+    out.sort_by(|a, b| b.time.cmp(&a.time));
+    out
+}
+
+#[cfg(test)]
+mod trip_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn trip(time: u64, stops: i32, early: i32, late: i32, average: f64, worst: f64) -> TripRun {
+        TripRun { time, driver: "Luc".into(), line: "5".into(), terminus: "Rathaus".into(), planned: stops, stops, early, late, average: Some(average), worst: Some(worst), completed: true, ..Default::default() }
+    }
+
+    fn folder(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("omsi-trips-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    #[test]
+    fn trips_are_added_up_by_their_stops() {
+        let free = TripRun { free: true, stops: 9, ..Default::default() };
+        let all = vec![trip(3, 30, 1, 2, 60.0, 250.0), trip(2, 10, 0, 0, -30.0, -150.0), free, trip(1, 6, 0, 0, 10.0, 40.0)];
+        let t = trip_totals(&all);
+        assert_eq!((t.trips, t.timed, t.stops, t.early, t.late, t.spotless), (4, 3, 46, 1, 2, 2));
+        // (30 * 60 - 10 * 30 + 6 * 10) / 46
+        assert!((t.average.unwrap() - 1560.0 / 46.0).abs() < 1e-9);
+        // furthest off either way: 250 s late beats 150 s early
+        assert_eq!(t.worst, Some(250.0));
+        assert_eq!(all[0].on_time(), 27);
+        let none = trip_totals(&[]);
+        assert_eq!((none.trips, none.average, none.worst), (0, None, None));
+    }
+
+    #[test]
+    fn the_trips_file_is_the_drivers_whatever_the_case() {
+        let data = Path::new("/data");
+        assert_eq!(trips_file(data, "Luc"), trips_file(data, " luc "));
+        assert_eq!(trips_file(data, "Luc").file_name().unwrap(), "luc.jsonl");
+        assert_eq!(trips_file(data, "../a:b").file_name().unwrap(), "___a_b.jsonl");
+        assert_eq!(trips_file(data, "").file_name().unwrap(), "driver.jsonl");
+    }
+
+    /// Written a line at a time and read back newest first; a line cut short by a game that
+    /// ended while writing costs that line only, and another driver's are not read.
+    #[test]
+    fn trips_are_written_and_read_back() {
+        let data = folder("rw");
+        assert!(trips_of(&data, "Luc").is_empty());
+        append_trip(&data, &trip(100, 12, 1, 0, 20.0, -130.0)).unwrap();
+        let path = append_trip(&data, &trip(200, 8, 0, 3, 200.0, 400.0)).unwrap();
+        // half a line, as a game killed while writing leaves it
+        std::fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(b"{\"time\": 250, \"driv").unwrap();
+        append_trip(&data, &trip(300, 5, 0, 0, 0.0, 30.0)).unwrap();
+        let other = TripRun { driver: "Anna".into(), ..trip(400, 4, 0, 0, 0.0, 0.0) };
+        append_trip(&data, &other).unwrap();
+        let read = trips_of(&data, "LUC");
+        assert_eq!(read.iter().map(|t| t.time).collect::<Vec<_>>(), [300, 200, 100]);
+        assert_eq!(read[1], trip(200, 8, 0, 3, 200.0, 400.0));
+        assert_eq!(trips_of(&data, "anna").len(), 1);
+        // (an older line without the newer fields still reads)
+        std::fs::write(trips_file(&data, "Old"), "{\"time\": 5, \"driver\": \"Old\", \"stops\": 3}\n").unwrap();
+        assert_eq!(trips_of(&data, "Old")[0].stops, 3);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+}
+
+#[cfg(test)]
+mod record_tests {
+    use super::*;
+
+    fn run(time: u64, map: &str, bus: &str, minutes: f64, km: f64, stops: i32, early: i32, late: i32, tickets: i32) -> Session {
+        Session { time, map: map.into(), bus: bus.into(), seconds: minutes * 60.0, metres: km * 1000.0, stops, early, late, tickets, jolts: 1, ..Default::default() }
+    }
+
+    #[test]
+    fn the_record_counts_every_run_and_keeps_the_best() {
+        // 1 000 000 000 is 01:46:40 UTC
+        let runs = vec![
+            run(1_000_000_000, "maps/Spandau/global.cfg", "Vehicles/SD200", 90.0, 40.0, 30, 2, 3, 120),
+            run(1_000_003_600, "maps/Spandau/global.cfg", "Vehicles/MAN", 30.0, 12.0, 10, 0, 0, 20),
+            // an odometer that went wrong: a million kilometres in an hour is not a record
+            run(1_000_007_200, "maps/Grundorf/global.cfg", "Vehicles/SD200", 60.0, 1_000_000.0, 4, 0, 0, 0),
+        ];
+        let r = record_of(&runs, 3600);
+        assert_eq!(r.runs, 3);
+        assert_eq!(r.first, 1_000_000_000);
+        assert_eq!(r.longest.as_ref().unwrap().seconds, 90.0 * 60.0);
+        assert_eq!(r.furthest.as_ref().unwrap().metres, 40_000.0);
+        assert_eq!(r.busiest.as_ref().unwrap().tickets, 120);
+        // all ten on time beats twenty-five of thirty; four stops are too few to count
+        assert_eq!(r.most_punctual.as_ref().unwrap().stops, 10);
+        assert_eq!(r.maps, vec![("maps/Spandau/global.cfg".to_string(), 2), ("maps/Grundorf/global.cfg".to_string(), 1)]);
+        assert_eq!(r.buses[0], ("Vehicles/SD200".to_string(), 2));
+        assert_eq!(r.km, 52.0);
+        assert_eq!(r.jolts, 3);
+        // an hour east of UTC: 02:46, 03:46, 04:46
+        assert_eq!((r.hours[2], r.hours[3], r.hours[4]), (1, 1, 1));
+        assert_eq!(r.hours.iter().sum::<usize>(), 3);
+    }
+
+    #[test]
+    fn no_runs_no_record() {
+        let r = record_of(&[], 0);
+        assert_eq!(r.runs, 0);
+        assert!(r.longest.is_none() && r.furthest.is_none() && r.busiest.is_none() && r.most_punctual.is_none());
+        assert!(r.maps.is_empty());
+    }
+
+    /// The Settings page's "Phone & tablet": off by default, kept as 1/0 when switched.
+    #[test]
+    fn the_companion_setting_is_read_and_written() {
+        assert_eq!(settings_from_text(None)["companion"], json!(false));
+        let mut v = settings_from_text(Some("companion=1\n"));
+        assert_eq!(v["companion"], json!(true));
+        v["companion"] = json!(false);
+        let text = settings_to_text(&v, Some("companion=1\n"));
+        assert!(text.contains("companion=0\n") && !text.contains("companion=1\n"), "{text}");
+        // the address covered for streaming unless turned off; the Cloudflare tunnel only
+        // when asked for
+        let d = settings_from_text(None);
+        assert_eq!((d["companion_hide"].clone(), d["companion_tunnel"].clone()), (json!(true), json!(false)));
+        let text = settings_to_text(&d, None);
+        assert!(text.contains("companion_hide=1\n") && text.contains("companion_tunnel=0\n"), "{text}");
+        let v = settings_from_text(Some("companion_hide=0\ncompanion_tunnel=1\n"));
+        assert_eq!((v["companion_hide"].clone(), v["companion_tunnel"].clone()), (json!(false), json!(true)));
+        let text = settings_to_text(&v, Some("companion_hide=0\ncompanion_tunnel=1\n"));
+        assert!(text.contains("companion_hide=0\n") && text.contains("companion_tunnel=1\n"), "{text}");
+    }
+
+    /// The navigator's size and its stop signs: kept within their range, German unless set.
+    #[test]
+    fn the_navigator_size_and_stop_signs_are_read_and_written() {
+        let v = settings_from_text(None);
+        assert_eq!((v["nav_scale"].clone(), v["stop_style"].clone()), (json!(1.0), json!("de")));
+        let v = settings_from_text(Some("nav_scale=1.3\nstop_style=UK\n"));
+        assert_eq!((v["nav_scale"].clone(), v["stop_style"].clone()), (json!(1.3), json!("uk")));
+        assert_eq!(settings_from_text(Some("nav_scale=9\nstop_style=xx\n"))["nav_scale"], json!(2.0));
+        let text = settings_to_text(&settings_from_text(Some("stop_style=fr\n")), None);
+        assert!(text.contains("stop_style=fr\n") && text.contains("nav_scale=1\n"), "{text}");
+    }
+
+    /// The duty board under the navigator is on unless switched off; the navigator's dragged
+    /// place and size read back as written, and a place dragged before it could be sized
+    /// (`navigator_corner = at x,y`) becomes the rect's, the corner the default one.
+    #[test]
+    fn the_navigator_rect_and_board_are_read_written_and_migrated() {
+        let v = settings_from_text(None);
+        assert_eq!((v["nav_board"].clone(), v["nav_rect"].clone()), (json!(true), json!("")));
+        let v = settings_from_text(Some("nav_board=0\nnav_rect=0.5,0.25,0.4,0.6\n"));
+        assert_eq!(v["nav_board"], json!(false));
+        assert_eq!(nav_rect_parts(v["nav_rect"].as_str().unwrap()), (Some([0.5, 0.25]), Some([0.4, 0.6])));
+        let text = settings_to_text(&v, None);
+        assert!(text.contains("nav_board=0\n") && text.contains("nav_rect=0.5000,0.2500,0.4000,0.6000\n"), "{text}");
+        assert_eq!(nav_rect("-,-,0.3,0.5"), "-,-,0.3000,0.5000");
+        assert_eq!(nav_rect_parts("0.2,0.9,-,-"), (Some([0.2, 0.9]), None));
+        assert_eq!(nav_rect("rubbish"), "");
+        assert_eq!(nav_rect_parts("2,-1,9,0.01"), (Some([1.0, 0.0]), Some([4.0, 0.05])));
+        // (#940's place, migrated)
+        let v = settings_from_text(Some("navigator_corner=at 0.25,0.75\n"));
+        assert_eq!((v["navigator_corner"].clone(), v["nav_rect"].clone()), (json!("bottom-left"), json!("0.2500,0.7500,-,-")));
+        let v = settings_from_text(Some("navigator_corner=top-right\n"));
+        assert_eq!((v["navigator_corner"].clone(), v["nav_rect"].clone()), (json!("top-right"), json!("")));
+    }
+
+    /// A deleted driver that has no file of openOMSI's own is hidden from the lists, whatever
+    /// the case it is written in, and the list keeps the others in their order.
+    #[test]
+    fn hidden_drivers_leave_the_list() {
+        let hidden = hidden_in("  Anna \n\nbert\n");
+        assert_eq!(hidden, vec!["Anna".to_string(), "bert".to_string()]);
+        let names = vec!["anna".to_string(), "Bert".to_string(), "Cees".to_string()];
+        assert_eq!(without_hidden(names, &hidden), vec!["Cees".to_string()]);
+        assert_eq!(without_hidden(vec!["Dirk".into()], &[]), vec!["Dirk".to_string()]);
+    }
+
+    /// The welcome is shown until it was gone through; the new launcher unless the classic
+    /// one was chosen.
+    #[test]
+    fn the_welcome_and_the_launcher_choice_are_read_and_written() {
+        let v = settings_from_text(None);
+        assert_eq!(v["welcome_done"], json!(false));
+        assert_eq!(v["launcher_ui"], json!("new"));
+        let mut v = settings_from_text(Some("welcome_done=1\nlauncher_ui=Classic\n"));
+        assert_eq!(v["welcome_done"], json!(true));
+        assert_eq!(v["launcher_ui"], json!("classic"));
+        assert_eq!(settings_from_text(Some("launcher_ui=fancy\n"))["launcher_ui"], json!("new"));
+        v["launcher_ui"] = json!("new");
+        let text = settings_to_text(&v, None);
+        assert!(text.contains("welcome_done=1\n") && text.contains("launcher_ui=new\n"), "{text}");
+    }
+
+    /// The interface's accent: the logo's orange unless chosen, written as `#rrggbb`.
+    #[test]
+    fn the_accent_colour_is_read_and_written() {
+        assert_eq!(settings_from_text(None)["accent"], json!("#f58620"));
+        let mut v = settings_from_text(Some("accent=#2A75F7\n"));
+        assert_eq!(v["accent"], json!("#2a75f7"));
+        assert_eq!(settings_from_text(Some("accent=#f0a\n"))["accent"], json!("#ff00aa"));
+        assert_eq!(settings_from_text(Some("accent=blue\n"))["accent"], json!("#f58620"));
+        assert!(settings_to_text(&v, None).contains("accent=#2a75f7\n"));
+        v["accent"] = json!("rubbish");
+        assert!(settings_to_text(&v, None).contains("accent=#f58620\n"));
+    }
+
+    /// Signing on in the navigator is off unless chosen.
+    #[test]
+    fn signing_on_in_the_navigator_is_a_choice() {
+        assert_eq!(settings_from_text(None)["nav_signon"], json!(false));
+        let v = settings_from_text(Some("nav_signon=1\n"));
+        assert_eq!(v["nav_signon"], json!(true));
+        assert!(settings_to_text(&v, None).contains("nav_signon=1\n"));
+        assert!(settings_to_text(&settings_from_text(None), None).contains("nav_signon=0\n"));
+    }
+
+    /// The launcher's own size: 100 % unless set, kept within 60 - 200 % in 5 % steps.
+
+    #[test]
+    fn the_launcher_scale_is_read_and_written() {
+        assert_eq!(settings_from_text(None)["launcher_scale"], json!(1.0));
+        assert_eq!(settings_from_text(Some("launcher_scale=1.25\n"))["launcher_scale"], json!(1.25));
+        assert_eq!(settings_from_text(Some("launcher_scale=7\n"))["launcher_scale"], json!(2.0));
+        assert_eq!(settings_from_text(Some("launcher_scale=0.1\n"))["launcher_scale"], json!(0.6));
+        assert_eq!(settings_from_text(Some("launcher_scale=big\n"))["launcher_scale"], json!(1.0));
+        let mut v = settings_from_text(None);
+        v["launcher_scale"] = json!(1.1000000000000001);
+        let text = settings_to_text(&v, None);
+        assert!(text.contains("launcher_scale=1.1\n"), "{text}");
+    }
+
+    #[test]
+    fn the_offset_is_whole_quarter_hours() {
+        assert_eq!(utc_offset() % 900, 0);
+        assert!(utc_offset().abs() <= 14 * 3600);
+    }
 }
 
 fn sessions() -> Vec<Session> {
@@ -1588,6 +2107,40 @@ fn driver_read_path(root: &Path, name: &str) -> PathBuf {
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// drivers deleted that have no file of openOMSI's own to delete (in the original OMSI 2
+// installation, which is never changed, or known only from the sessions they drove): they
+// are hidden from the lists, in ~/.openomsi/hidden-drivers.txt, one name a line
+
+fn hidden_path() -> PathBuf {
+    data_dir().join("hidden-drivers.txt")
+}
+
+/// The names in a hidden-drivers list (blank lines and surrounding space skipped).
+fn hidden_in(text: &str) -> Vec<String> {
+    text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()
+}
+
+/// `names` without the hidden ones (their case does not matter).
+fn without_hidden(names: Vec<String>, hidden: &[String]) -> Vec<String> {
+    names.into_iter().filter(|n| !hidden.iter().any(|h| h.eq_ignore_ascii_case(n))).collect()
+}
+
+fn hidden_drivers() -> Vec<String> {
+    std::fs::read_to_string(hidden_path()).map(|t| hidden_in(&t)).unwrap_or_default()
+}
+
+/// Hide `name` (`hide`) or show it again (a driver made anew under that name).
+fn set_hidden(name: &str, hide: bool) -> Result<()> {
+    let mut list = hidden_drivers();
+    list.retain(|h| !h.eq_ignore_ascii_case(name));
+    if hide {
+        list.push(name.to_string());
+    }
+    std::fs::write(hidden_path(), list.iter().map(|n| format!("{n}\n")).collect::<String>())?;
+    Ok(())
+}
+
 pub fn list_profiles() -> Result<Vec<String>> {
     let root = root()?;
     let odr_names = |dir: PathBuf| -> Vec<String> { std::fs::read_dir(dir).map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().map(|e| e.eq_ignore_ascii_case("odr")).unwrap_or(false)).filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().to_string())).collect()).unwrap_or_default() };
@@ -1602,7 +2155,7 @@ pub fn list_profiles() -> Result<Vec<String>> {
     }
     names.sort();
     names.dedup();
-    Ok(names)
+    Ok(without_hidden(names, &hidden_drivers()))
 }
 
 pub fn get_profile(name: &str) -> Result<Profile> {
@@ -1625,7 +2178,10 @@ pub fn get_profile(name: &str) -> Result<Profile> {
             (km, mine.iter().map(|s| s.stops).sum(), mine.iter().map(|s| s.early).sum(), mine.iter().map(|s| s.late).sum(), mine.iter().map(|s| s.tickets as f64).sum(), mine.iter().map(|s| s.cash).sum(), mine.iter().map(|s| s.crashes).sum(), mine.iter().map(|s| s.hurt).sum(), [mine.iter().map(|s| s.driving).sum::<f64>() / n, mine.iter().map(|s| s.comfort).sum::<f64>() / n, mine.iter().map(|s| s.ticketing).sum::<f64>() / n])
         }
     };
-    Ok(Profile { name: name.to_string(), file: format!("Drivers/{name}.odr"), hours, km, xp, level, next_level_xp: next, stops, early, late, tickets, cash, crashes, hurt, rating_driving: rating[0], rating_comfort: rating[1], rating_tickets: rating[2], sessions: mine.into_iter().take(40).collect(), exists: driver.is_some() })
+    let record = record_of(&mine, utc_offset());
+    let trips = trips_of(&data_dir(), name);
+    let trip_totals = trip_totals(&trips);
+    Ok(Profile { name: name.to_string(), file: format!("Drivers/{name}.odr"), hours, km, xp, level, next_level_xp: next, stops, early, late, tickets, cash, crashes, hurt, rating_driving: rating[0], rating_comfort: rating[1], rating_tickets: rating[2], sessions: mine.into_iter().take(40).collect(), exists: driver.is_some(), record, trips: trips.into_iter().take(20).collect(), trip_totals })
 }
 
 /// Create the personnel file for a new driver (OMSI's own `.odr` format), so that the game
@@ -1644,6 +2200,8 @@ pub fn create_profile(name: &str, sex: &str) -> Result<Profile> {
         let d = omsi_content::driver::Driver { path: file.clone(), name: name.to_string(), sex: if sex.trim().is_empty() { "M".into() } else { sex.trim().to_string() }, ..Default::default() };
         d.save(&file)?;
     }
+    // (a driver deleted and hidden before is back under this name)
+    set_hidden(name, false)?;
     let mut c = load_config();
     c.profile = name.to_string();
     save_config(&c)?;
@@ -1687,8 +2245,12 @@ pub fn delete_profile(name: &str) -> Result<()> {
     let file = driver_write_path(&root, name);
     if file.exists() {
         std::fs::remove_file(&file)?;
-    } else if root.join("Drivers").join(format!("{}.odr", name.trim())).exists() {
-        return Err(anyhow!("'{}' belongs to the original OMSI 2 installation, which is not changed", name.trim()));
+    }
+    // (one in the original OMSI 2 installation - never changed - or known only from the
+    // sessions it drove is hidden instead; so is one whose file openOMSI just deleted while an
+    // original one of the same name would still list it)
+    if !file.exists() && (root.join("Drivers").join(format!("{}.odr", name.trim())).exists() || sessions().iter().any(|s| s.driver.eq_ignore_ascii_case(name.trim()))) {
+        set_hidden(name.trim(), true)?;
     }
     delete_profile_sessions(&data_dir().join("sessions"), name)
 }
@@ -1920,6 +2482,109 @@ fn mirror_refresh(x: &str) -> &'static str {
 }
 
 /// The page's view of a `settings.cfg` text (None: no file yet, the game's defaults).
+/// The launcher's own size (`launcher_scale`): 60 to 200 %, in steps of 5 %; anything else
+/// read as it is meant (a broken value: 100 %).
+/// The minutes a duty's bus stands ready before its first departure: by default five, at
+/// most an hour.
+pub const BUS_LEAD_DEFAULT: i64 = 5;
+
+pub fn bus_lead(v: Option<i64>) -> i64 {
+    v.unwrap_or(BUS_LEAD_DEFAULT).clamp(0, 60)
+}
+
+/// The start of a duty whose first departure is at `minutes` on `date`, `lead` minutes
+/// before it: the time and the date (the day before when that is before midnight).
+pub fn lead_start(date: &str, minutes: i32, lead: i64) -> (String, i32) {
+    let t = minutes - lead.clamp(0, 60) as i32;
+    if t >= 0 {
+        (date.to_string(), t)
+    } else {
+        (company::dates::add(date, -1), t + 24 * 60)
+    }
+}
+
+pub fn launcher_scale(v: Option<f64>) -> f64 {
+    let x = v.filter(|x| x.is_finite()).unwrap_or(1.0).clamp(0.6, 2.0);
+    (x * 20.0).round() / 20.0
+}
+
+/// The navigator's own size (`nav_scale`): 60 to 200 %, in steps of 5 %.
+pub fn nav_scale(v: Option<f64>) -> f64 {
+    let x = v.filter(|x| x.is_finite()).unwrap_or(1.0).clamp(0.6, 2.0);
+    (x * 20.0).round() / 20.0
+}
+
+/// The small navigator's place and size as the player dragged them (`nav_rect`), read: where
+/// its top-left corner is as a share of the room the window leaves it across and down (None:
+/// the `navigator_corner`), and its width and height as shares of the window's height (None:
+/// its own size). Written `x,y,w,h`, a `-` for what is not set.
+pub fn nav_rect_parts(v: &str) -> (Option<[f64; 2]>, Option<[f64; 2]>) {
+    let parts: Vec<Option<f64>> = v.split(',').map(|p| p.trim().parse::<f64>().ok().filter(|x| x.is_finite())).collect();
+    if parts.len() != 4 {
+        return (None, None);
+    }
+    let at = parts[0].zip(parts[1]).map(|(x, y)| [x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)]);
+    let size = parts[2].zip(parts[3]).filter(|(w, h)| *w > 0.0 && *h > 0.0).map(|(w, h)| [w.clamp(0.05, 4.0), h.clamp(0.05, 1.0)]);
+    (at, size)
+}
+
+/// `nav_rect` as it is written (see [`nav_rect_parts`]): empty when neither is set.
+pub fn nav_rect_text(at: Option<[f64; 2]>, size: Option<[f64; 2]>) -> String {
+    if at.is_none() && size.is_none() {
+        return String::new();
+    }
+    let pair = |p: Option<[f64; 2]>| p.map(|p| format!("{:.4},{:.4}", p[0], p[1])).unwrap_or_else(|| "-,-".into());
+    format!("{},{}", pair(at), pair(size))
+}
+
+/// `nav_rect` made tidy (anything unreadable: empty).
+pub fn nav_rect(v: &str) -> String {
+    let (at, size) = nav_rect_parts(v);
+    nav_rect_text(at, size)
+}
+
+/// A `navigator_corner` of the form `at x,y` (where the navigator was dragged to before
+/// `nav_rect`, #940).
+pub fn corner_placed_at(corner: &str) -> Option<[f64; 2]> {
+    let (x, y) = corner.trim().strip_prefix("at")?.trim().split_once(',')?;
+    let (x, y) = (x.trim().parse::<f64>().ok()?, y.trim().parse::<f64>().ok()?);
+    (x.is_finite() && y.is_finite()).then(|| [x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)])
+}
+
+/// The stop signs on the navigator's map (`stop_style`): "de" (the German H), "uk" (the
+/// British bus stop flag) or "fr" (the French arrêt); anything else the German.
+pub fn stop_style(v: &str) -> &'static str {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "uk" | "gb" => "uk",
+        "fr" => "fr",
+        _ => "de",
+    }
+}
+
+/// Which launcher opens (`launcher_ui`): "classic" for openOMSI's own, anything else the
+/// new one.
+pub fn launcher_ui(v: &str) -> &'static str {
+    if v.trim().eq_ignore_ascii_case("classic") { "classic" } else { "new" }
+}
+
+/// The interface's accent colour (`accent`) as written: `#rrggbb` in small letters, the
+/// logo's orange when `v` is none (`#rgb` is spelt out).
+pub fn accent_text(v: &str) -> String {
+    let h = v.trim().trim_start_matches('#');
+    let full: String = match h.len() {
+        3 => h.chars().flat_map(|c| [c, c]).collect(),
+        _ => h.to_string(),
+    };
+    if full.len() == 6 && full.chars().all(|c| c.is_ascii_hexdigit()) {
+        format!("#{}", full.to_ascii_lowercase())
+    } else {
+        ACCENT_DEFAULT.to_string()
+    }
+}
+
+/// The accent unless one is chosen: the orange of the "OMSI" in openOMSI's logo.
+pub const ACCENT_DEFAULT: &str = "#f58620";
+
 pub fn settings_from_text(text: Option<&str>) -> Value {
     let mut v = json!({ "msaa": 4, "anisotropy": 8, "ssao": true, "shadows": true, "shadow_size": 2048, "navigator": true, "ui_opacity": 0.85, "navigator_corner": "bottom-left", "boarding": "auto", "detail_textures": true, "exact_fare": true, "enhanced": false, "graphics": "vanilla_plus", "fullscreen": false, "vsync": true, "volume": 0.6, "drive_keys": "simple", "render_scale": "auto", "view_distance": "auto", "language": "ENG", "texture_memory": 0, "texture_compression": true, "chat": true, "tooltips": true, "name_tags": true, "show_fps": false, "clouds": true, "pax_density": 1.0, "vol_ai": 1.0, "vol_scenery": 1.0, "mirror_size": 256, "doppler": true, "driver": true, "max_fps": 0, "min_obj_size": 0.013, "max_obj_dist": "auto" });
     v["triple_screen"] = json!(false);
@@ -1955,7 +2620,7 @@ pub fn settings_from_text(text: Option<&str>) -> Value {
         v[k] = d;
     }
     // openOMSI's own: what passengers say, OMSI's route arrows, getting up from the seat
-    for (k, d) in [("pax_voices", json!("all")), ("nav_arrows", json!(false)), ("nav_ai", json!(true)), ("get_up", json!(false)), ("time_speed", json!("1")), ("time_sync", json!(false)), ("metar_sync", json!(false)), ("metar_station", json!("")), ("machine_translation", json!(false)), ("shadow_casters", json!("all")), ("shadow_blobs", json!(true)), ("reflections", json!(true)), ("mouse_sens", json!(1.0)), ("graphics_api", json!("auto")), ("ctrl_off", json!("")), ("steering_linear", json!(false)), ("old_steering", json!(false)), ("red_steer_spd", json!(false)), ("ff_invert", json!(false)), ("ff_enabled", json!(true)), ("brake_hold", json!(true)), ("auto_clutch", json!(true)), ("momentary_gears", json!(false)), ("wheel_range", json!(900.0)), ("wheel_lock", json!(0.0)), ("fov", json!(0.0)), ("camera_collision", json!(true)), ("right_stick_look", json!(true)), ("steer_look", json!(false)), ("pedal_throttle", json!(1.0)), ("pedal_brake", json!(1.0)), ("seat_x", json!(0.0)), ("seat_y", json!(0.0)), ("seat_z", json!(0.0)), ("seat_pitch_deg", json!(0.0)), ("head_tracking", json!(false)), ("led_glow", json!(6)), ("led_mips", json!(1.3)), ("ui_scale", json!(1.0)), ("ui_scale_window", json!(true)), ("chat_size", json!(1.0)), ("notes", json!(true)), ("mouse_steering", json!(false)), ("mouse_right_off", json!(false)), ("mouse_smooth", json!(true)), ("blinker_cancel", json!(true)), ("ff_road_vib", json!(1.0)), ("ff_engine_vib", json!(1.0)), ("ff_fade", json!(0.28))] {
+    for (k, d) in [("pax_voices", json!("all")), ("nav_arrows", json!(false)), ("nav_ai", json!(true)), ("get_up", json!(false)), ("ibis_auto", json!(true)), ("time_speed", json!("1")), ("time_sync", json!(false)), ("metar_sync", json!(false)), ("metar_station", json!("")), ("machine_translation", json!(false)), ("shadow_casters", json!("all")), ("shadow_blobs", json!(true)), ("reflections", json!(true)), ("mouse_sens", json!(1.0)), ("graphics_api", json!("auto")), ("ctrl_off", json!("")), ("steering_linear", json!(false)), ("old_steering", json!(false)), ("red_steer_spd", json!(false)), ("ff_invert", json!(false)), ("ff_enabled", json!(true)), ("brake_hold", json!(true)), ("auto_clutch", json!(true)), ("momentary_gears", json!(false)), ("wheel_range", json!(900.0)), ("wheel_lock", json!(0.0)), ("fov", json!(0.0)), ("camera_collision", json!(true)), ("right_stick_look", json!(true)), ("steer_look", json!(false)), ("pedal_throttle", json!(1.0)), ("pedal_brake", json!(1.0)), ("seat_x", json!(0.0)), ("seat_y", json!(0.0)), ("seat_z", json!(0.0)), ("seat_pitch_deg", json!(0.0)), ("head_tracking", json!(false)), ("led_glow", json!(6)), ("led_mips", json!(1.3)), ("ui_scale", json!(1.0)), ("ui_scale_window", json!(true)), ("chat_size", json!(1.0)), ("notes", json!(true)), ("mouse_steering", json!(false)), ("mouse_right_off", json!(false)), ("mouse_smooth", json!(true)), ("blinker_cancel", json!(true)), ("ff_road_vib", json!(1.0)), ("ff_engine_vib", json!(1.0)), ("ff_fade", json!(0.28))] {
         v[k] = d;
     }
     v["steer_look_angle"] = json!(30.0);
@@ -1970,9 +2635,45 @@ pub fn settings_from_text(text: Option<&str>) -> Value {
     // updates from the GitHub releases: looked for when the launcher starts (and during a
     // session, said over the navigator), installed after asking (or at once); and whether
     // the game is counted on the website's "playing now"
-    for (k, d) in [("update_check", json!(true)), ("update_auto", json!(false)), ("update_notify", json!(true)), ("presence", json!(true))] {
+    for (k, d) in [("update_check", json!(true)), ("update_auto", json!(true)), ("update_notify", json!(true)), ("presence", json!(true))] {
         v[k] = d;
     }
+    // the companion on a phone or tablet in the network (`companion`), off unless asked for;
+    // its address and pairing code covered on screen (streaming), and reached through a
+    // Cloudflare tunnel from outside the network only when asked for
+    v["companion"] = json!(false);
+    v["companion_hide"] = json!(true);
+    v["companion_tunnel"] = json!(false);
+    // the launcher's size on top of the system's (its Settings, Ctrl+wheel, Ctrl +/- and 0)
+    v["launcher_scale"] = json!(1.0);
+    // the launcher's animations (the opening, the bus between pages, the tiles' motion)
+    v["animations"] = json!(true);
+    // the bus across the screen between pages (with the animations on): off unless chosen -
+    // players found it too much on every change of page
+    v["page_bus"] = json!(false);
+    // the launcher dark (the night-blue ground, smoked glass) rather than light: off unless
+    // chosen (the palette in the top bar)
+    v["dark_mode"] = json!(false);
+    // how many minutes before a duty's first departure the bus stands ready (Luc: at the
+    // departure itself the player was late at once)
+    v["bus_lead"] = json!(BUS_LEAD_DEFAULT);
+    // the first start's welcome was gone through (or skipped), and which launcher opens: the
+    // new one ("new", Omsi-Hub's look) or openOMSI's classic one ("classic")
+    v["welcome_done"] = json!(false);
+    v["launcher_ui"] = json!("new");
+    // the navigator's own size on top of the interface's, and the stop signs on its map
+    // (German, British or French)
+    v["nav_scale"] = json!(1.0);
+    v["stop_style"] = json!("de");
+    // the interface's accent colour (the launcher's Settings, the palette in its bar)
+    v["accent"] = json!(ACCENT_DEFAULT);
+    // signing on in the navigator with the personnel number and the code, then the duty
+    // order (off: signed on and signed for by itself, the map and the duty at once)
+    v["nav_signon"] = json!(false);
+    // the duty board under the small navigator, and the navigator's own place and size as
+    // the player dragged them (`nav_rect`; empty: its corner and its own size)
+    v["nav_board"] = json!(true);
+    v["nav_rect"] = json!("");
     let Some(t) = text else { return v };
     let mut version = 0;
     let mut graphics: Option<&str> = None;
@@ -2009,6 +2710,19 @@ pub fn settings_from_text(text: Option<&str>) -> Value {
             "ai_max_parked" => v[&k] = json!(val.parse::<f64>().map(|x| x.max(-1.0) as i64).unwrap_or(0)),
             "ai_max_humans" => v[&k] = json!(val.parse::<f64>().map(|x| x.max(1.0) as i64).unwrap_or(200)),
             "drive_keys" | "navigator_corner" | "boarding" | "render_scale" | "pax_voices" => v[&k] = json!(val),
+            "companion" | "companion_hide" | "companion_tunnel" => v[&k] = json!(b(val)),
+            "launcher_scale" => v[&k] = json!(launcher_scale(val.parse::<f64>().ok())),
+            "animations" => v[&k] = json!(b(val)),
+            "page_bus" => v[&k] = json!(b(val)),
+            "dark_mode" => v[&k] = json!(b(val)),
+            "bus_lead" => v[&k] = json!(bus_lead(val.parse::<i64>().ok())),
+            "welcome_done" => v[&k] = json!(b(val)),
+            "launcher_ui" => v[&k] = json!(launcher_ui(val)),
+            "nav_scale" => v[&k] = json!(nav_scale(val.parse::<f64>().ok())),
+            "stop_style" => v[&k] = json!(stop_style(val)),
+            "accent" => v[&k] = json!(accent_text(val)),
+            "nav_signon" | "nav_board" => v[&k] = json!(b(val)),
+            "nav_rect" => v[&k] = json!(nav_rect(val)),
             "ctrl_off" => v[&k] = json!(val),
             "metar_station" => v[&k] = json!(val.chars().filter(|c| c.is_ascii_alphabetic()).take(4).collect::<String>().to_ascii_uppercase()),
             "discord_app_id" => v[&k] = json!(val),
@@ -2039,7 +2753,7 @@ pub fn settings_from_text(text: Option<&str>) -> Value {
             "ff_fade" => v[&k] = json!(val.parse::<f64>().map(|x| x.clamp(0.0, 1.5)).unwrap_or(0.28)),
             "seat_x" | "seat_y" | "seat_z" => v[&k] = json!(val.parse::<f64>().map(|x| x.clamp(-1.5, 1.5)).unwrap_or(0.0)),
             "seat_pitch_deg" => v[&k] = json!(val.parse::<f64>().ok().filter(|x| x.is_finite()).unwrap_or(0.0).clamp(-45.0, 45.0)),
-            "nav_arrows" | "nav_ai" | "get_up" | "time_sync" | "metar_sync" | "ui_scale_window" | "notes" | "machine_translation" | "update_check" | "update_auto" | "update_notify" | "presence" | "reflections" | "steering_linear" | "old_steering" | "red_steer_spd" | "ff_invert" | "ff_enabled" | "brake_hold" | "auto_clutch" | "momentary_gears" | "mouse_steering" | "mouse_right_off" | "mouse_smooth" | "blinker_cancel" => v[&k] = json!(b(val)),
+            "nav_arrows" | "nav_ai" | "get_up" | "ibis_auto" | "time_sync" | "metar_sync" | "ui_scale_window" | "notes" | "machine_translation" | "update_check" | "update_auto" | "update_notify" | "presence" | "reflections" | "steering_linear" | "old_steering" | "red_steer_spd" | "ff_invert" | "ff_enabled" | "brake_hold" | "auto_clutch" | "momentary_gears" | "mouse_steering" | "mouse_right_off" | "mouse_smooth" | "blinker_cancel" => v[&k] = json!(b(val)),
             "info_bar" => v[&k] = json!(b(val)),
             "windy_trees" => v[&k] = json!(b(val)),
             "time_speed" => v[&k] = json!(val.trim_start_matches(['x', 'X']).parse::<f64>().map(|x| x.clamp(1.0, 30.0)).map(|x| if x.fract() == 0.0 { format!("{}", x as i64) } else { x.to_string() }).unwrap_or_else(|_| "1".into())),
@@ -2072,6 +2786,13 @@ pub fn settings_from_text(text: Option<&str>) -> Value {
     // (passengers then waited at the cash desk for the driver): the game reads that as auto
     if version < 2 && v["boarding"] == "pay" {
         v["boarding"] = json!("auto");
+    }
+    // a navigator dragged before it could be sized said where in `navigator_corner` (`at x,y`,
+    // #940): that place is the rect's now, and the corner the default one again
+    if let Some(at) = v["navigator_corner"].as_str().and_then(corner_placed_at) {
+        let (old, size) = nav_rect_parts(v["nav_rect"].as_str().unwrap_or(""));
+        v["nav_rect"] = json!(nav_rect_text(old.or(Some(at)), size));
+        v["navigator_corner"] = json!("bottom-left");
     }
     v
 }
@@ -2296,7 +3017,7 @@ pub fn settings_to_text(v: &Value, old: Option<&str>) -> String {
         b("precision_zoom", false),
     );
     let text = format!(
-        "{text}pax_voices={}\nnav_arrows={}\nnav_ai={}\nget_up={}\ntime_speed={}\nmachine_translation={}\nshadow_casters={}\nshadow_blobs={}\nctrl_deadzone={}\nupdate_check={}\nupdate_auto={}\nupdate_notify={}\npresence={}\nreflections={}\nmouse_sens={}\ngraphics_api={}\nctrl_off={}\nsteering_linear={}\nold_steering={}\nred_steer_spd={}\nff_invert={}\nwheel_range={}\nwheel_lock={}\nfov={}\ncamera_collision={}\npedal_throttle={}\npedal_brake={}\nseat_x={}\nseat_y={}\nseat_z={}\nseat_pitch_deg={}\nsteer_look={}\nhead_tracking={}\nff_enabled={}\nbrake_hold={}\nauto_clutch={}\nmomentary_gears={}\nled_glow={}\nled_mips={}\nui_scale={}\nui_scale_window={}\nchat_size={}\nnotes={}\nmouse_steering={}\nmouse_right_off={}\nmouse_smooth={}\nblinker_cancel={}\nff_road_vib={}\nff_engine_vib={}\nff_fade={}\n",
+        "{text}pax_voices={}\nnav_arrows={}\nnav_ai={}\nget_up={}\nibis_auto={}\ntime_speed={}\nmachine_translation={}\nshadow_casters={}\nshadow_blobs={}\nctrl_deadzone={}\nupdate_check={}\nupdate_auto={}\nupdate_notify={}\npresence={}\nreflections={}\nmouse_sens={}\ngraphics_api={}\nctrl_off={}\nsteering_linear={}\nold_steering={}\nred_steer_spd={}\nff_invert={}\nwheel_range={}\nwheel_lock={}\nfov={}\ncamera_collision={}\npedal_throttle={}\npedal_brake={}\nseat_x={}\nseat_y={}\nseat_z={}\nseat_pitch_deg={}\nsteer_look={}\nhead_tracking={}\nff_enabled={}\nbrake_hold={}\nauto_clutch={}\nmomentary_gears={}\nled_glow={}\nled_mips={}\nui_scale={}\nui_scale_window={}\nchat_size={}\nnotes={}\nmouse_steering={}\nmouse_right_off={}\nmouse_smooth={}\nblinker_cancel={}\nff_road_vib={}\nff_engine_vib={}\nff_fade={}\n",
         match v.get("pax_voices").and_then(|x| x.as_str()).unwrap_or("all") {
             "tickets" => "tickets",
             "off" => "off",
@@ -2305,6 +3026,7 @@ pub fn settings_to_text(v: &Value, old: Option<&str>) -> String {
         b("nav_arrows", false),
         b("nav_ai", true),
         b("get_up", false),
+        b("ibis_auto", true),
         match v.get("time_speed") {
             Some(Value::String(x)) => x.trim().parse::<f64>().map(|x| x.clamp(1.0, 30.0)).unwrap_or(1.0),
             Some(Value::Number(x)) => x.as_f64().unwrap_or(1.0).clamp(1.0, 30.0),
@@ -2315,7 +3037,7 @@ pub fn settings_to_text(v: &Value, old: Option<&str>) -> String {
         b("shadow_blobs", true),
         f("ctrl_deadzone", 0.0).clamp(0.0, 0.3),
         b("update_check", true),
-        b("update_auto", false),
+        b("update_auto", true),
         b("update_notify", true),
         b("presence", true),
         b("reflections", true),
@@ -2382,6 +3104,14 @@ pub fn settings_to_text(v: &Value, old: Option<&str>) -> String {
     text.push_str(&format!("info_bar={}\n", b("info_bar", false)));
     text.push_str(&format!("windy_trees={}\n", b("windy_trees", true)));
     text.push_str(&format!("triple_left_angle_deg={}\ntriple_right_angle_deg={}\ntriple_eye_height_mm={}\n", f("triple_left_angle_deg", 45.0).clamp(0.0, 90.0), f("triple_right_angle_deg", 45.0).clamp(0.0, 90.0), f("triple_eye_height_mm", 0.0).clamp(-500.0, 500.0)));
+    text.push_str(&format!("companion={}\ncompanion_hide={}\ncompanion_tunnel={}\n", b("companion", false), b("companion_hide", true), b("companion_tunnel", false)));
+    text.push_str(&format!("launcher_scale={}\n", launcher_scale(v.get("launcher_scale").and_then(|x| x.as_f64()))));
+    text.push_str(&format!("animations={}\npage_bus={}\ndark_mode={}\nbus_lead={}\n", b("animations", true), b("page_bus", false), b("dark_mode", false), bus_lead(Some(n("bus_lead", BUS_LEAD_DEFAULT)))));
+    text.push_str(&format!("welcome_done={}\nlauncher_ui={}\n", b("welcome_done", false), launcher_ui(v.get("launcher_ui").and_then(|x| x.as_str()).unwrap_or("new"))));
+    text.push_str(&format!("nav_scale={}\nstop_style={}\n", nav_scale(v.get("nav_scale").and_then(|x| x.as_f64())), stop_style(v.get("stop_style").and_then(|x| x.as_str()).unwrap_or("de"))));
+    text.push_str(&format!("accent={}\n", accent_text(v.get("accent").and_then(|x| x.as_str()).unwrap_or(ACCENT_DEFAULT))));
+    text.push_str(&format!("nav_signon={}\n", b("nav_signon", false)));
+    text.push_str(&format!("nav_board={}\nnav_rect={}\n", b("nav_board", true), nav_rect(v.get("nav_rect").and_then(|x| x.as_str()).unwrap_or(""))));
     let written: Vec<String> = text.lines().filter_map(|l| l.split_once('=')).map(|(k, _)| k.trim().to_ascii_lowercase()).collect();
     for line in old.unwrap_or("").lines() {
         let t = line.trim();
@@ -2433,6 +3163,14 @@ pub struct Duty {
     pub map: String,
     pub bus: String,
     pub paint: Option<String>,
+    /// The bus options chosen for the bus (variable, value; see `busoptions`), passed as
+    /// `--setvar` after the paint: none left as the livery has them.
+    #[serde(default)]
+    pub set_vars: Vec<(String, f32)>,
+    /// The display font chosen for the bus's destination displays (see `busfonts`), passed
+    /// as `--display-font`: none as the bus has them.
+    #[serde(default)]
+    pub display_font: Option<String>,
     /// The number plate (registration) the player typed: it wins over the plate the bus's
     /// `[number]` list or the map's `registrations.txt` gives it (empty: as the content says).
     #[serde(default)]
@@ -2449,6 +3187,14 @@ pub struct Duty {
     pub trip: Option<String>,
     #[serde(default)]
     pub whole_tour: bool,
+    /// A duty put together of several tours (see `compose`): its parts, as `--duty-leg`
+    /// takes them. `line`, `tour` and `trip` are its first part's then.
+    #[serde(default)]
+    pub legs: Vec<String>,
+    /// A free drive along one route of `line` (`--free-line`): the route's trip file name.
+    /// No tour is booked and nobody keeps the time; `tour`, `trip` and `legs` are not sent.
+    #[serde(default)]
+    pub free_line: Option<String>,
     /// HH:MM
     pub time: String,
     /// YYYY-MM-DD
@@ -2475,6 +3221,9 @@ pub struct Duty {
     /// A situation file to continue (the map's `laststn.osn`): nothing else of the duty.
     #[serde(default)]
     pub situation: Option<String>,
+    /// Start with the game's object editor on (--editor): the editor hub's map objects.
+    #[serde(default)]
+    pub editor: bool,
 }
 
 /// The situation the game left on `map` last (`laststn.osn` in the map's folder: the
@@ -2595,6 +3344,12 @@ fn duty_args_for_root(d: &Duty, root: &Path) -> Result<Vec<String>> {
     if let Some(p) = d.paint.as_deref().filter(|p| !p.trim().is_empty()) {
         a.extend(["--paint".into(), p.trim().to_string()]);
     }
+    if let Some(sv) = busoptions::setvar_arg(&d.set_vars) {
+        a.extend(["--setvar".into(), sv]);
+    }
+    if let Some(f) = d.display_font.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+        a.extend(["--display-font".into(), f.to_string()]);
+    }
     if let Some(pl) = d.plate.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
         a.extend(["--plate".into(), pl.to_string()]);
     }
@@ -2653,7 +3408,11 @@ fn duty_args_for_root(d: &Duty, root: &Path) -> Result<Vec<String>> {
     }
     if let (Some(l), true) = (d.line.as_deref().filter(|x| !x.trim().is_empty()), schedule) {
         a.extend(["--line".into(), l.trim().to_string()]);
-        if let Some(t) = d.tour.as_deref().filter(|x| !x.trim().is_empty()) {
+        // a free drive along the line: its route, and nothing of a tour
+        let free_route = d.free_line.as_deref().map(str::trim).filter(|r| !r.is_empty());
+        if let Some(route) = free_route {
+            a.extend(["--free-line".into(), route.to_string()]);
+        } else if let Some(t) = d.tour.as_deref().filter(|x| !x.trim().is_empty()) {
             a.extend(["--tour".into(), t.trim().to_string()]);
             if let Some(tr) = d.trip.as_deref().filter(|x| !x.trim().is_empty()) {
                 a.extend(["--trip".into(), tr.trim().to_string()]);
@@ -2662,12 +3421,18 @@ fn duty_args_for_root(d: &Duty, root: &Path) -> Result<Vec<String>> {
                 }
             }
         }
+        for leg in d.legs.iter().filter(|x| !x.trim().is_empty() && free_route.is_none()) {
+            a.extend(["--duty-leg".into(), leg.clone()]);
+        }
     }
     if d.autostart.unwrap_or(false) {
         a.push("--autostart".into());
     }
     if d.on_foot.unwrap_or(false) {
         a.push("--on-foot".into());
+    }
+    if d.editor {
+        a.push("--editor".into());
     }
     let profile = d.profile.clone().filter(|p| !p.trim().is_empty()).unwrap_or_else(|| load_config().profile);
     if let Some(season) = d.season.as_deref().map(str::trim).filter(|x| !x.is_empty() && !x.eq_ignore_ascii_case("auto")) {
@@ -2705,7 +3470,16 @@ pub struct Launched {
 }
 
 /// Start a game for the duty. Any number may run at once; each writes its own log.
+///
+/// The player's own depot file the drive is to have - chosen on the bus step, or by the line
+/// driven - is given to its bus first (`owndepot::for_duty`), whichever way the drive was
+/// started (the duty, a free drive, the bus company's).
 pub fn launch(d: &Duty) -> Result<Launched> {
+    let mut own = d.clone();
+    if let Some(done) = owndepot::for_duty(&mut own) {
+        log_line(&format!("depot: {done}"));
+    }
+    let d = &own;
     if IN_PROCESS_GAMES {
         let args = duty_args(d)?;
         let command = args.join(" ");
@@ -2790,6 +3564,20 @@ pub fn pick_file(title: &str) -> Option<PathBuf> {
     #[cfg(target_os = "android")]
     {
         let _ = title;
+        None
+    }
+}
+
+/// File picker that offers only files of `extensions` (without the dot), under the filter
+/// name `kind` (the bus step's "Add font…": `.oft`).
+pub fn pick_file_of(title: &str, kind: &str, extensions: &[&str]) -> Option<PathBuf> {
+    #[cfg(not(target_os = "android"))]
+    {
+        rfd::FileDialog::new().set_title(title).add_filter(kind, extensions).pick_file()
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = (title, kind, extensions);
         None
     }
 }
@@ -2985,12 +3773,70 @@ mod tests {
         assert!(!alone.iter().any(|x| x == "--whole-tour"));
     }
 
+    /// A composed duty goes to the game part by part, after its first part's line and tour.
+    #[test]
+    fn a_composed_duty_passes_its_parts() {
+        let d = Duty { map: "maps/x/global.cfg".into(), bus: "Vehicles/x.bus".into(), time: "07:50".into(), line: Some("14".into()), tour: Some("1".into()), trip: Some("3".into()), legs: vec!["14|1|3|2".into(), "15|Mo-Fr 2|4|1".into()], ..Default::default() };
+        let a = duty_args_for_root(&d, Path::new("test-omsi")).unwrap();
+        let parts: Vec<&str> = a.windows(2).filter(|w| w[0] == "--duty-leg").map(|w| w[1].as_str()).collect();
+        assert_eq!(parts, ["14|1|3|2", "15|Mo-Fr 2|4|1"]);
+        assert!(a.iter().position(|x| x == "--line") < a.iter().position(|x| x == "--duty-leg"));
+    }
+
+    /// A free drive along a line goes with its line and its route, the timetable on and the
+    /// bus at the entry point nearest the route's first stop - and nothing of a tour.
+    #[test]
+    fn a_free_drive_along_a_line_passes_its_route_and_no_tour() {
+        let d = Duty { map: "maps/x/global.cfg".into(), bus: "Vehicles/x.bus".into(), time: "07:50".into(), entry: Some(-1), line: Some("14".into()), tour: Some("1".into()), trip: Some("3".into()), legs: vec!["14|1|3|2".into()], free_line: Some("14_Hbf-Zoo".into()), ..Default::default() };
+        let a = duty_args_for_root(&d, Path::new("test-omsi")).unwrap();
+        assert!(a.windows(2).any(|w| w[0] == "--line" && w[1] == "14"), "{a:?}");
+        assert!(a.windows(2).any(|w| w[0] == "--free-line" && w[1] == "14_Hbf-Zoo"), "{a:?}");
+        assert!(a.iter().any(|x| x == "--schedule") && a.iter().any(|x| x == "--auto-entry"), "{a:?}");
+        assert!(!a.iter().any(|x| x == "--tour" || x == "--trip" || x == "--duty-leg"), "{a:?}");
+        // (an empty route is no free drive along a line)
+        let a = duty_args_for_root(&Duty { free_line: Some(" ".into()), ..d }, Path::new("test-omsi")).unwrap();
+        assert!(!a.iter().any(|x| x == "--free-line") && a.iter().any(|x| x == "--tour"), "{a:?}");
+    }
+
     #[test]
     fn a_duty_keeps_its_plate_and_older_files_load_without_one() {
         let old: Duty = serde_json::from_str(r#"{"map":"maps/x/global.cfg","bus":"Vehicles/x.bus","time":"09:00"}"#).unwrap();
         assert_eq!(old.plate, None);
         let typed: Duty = serde_json::from_str(r#"{"map":"maps/x/global.cfg","bus":"Vehicles/x.bus","time":"09:00","plate":"B-AB 1234"}"#).unwrap();
         assert_eq!(typed.plate.as_deref(), Some("B-AB 1234"));
+    }
+
+    /// The bus options go to the game right after the paint, as one `--setvar`; none chosen,
+    /// none passed - and a duty written before them loads without any.
+    #[test]
+    fn a_duty_passes_its_bus_options_after_the_paint() {
+        let d = Duty { map: "maps/x/global.cfg".into(), bus: "Vehicles/x.bus".into(), time: "09:00".into(), paint: Some("Berlin".into()), set_vars: vec![("vis_mirrors".into(), 0.0), ("vis_CTI_matrix".into(), 2.0)], ..Default::default() };
+        let a = duty_args_for_root(&d, Path::new("test-omsi")).unwrap();
+        let p = a.iter().position(|x| x == "--paint").unwrap();
+        assert_eq!(&a[p..p + 4], ["--paint", "Berlin", "--setvar", "vis_mirrors=0,vis_CTI_matrix=2"]);
+        let none = duty_args_for_root(&Duty { set_vars: Vec::new(), ..d }, Path::new("test-omsi")).unwrap();
+        assert!(!none.iter().any(|x| x == "--setvar"), "{none:?}");
+        let old: Duty = serde_json::from_str(r#"{"map":"maps/x/global.cfg","bus":"Vehicles/x.bus","time":"09:00","paint":"Berlin"}"#).unwrap();
+        assert!(old.set_vars.is_empty());
+        // (a situation continued: its bus as it was saved, no options)
+        let sit = duty_args_for_root(&Duty { situation: Some("maps/x/laststn.osn".into()), set_vars: vec![("vis_mirrors".into(), 0.0)], ..Default::default() }, Path::new("test-omsi")).unwrap();
+        assert!(!sit.iter().any(|x| x == "--setvar"), "{sit:?}");
+    }
+
+    /// The display font chosen for the bus goes to the game; none chosen (or a blank one),
+    /// none passed - and a duty written before it loads without one.
+    #[test]
+    fn a_duty_passes_its_display_font() {
+        let d = Duty { map: "maps/x/global.cfg".into(), bus: "Vehicles/x.bus".into(), time: "09:00".into(), display_font: Some(" Annax Small ".into()), ..Default::default() };
+        let a = duty_args_for_root(&d, Path::new("test-omsi")).unwrap();
+        let p = a.iter().position(|x| x == "--display-font").unwrap();
+        assert_eq!(a[p + 1], "Annax Small");
+        for none in [None, Some("  ".to_string())] {
+            let a = duty_args_for_root(&Duty { display_font: none, ..d.clone() }, Path::new("test-omsi")).unwrap();
+            assert!(!a.iter().any(|x| x == "--display-font"), "{a:?}");
+        }
+        let old: Duty = serde_json::from_str(r#"{"map":"maps/x/global.cfg","bus":"Vehicles/x.bus","time":"09:00"}"#).unwrap();
+        assert_eq!(old.display_font, None);
     }
 
     /// The fleet number picked in the launcher reaches the game.
@@ -3053,7 +3899,7 @@ mod tests {
     fn update_settings_round_trip() {
         // no file: look for updates, ask before installing
         let d = settings_from_text(None);
-        assert_eq!((d["update_check"].clone(), d["update_auto"].clone()), (json!(true), json!(false)));
+        assert_eq!((d["update_check"].clone(), d["update_auto"].clone()), (json!(true), json!(true)));
         let v = settings_from_text(Some("update_check=0\nupdate_auto=1\n"));
         assert_eq!((v["update_check"].clone(), v["update_auto"].clone()), (json!(false), json!(true)));
         let text = settings_to_text(&v, None);

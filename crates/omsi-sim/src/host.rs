@@ -22,6 +22,11 @@ pub struct VehicleHost {
     /// `{init}`, as Omsi.exe sets them when it makes the vehicle (0x70a174), before the
     /// scripts start. None: not known yet (`apply_paint_vars` later).
     pub paint_scheme: Option<Option<usize>>,
+    /// Variables set before `{init}` too, after the paint scheme's: the player's bus options
+    /// (`--setvar`, the launcher's bus step). They are `[setvar]`s of the bus's liveries, and
+    /// a script that takes those over in `{init}` (the Kajosoft O530's `setvar_reset` copies
+    /// them into its own) never saw them set after the spawn.
+    pub start_vars: Vec<(String, f32)>,
     /// Fleet number and registration chosen by the vehicle dialog. They are copied to the
     /// script's `number` / `ident` strings before `{init}`, like Omsi.exe does.
     pub initial_number: Option<String>,
@@ -80,6 +85,9 @@ pub struct VehicleHost {
     /// Fonts registered by `GetFontIndex` (index = position), loaded through `font_lib`.
     pub fonts: FontTable,
     pub font_lib: Option<Arc<Mutex<FontLibrary>>>,
+    /// The display font the player chose for the vehicle's destination signs and the fonts its
+    /// sign scripts ask for that it takes the place of (see `set_display_font`).
+    pub display_font: Option<ScriptDisplayFont>,
     /// `[scripttexture]` images drawn by the `ST*` callbacks.
     pub script_textures: Vec<ScriptTexture>,
     /// Folder for `STLoadTex` paths (the vehicle directory).
@@ -116,6 +124,16 @@ pub struct VehicleHost {
     /// The stops the pages asked departures for, taken by the game: the `MAX_HTML_DEPARTURE_STOPS`
     /// asked most recently, the oldest first (see [`VehicleHost::want_departures`]).
     pub html_departure_wants: Vec<String>,
+}
+
+/// A display font on the matrices a vehicle's scripts draw (`texttex::script_signs`): the
+/// font chosen, and the names (lower case) of the fonts it replaces - `GetFontIndex` hands out
+/// the chosen one for those, fitted to each (`FontLibrary::display_font`), when the font is
+/// one that writes letters or the line number (`texttex::is_letter_font`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ScriptDisplayFont {
+    pub spec: omsi_content::dotfont::DisplayFontSpec,
+    pub fonts: Vec<String>,
 }
 
 /// A bus due at a stop (`GetArrBusLine`, `GetArrBusTerminus`, `GetArrBusTimeDiff`).
@@ -230,6 +248,40 @@ impl VehicleHost {
     /// Callbacks the scripts called that this host does not provide (lower case).
     pub fn unknown_callbacks(&self) -> &[String] {
         &self.unknown_callbacks
+    }
+
+    /// Draw the matrices of the vehicle's sign scripts in the display font `font` (None: in
+    /// their own fonts again). The fonts the scripts have asked for so far change in their
+    /// places (the indices the scripts hold stay right); a matrix shows it when it next
+    /// writes its destination.
+    pub fn set_display_font(&mut self, font: Option<ScriptDisplayFont>) {
+        self.display_font = font.filter(|f| !f.fonts.is_empty());
+        let names: Vec<(usize, String)> = self.fonts.entries.iter().enumerate().map(|(i, e)| (i, e.0.clone())).collect();
+        for (i, name) in names {
+            let atlas = self.font_for(&name);
+            self.fonts.entries[i].1 = atlas;
+        }
+    }
+
+    /// The font a script asking `GetFontIndex` for `name` draws with: the installed one, or
+    /// in its place the display font chosen for the vehicle's signs.
+    fn font_for(&self, name: &str) -> Option<Arc<omsi_content::font::FontAtlas>> {
+        // an empty name or a depot string that is no font (the Krüger matrix asks for the
+        // custom fonts of termini 14991.. this way) is looked up once and remembered as missing
+        if name.trim().is_empty() {
+            return None;
+        }
+        let lib = self.font_lib.as_ref()?;
+        let own = lib.lock().load(name);
+        let Some(df) = self.display_font.as_ref().filter(|d| d.fonts.iter().any(|f| f.eq_ignore_ascii_case(name.trim()))) else { return own };
+        let Some(a) = own.as_ref().filter(|a| crate::texttex::is_letter_font(&a.font)) else { return own };
+        match lib.lock().display_font_for(&df.spec, Some(a), a.font.height) {
+            Some(sub) => {
+                log::info!("display font: the matrix's \"{}\" ({} px) drawn in \"{}\"", name.trim(), a.font.height, df.spec.name);
+                Some(sub)
+            }
+            None => own,
+        }
     }
 
     /// The font behind a `GetFontIndex` result; -1 (a missing font) draws nothing.
@@ -374,10 +426,8 @@ impl Host for VehicleHost {
                 let idx = match self.fonts.entries.iter().position(|f| f.0.eq_ignore_ascii_case(&font)) {
                     Some(i) => i,
                     None => {
-                        // an empty name or a depot string that is no font (the Krüger
-                        // matrix asks for the custom fonts of termini 14991.. this way) is
-                        // looked up once and remembered as missing
-                        let atlas = if font.trim().is_empty() { None } else { self.font_lib.as_ref().and_then(|l| l.lock().load(&font)) };
+                        // (looked up once: a missing one is remembered as missing)
+                        let atlas = self.font_for(&font);
                         self.fonts.entries.push((font, atlas));
                         self.fonts.entries.len() - 1
                     }
@@ -777,6 +827,93 @@ mod tests {
         // a half goes to the even number, as under Delphi's control word
         assert_eq!((arg_i32(0.5), arg_i32(1.5), arg_i32(2.5), arg_i32(-0.5)), (0, 2, 2, 0));
         assert_eq!(arg_idx(-1.0), usize::MAX);
+    }
+
+    /// A 24-bit BMP of `w` x `h`, white where `lit`.
+    fn bmp(w: u32, h: u32, lit: impl Fn(u32, u32) -> bool) -> Vec<u8> {
+        let row = (w * 3).div_ceil(4) * 4;
+        let size = 54 + row * h;
+        let mut b: Vec<u8> = Vec::new();
+        b.extend(b"BM");
+        b.extend(size.to_le_bytes());
+        b.extend([0u8; 4]);
+        b.extend(54u32.to_le_bytes());
+        b.extend(40u32.to_le_bytes());
+        b.extend(w.to_le_bytes());
+        b.extend(h.to_le_bytes());
+        b.extend(1u16.to_le_bytes());
+        b.extend(24u16.to_le_bytes());
+        b.extend([0u8; 24]);
+        for y in (0..h).rev() {
+            let mut r: Vec<u8> = (0..w).flat_map(|x| if lit(x, y) { [255u8; 3] } else { [0u8; 3] }).collect();
+            r.resize(row as usize, 0);
+            b.extend(r);
+        }
+        b
+    }
+
+    /// A matrix a script draws with fonts it asks for by name (the Krüger matrices) is drawn
+    /// in the display font chosen for the bus: its letter fonts become the chosen one, fitted
+    /// to their rows - also those it asked for before the font was chosen - and its
+    /// pictograms keep theirs.
+    #[test]
+    fn a_matrix_script_draws_its_letters_in_the_chosen_display_font() {
+        let dir = std::env::temp_dir().join(format!("omsi_host_display_font_{}", std::process::id()));
+        let fonts = dir.join("Fonts");
+        std::fs::create_dir_all(&fonts).unwrap();
+        // a pixel font of 16 rows (each letter a block of 3 x 12), and a pictogram font
+        let letters: String = ('A'..='Z').collect();
+        let mut oft = String::new();
+        for name in ["Pix 16", "Pix Pictogram 16"] {
+            oft.push_str(&format!("[newfont]\n{name}\npix.bmp\npix.bmp\n16\n1\n\n"));
+            for (i, c) in letters.chars().enumerate() {
+                oft.push_str(&format!("[char]\n{c}\n{}\n{}\n0\n\n", i * 4, i * 4 + 3));
+            }
+        }
+        std::fs::write(fonts.join("Pix.oft"), oft).unwrap();
+        std::fs::write(fonts.join("pix.bmp"), bmp(104, 16, |x, y| x % 4 != 3 && (2..14).contains(&y))).unwrap();
+        let ttf = dir.join("Hanken.ttf");
+        std::fs::write(&ttf, include_bytes!("../../../assets/fonts/HankenGrotesk/HankenGrotesk-latin-700.ttf")).unwrap();
+        let p = compile(&CompileInput::default());
+        let mut state = State::new(&p);
+        let mut host = VehicleHost::new(SimClock::default());
+        host.font_lib = Some(Arc::new(Mutex::new(FontLibrary::new(&dir))));
+        let mut stacks = Stacks::default();
+        let mut index = |host: &mut VehicleHost, name: &str| {
+            stacks.push_str(name.to_string());
+            host.callback("GetFontIndex", 0, &mut stacks, &mut state);
+            stacks.pop()
+        };
+        // asked for before a font is chosen: its own
+        assert_eq!(index(&mut host, "Pix 16"), 0.0);
+        assert_eq!(host.font_atlas(0).map(|a| a.font.name.clone()).as_deref(), Some("Pix 16"));
+        let spec = omsi_content::dotfont::DisplayFontSpec::vector("Hanken Grotesk Bold", &ttf, 0);
+        host.set_display_font(Some(ScriptDisplayFont { spec, fonts: vec!["pix 16".into(), "pix pictogram 16".into()] }));
+        // the font the script holds is now the chosen one, as high as its own; the pictograms stay
+        let chosen = host.font_atlas(0).unwrap();
+        assert_eq!((chosen.font.name.as_str(), chosen.font.height), ("Hanken Grotesk Bold", 16));
+        assert_eq!(index(&mut host, "Pix 16"), 0.0, "the same index");
+        assert_eq!(index(&mut host, "Pix Pictogram 16"), 1.0);
+        assert_eq!(host.font_atlas(1).map(|a| a.font.name.clone()).as_deref(), Some("Pix Pictogram 16"));
+        // a missing font stays missing
+        assert_eq!(index(&mut host, "++"), -1.0);
+        // the script measures in it and draws it, every pixel on or off (a lit LED or none)
+        stacks.push_str("HUB".to_string());
+        stacks.push(0.0);
+        host.callback("TextLength", 0, &mut stacks, &mut state);
+        assert_eq!(stacks.pop(), chosen.font.text_width("HUB") as f32);
+        host.script_textures.push(ScriptTexture::new(128, 32));
+        for v in [0.0, 2.0, 8.0, 0.0, 1.0, 0.0] {
+            stacks.push(v);
+        }
+        stacks.push_str("HUB".to_string());
+        host.callback("STTextOut", 0, &mut stacks, &mut state);
+        let alphas: Vec<u8> = host.script_textures[0].rgba.chunks(4).map(|c| c[3]).collect();
+        assert!(alphas.iter().any(|a| *a == 255) && alphas.iter().all(|a| *a == 0 || *a == 255));
+        // back to its own
+        host.set_display_font(None);
+        assert_eq!(host.font_atlas(0).map(|a| a.font.name.clone()).as_deref(), Some("Pix 16"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

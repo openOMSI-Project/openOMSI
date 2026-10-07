@@ -176,6 +176,20 @@ impl ApplicationHandler for App {
                     k => k,
                 };
                 if let PhysicalKey::Code(code) = physical {
+                    // (Enter puts the card of the trip just ended away, when nothing else on
+                    // the screen wants it)
+                    if event.state == ElementState::Pressed
+                        && !event.repeat
+                        && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter)
+                        && self.game_menu.is_none()
+                        && self.chooser.is_none()
+                        && !lan::chat_open(&self.remotes)
+                        && !self.keys.contains(&KeyCode::AltLeft)
+                        && !self.keys.contains(&KeyCode::AltRight)
+                        && self.trip_report.dismiss()
+                    {
+                        return;
+                    }
                     self.on_key(
                         event_loop,
                         code,
@@ -195,7 +209,13 @@ impl ApplicationHandler for App {
                     edit.rotating = state == ElementState::Pressed;
                     return;
                 }
-                if self.navigator.as_ref().map(|n| n.map_open()).unwrap_or(false) {
+                // (a right-click on the city map sets a pin there, or takes the one under it
+                // away: `nav_pins`)
+                let (cx, cy) = self.cursor;
+                if let Some(n) = self.navigator.as_mut().filter(|n| n.map_open()) {
+                    if state == ElementState::Pressed {
+                        n.map_right_press(cx, cy);
+                    }
                     return;
                 }
                 if self.vr_active() {
@@ -276,6 +296,10 @@ impl ApplicationHandler for App {
                     }
                 } else {
                     let pressed = state == ElementState::Pressed;
+                    // (a click on the card of the trip just ended puts it away)
+                    if pressed && self.game_menu.is_none() && self.trip_report.click(self.cursor.0, self.cursor.1) {
+                        return;
+                    }
                     self.buttons_held.0 = pressed;
                     // the right button already down (looking round): both held zoom, and
                     // the click works nothing in the cab
@@ -1475,6 +1499,8 @@ impl ApplicationHandler for App {
                         self.career.stop_served(arrival, departure);
                     }
                     crate::journey::note(&mut self.journey, d, due, served, &self.args.root, || crate::journey::head(&self.career, &w.global.name, &p.vehicle, &self.clock));
+                    // (a trip that ended: its card, and it into the driver's record)
+                    self.trip_report.observe(d, served, &self.career, &self.drive_watch, &self.args.map, self.args.bus.as_deref().unwrap_or_default());
                     if let Some((count, due_at, at)) = d.take_skipped() {
                         use omsi_plugin::InfoValue::Num;
                         crate::plugins::queue_event(&mut self.plugin_events, "stops_skipped", vec![Num(count as f64), Num(due_at as f64), Num(at as f64)]);
@@ -1492,6 +1518,9 @@ impl ApplicationHandler for App {
                         log::warn!("driver timetable paper: {e:#}");
                     }
                 }
+                if self.duty.is_none() {
+                    self.trip_report.forget();
+                }
                 if let Some(p) = self.player.as_mut() {
                     let riders = self.humans.as_ref().map(|h| h.riding()).unwrap_or(0);
                     // the engine's own variables of the bus (see `update_engine_vars`)
@@ -1501,6 +1530,9 @@ impl ApplicationHandler for App {
                     // (a frame after the session was written must not start another one)
                     if !self.exiting && !self.paused {
                         self.career.tick(dt, &p.vehicle, riders);
+                        // red lights, speed cameras, comfort (`drive_watch`), on the career's clock
+                        let outline = crate::traffic_link::player_outline(p);
+                        self.drive_watch.tick(self.career.seconds, dt, outline, self.traffic.as_ref());
                     }
                     if crash > 0.0 {
                         self.career.crashed(crash, p.vehicle.physics.velocity_kmh() / 3.6);
@@ -1536,6 +1568,13 @@ impl ApplicationHandler for App {
                     }
                     self.service_msg = Some(("On foot: Esc menu, Place a vehicle..., then G at its driver's door to drive it".into(), 8.0));
                 }
+                // --editor: the object editor on, once the world is there
+                if self.args.editor && self.world.is_some() {
+                    self.args.editor = false;
+                    self.toggle_editor();
+                }
+                // the phone and tablet companion (`companion=1`): sign-on, duty, the bus's screens
+                crate::companion::frame(self, dt);
                 // Discord's status: the map, the bus, the line (every few seconds)
                 #[cfg(not(target_os = "android"))]
                 {
@@ -2184,6 +2223,8 @@ impl ApplicationHandler for App {
                                 next.stops.first().map(|s| s.name.trim()).unwrap_or("?"),
                                 crate::schedule::hhmm(next.departure)
                             ),
+                            // (a free drive along a line is no duty: its end is the line's)
+                            None if d.free => "End of the line: drive on freely, or choose another line in the launcher".into(),
                             None => "End of the duty: the tour's last trip is done".into(),
                         });
                     }
@@ -2254,6 +2295,12 @@ impl ApplicationHandler for App {
                         if let Some(w) = self.world.as_ref() {
                             nav.start_map(w.clone());
                         }
+                        // (the timetable's stops name the pins set on the city map)
+                        if nav.wants_stop_names() {
+                            if let Some(sch) = self.schedule.as_ref() {
+                                nav.set_stop_names(sch.stop_names());
+                            }
+                        }
                         // stops beyond the loaded tiles: their places from the navigator's map
                         if let (Some(places), Some(d)) = (nav.places(), self.duty.as_mut()) {
                             if !self.duty_places {
@@ -2296,6 +2343,7 @@ impl ApplicationHandler for App {
                             terminus,
                             stops,
                             delay: self.duty.as_ref().map(|_| p.vehicle.host.tt_delay as f64),
+                            duty: self.duty.as_ref(),
                             passengers: self.humans.as_ref().map(|h| h.riding()),
                             stop_requested: navigator::stop_requested(&p.vehicle),
                             time: self.clock.time,
@@ -2337,6 +2385,13 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
+                    // the card of the trip just ended (`trip_report`): over the navigator, under
+                    // the menus; its time runs with the game
+                    let running = !self.paused && self.game_menu.is_none();
+                    self.trip_report.frame(r, scene, hud, &self.settings, dt, running);
+                    // a red light or a speed camera: its notice, under the trip's card if one is up
+                    let under = self.trip_report.bottom();
+                    self.drive_watch.frame(r, scene, hud, self.settings.ui_scale, under, dt, running);
                     if let (Some(ui), Some(s)) = (self.ui.as_mut(), self.surface.as_ref()) {
                         let scale = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
                         let (w, h) = (hud[2], hud[3]);
@@ -2738,6 +2793,14 @@ impl ApplicationHandler for App {
                             }
                         }
                         *self.profile.entry("mirrors").or_default() += __t.elapsed().as_secs_f64();
+                        // the bus's devices as a phone or tablet watches them (the companion's
+                        // live pictures: a small picture a few times a second, only while one
+                        // is watched)
+                        if let Some(p) = self.player.as_ref() {
+                            let __t = Instant::now();
+                            crate::companion::draw_devices(r, scene, p, &lighting);
+                            *self.profile.entry("companion").or_default() += __t.elapsed().as_secs_f64();
+                        }
                         let __t = Instant::now();
                         #[cfg(windows)]
                         let mut mirrored = false;
@@ -3082,6 +3145,8 @@ impl ApplicationHandler for App {
         // static, which Rust never drops: cloudflared outlived every session, holding the
         // port and a public tunnel open)
         crate::lan::close_public_gateway();
+        // (and the phone companion's tunnel, a cloudflared of its own)
+        crate::companion::shutdown();
         // and the launcher's LAN status file goes (Cmd+Q never returns to main's guard)
         drop(lan::StatusFileGuard);
         log::info!("game ends");
@@ -3125,9 +3190,12 @@ impl App {
             self.menu_wheel(amount);
             return;
         }
-        // the city map takes the wheel while it is open
-        if let Some(n) = self.navigator.as_mut().filter(|n| n.map_open()) {
-            n.map_wheel(amount, self.cursor.0, self.cursor.1);
+        // the city map takes the wheel while it is open; Ctrl + the wheel over it or over the
+        // small navigator sizes the navigator (kept as the setting)
+        let ctrl = self.keys.contains(&KeyCode::ControlLeft) || self.keys.contains(&KeyCode::ControlRight);
+        let panel = !self.vr_active();
+        if self.navigator.as_mut().is_some_and(|n| n.wheel(amount, self.cursor.0, self.cursor.1, ctrl, panel)) {
+            self.keep_nav_size();
             return;
         }
         // the wheel over the chat (or while typing) scrolls its history

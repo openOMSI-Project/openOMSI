@@ -1,12 +1,14 @@
 //! One RGBA picture holding every text line and icon drawn: filled on demand, packed in
 //! shelves, uploaded by the region that changed, cleared when full.
 
-use crate::text::{Fonts, Weight};
+use crate::text::{Fonts, Style, Weight};
 use hashbrown::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Key {
     Text(String, u32, Weight),
+    /// A line in a `Style`: its slant, boldening and stretch in thousandths.
+    Styled(String, u32, Weight, [i32; 3]),
     Icon(String, u32),
 }
 
@@ -146,6 +148,18 @@ impl Atlas {
             return e.0;
         }
         let b = fonts.render(text, px, weight);
+        self.put(key, b.w, b.h, &b.alpha, b.ascent)
+    }
+
+    /// A line of text at `px` pixels, stretched, boldened and slanted (`Style`).
+    pub fn text_styled(&mut self, fonts: &Fonts, text: &str, px: f32, weight: Weight, style: Style) -> Sprite {
+        let milli = |v: f32| (v * 1000.0).round() as i32;
+        let key = Key::Styled(text.to_string(), (px * 4.0).round() as u32, weight, [milli(style.slant), milli(style.bold), milli(style.stretch)]);
+        if let Some(e) = self.entries.get_mut(&key) {
+            e.1 = self.frame;
+            return e.0;
+        }
+        let b = fonts.render_styled(text, px, weight, style);
         self.put(key, b.w, b.h, &b.alpha, b.ascent)
     }
 

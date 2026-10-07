@@ -53,6 +53,8 @@ parking_lot.workspace = true
 image.workspace = true
 serde_json.workspace = true
 ab_glyph.workspace = true
+# the livery studio: shapes, outlines and SVG pictures rasterised (as omsi-ui does its icons)
+resvg = { version = "0.45", default-features = false }
 rustrict = "0.7"
 gilrs = "0.11"
 ureq.workspace = true

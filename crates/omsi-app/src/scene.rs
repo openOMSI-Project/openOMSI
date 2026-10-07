@@ -3469,7 +3469,7 @@ pub fn navigation_map_of(root: &Path, tiles: &[(i32, i32, PathBuf)], chrono_dirs
         v
     };
     #[allow(clippy::type_complexity)]
-    let parts: Vec<(Vec<Lane>, Vec<(i64, DVec3)>, Vec<(DVec3, f64, String)>, Vec<(Vec<DVec3>, f32)>)> = tiles
+    let parts: Vec<(Vec<Lane>, Vec<(i64, DVec3)>, Vec<(DVec3, f64, String)>, Vec<(Vec<DVec3>, f32)>, Vec<MapStop>)> = tiles
         .par_iter()
         .map(|(tx, ty, path)| {
             let (tx, ty) = (*tx, *ty);
@@ -3477,8 +3477,9 @@ pub fn navigation_map_of(root: &Path, tiles: &[(i32, i32, PathBuf)], chrono_dirs
             let mut positions = Vec::new();
             let mut signs = Vec::new();
             let mut roads = Vec::new();
+            let mut stops = Vec::new();
             let Some(tile) = crate::tiles::read_tile(path, chrono_dirs) else {
-                return (lanes, positions, signs, roads);
+                return (lanes, positions, signs, roads, stops);
             };
             let origin2 = DVec2::new(tx as f64 * tile_size(), ty as f64 * tile_size());
             let terrain = Terrain::load(&tile_companion(&path, ".terrain")).unwrap_or_else(|_| Terrain::flat());
@@ -3530,22 +3531,50 @@ pub fn navigation_map_of(root: &Path, tiles: &[(i32, i32, PathBuf)], chrono_dirs
                 let absolute = sco.absolute_height();
                 let pos = DVec3::new(x, y, if absolute { o.pos[2] } else { o.pos[2] + ground() });
                 positions.push((o.id, pos));
+                if sco.is_bus_stop {
+                    stops.push(MapStop { tile: (tx, ty), id: o.id, at: pos, heading: o.rot[0], name: o.extra.first().map(|s| s.trim().to_string()).unwrap_or_default() });
+                }
                 if !sco.paths.is_empty() {
                     lanes.extend(object_lanes(&sco, pos, [o.rot[0], 0.0, 0.0], None, (tx, ty), o.id, &o.rules));
                 }
             }
-            (lanes, positions, signs, roads)
+            // the stops hung on another object (Ahlheim's on their shelters): at their parent,
+            // a few metres off at most; and the stops put on a spline, at the row's first
+            for o in &tile.attach_objects {
+                if o.file.trim().is_empty() || !sco_of(&o.file).is_some_and(|s| s.is_bus_stop) {
+                    continue;
+                }
+                let Some(parent) = o.parent_id.and_then(|p| positions.iter().find(|q| q.0 == p).map(|q| q.1)) else { continue };
+                let heading = tile.objects.iter().find(|q| Some(q.id) == o.parent_id).map(|q| q.rot[0]).unwrap_or(0.0) + o.rot[0];
+                if !positions.iter().any(|q| q.0 == o.id) {
+                    positions.push((o.id, parent));
+                }
+                stops.push(MapStop { tile: (tx, ty), id: o.id, at: parent, heading, name: o.extra.first().map(|s| s.trim().to_string()).unwrap_or_default() });
+            }
+            for a in tile.spline_attachments.iter().filter(|a| a.repeater.is_none()) {
+                if a.file.trim().is_empty() || !sco_of(&a.file).is_some_and(|s| s.is_bus_stop) {
+                    continue;
+                }
+                let Some((_, first)) = crate::tiles::tile_row_objects(a, &tile.splines, origin2, None).into_iter().next() else { continue };
+                if !positions.iter().any(|q| q.0 == a.id) {
+                    positions.push((a.id, first.pose.pos));
+                }
+                stops.push(MapStop { tile: (tx, ty), id: a.id, at: first.pose.pos, heading: first.pose.heading(), name: a.strings.first().map(|s| s.trim().to_string()).unwrap_or_default() });
+            }
+            (lanes, positions, signs, roads, stops)
         })
         .collect();
     let mut lanes = Vec::new();
     let mut positions = HashMap::new();
     let mut signs = Vec::new();
     let mut roads = Vec::new();
-    for (l, p, s, r) in parts {
+    let mut stops = Vec::new();
+    for (l, p, s, r, b) in parts {
         lanes.extend(l);
         positions.extend(p);
         signs.extend(s);
         roads.extend(r);
+        stops.extend(b);
     }
     log::info!("navigation map: {} roads without a path for cars", roads.len());
     log::info!(
@@ -3558,7 +3587,7 @@ pub fn navigation_map_of(root: &Path, tiles: &[(i32, i32, PathBuf)], chrono_dirs
         slis.lock().len(),
         t0.elapsed().as_secs_f64()
     );
-    NavigationMap { lanes, road_surfaces: roads, places: positions, signs }
+    NavigationMap { lanes, road_surfaces: roads, places: positions, signs, stops }
 }
 
 impl World {
@@ -14644,6 +14673,22 @@ pub struct NavigationMap {
     pub places: HashMap<i64, DVec3>,
     /// Street name signs: where, the object's heading and the name on it.
     pub signs: Vec<(DVec3, f64, String)>,
+    /// Every bus stop of the map (an object whose `.sco` says `[busstop]`): placed, hung on
+    /// another object (`[attachObj]`, at its parent) or put on a spline.
+    pub stops: Vec<MapStop>,
+}
+
+/// A bus stop of the map as the line editor offers it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapStop {
+    /// The tile it is placed in, and its id there (what a timetable's station names).
+    pub tile: (i32, i32),
+    pub id: i64,
+    pub at: DVec3,
+    /// The object's heading (degrees).
+    pub heading: f64,
+    /// Its first string: the stop's name as the map gives it (empty when it has none).
+    pub name: String,
 }
 
 /// Whether an asset name describes a road surface. Match whole filename tokens so objects

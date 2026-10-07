@@ -1,0 +1,124 @@
+# Omsi-Hub (this fork, github.com/Luc-nbr/openOMSI): builds openOMSI with the Omsi-Hub
+# interface for Windows x64 and publishes it as the release v<MAJOR.MINOR.COMMIT>.<OURS>
+# (scripts/omsihub-version.sh) - the release the fork's builds update themselves from
+# (crates/omsi-app/src/updater.rs). It runs on every push to beta, by hand, and from
+# omsihub-sync.yml after that merged the project's main into beta (a push with the workflow's
+# own token starts no workflow). A version that already has its release is left alone.
+name: Omsi-Hub release
+
+on:
+  push:
+    branches: [beta]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      tested:
+        description: The workspace tests already passed on this commit
+        type: boolean
+        default: false
+
+concurrency:
+  group: omsihub-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # (the files as they are in git: the shell scripts would get Windows line ends)
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          ref: beta
+          fetch-depth: 0
+      - name: Version
+        id: v
+        shell: bash
+        run: |
+          git remote add upstream https://github.com/openOMSI-Project/openOMSI.git
+          git fetch --no-tags upstream main
+          v=$(sh scripts/omsihub-version.sh)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "OPENOMSI_VERSION=$v" >> "$GITHUB_ENV"
+          if gh release view "v$v" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "### openOMSI $v (Omsi-Hub) - already released" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### openOMSI $v (Omsi-Hub)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.v.outputs.exists != 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.v.outputs.exists != 'true'
+        with:
+          key: omsihub-x64
+      # (the language check needs every text in the six languages of the interface: a text
+      # the project adds shows in English until it is translated, so it does not hold up a
+      # release)
+      - name: Workspace regression tests
+        if: steps.v.outputs.exists != 'true' && !inputs.tested
+        run: cargo test --locked --workspace --no-fail-fast -- --skip locale_check
+      - name: Build
+        if: steps.v.outputs.exists != 'true'
+        shell: cmd
+        run: scripts\build-windows.cmd x86_64-pc-windows-msvc
+      # (as release.yml: Microsoft's shader compiler for DirectX 12 beside the program -
+      # without it the old FXC overflows its stack on the sky's shaders)
+      - name: DirectX shader compiler
+        if: steps.v.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          gh release download -R microsoft/DirectXShaderCompiler --pattern "dxc_*.zip" -D dxc
+          $zip = Get-ChildItem dxc/*.zip | Where-Object { $_.Name -notmatch "linux|pdb" } | Select-Object -First 1
+          Expand-Archive $zip.FullName -DestinationPath dxc/x
+          Copy-Item "dxc/x/bin/x64/dxcompiler.dll", "dxc/x/bin/x64/dxil.dll" dist/windows/
+      - name: Visual C++ runtime
+        if: steps.v.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory -ErrorAction SilentlyContinue | Sort-Object FullName | Select-Object -Last 1
+          $dir = if ($crt) { $crt.FullName } else { "$env:SystemRoot\System32" }
+          foreach ($dll in "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll") {
+            Copy-Item (Join-Path $dir $dll) dist/windows/
+          }
+          Get-ChildItem dist/windows
+      - name: Package
+        if: steps.v.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item README.md, LICENSE dist/windows/
+          Compress-Archive -Path dist/windows/* -DestinationPath "out/openOMSI-$env:OPENOMSI_VERSION-windows-x64.zip"
+      - name: Publish
+        if: steps.v.outputs.exists != 'true'
+        shell: bash
+        run: |
+          v="$OPENOMSI_VERSION"
+          base="${v%.*}"
+          prev=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-pre-releases --exclude-drafts --limit 30 --json tagName -q '.[].tagName' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
+          {
+            echo "**openOMSI $base with the Omsi-Hub interface.** Builds from this fork install this release by themselves (Settings - updates); it holds openOMSI's own changes up to [openOMSI $base](https://github.com/openOMSI-Project/openOMSI/releases/tag/v$base)."
+            echo
+            echo "### Install"
+            echo "1. Download \`openOMSI-$v-windows-x64.zip\` below."
+            echo "2. Unzip it into a **new, empty folder** (not over an official openOMSI)."
+            echo "3. Start \`openomsi.exe\`. openOMSI needs an installed **OMSI 2**: the first start asks for its folder."
+            echo
+            if [ -n "$prev" ]; then
+              echo "### Changes since ${prev#v}"
+              git log --no-merges --format='- %s' "$prev..HEAD" -- . ':(exclude).github' | head -60
+            fi
+            echo
+            echo "Bugs: the logs \`%USERPROFILE%\\.openomsi\\launcher.log\` and \`game.log\`, with what you did and what happened."
+          } > notes.md
+          gh release create "v$v" "out/openOMSI-$v-windows-x64.zip" -R "$GITHUB_REPOSITORY" \
+            --target "$(git rev-parse HEAD)" --title "openOMSI $v (Omsi-Hub)" --notes-file notes.md --latest

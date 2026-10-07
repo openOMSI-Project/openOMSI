@@ -1,0 +1,2087 @@
+/*
+ * The companion's look: Omsi-Hub's phone (its overlay.css and apparaat.css) and the game's
+ * navigator, in openOMSI's colours, which are the same. Colour has few jobs and no others:
+ * the accent (the player's colour, the logo's orange unless chosen: the game sends it with the
+ * state, app.js sets it here) is the route and the one action that goes on, yellow is the line
+ * number, amber the stop the bus heads for, red, green and blue are punctuality (late, on
+ * time, early).
+ *
+ * Every size is in rem: the page's size (the Device tab, 80 to 160 %) is the root's font
+ * size, and everything grows with it - the map's words too (map.js).
+ */
+
+:root {
+  --ground: #0e1522;
+  --map: #0b111b;
+  --sheet: #141a26;
+  --field: #1b2231;
+  --deep: #0a0e16;
+  --hover: #212836;
+  --edge: rgba(255, 255, 255, 0.1);
+  --hair: rgba(255, 255, 255, 0.07);
+  --ink: #e8ebf2;
+  --soft: #c4cad6;
+  --dim: #959db0;
+  --faint: #60687a;
+  --route: #f58620;
+  --route-deep: #cb6f1b;
+  --route-rgb: 245, 134, 32;
+  --on-route: #181006;
+  --early: #2a75f7;
+  --line: #ffd23f;
+  --on-line: #1a1400;
+  --now: #f0b429;
+  --late: #d93a30;
+  --late-ink: #ff5f57;
+  --ontime: #1a8a4f;
+  --ontime-ink: #37d67a;
+  --early-ink: #4da3ff;
+  --warn: #ebaa3c;
+  --glass: rgba(6, 9, 16, 0.78);
+  --radius: 0.875rem;
+  --radius-small: 0.625rem;
+  --font: 'Hanken Grotesk', 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
+}
+
+html {
+  font-size: 16px;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+/* What you see while the address bar slides away: `100%` is iOS's large view. */
+@supports (height: 100dvh) {
+  html,
+  body {
+    height: 100dvh;
+  }
+}
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font: 0.9375rem/1.45 var(--font);
+  font-feature-settings: 'tnum' 1, 'lnum' 1;
+  overflow: hidden;
+  /* a screen, not a page: no bounce and no blue flash at every tap */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--route);
+  outline-offset: 2px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---------- the frame: the whole window, inside the notch ---------- */
+
+#app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+.phone {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+}
+
+.page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 1.125rem 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* A step that has the whole screen: its card in the middle, as wide as a phone. */
+.step .page {
+  align-items: center;
+}
+
+.step-card {
+  width: 100%;
+  max-width: 28rem;
+  margin: auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.step-card.wide-card {
+  max-width: 36rem;
+  margin-top: 0;
+}
+
+.center {
+  text-align: center;
+}
+
+.logo {
+  width: 4rem;
+  height: 4rem;
+  margin: 0 auto 0.375rem;
+  display: block;
+}
+
+.kicker {
+  margin: 0;
+  color: var(--dim);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.375rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+h2 {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 800;
+}
+
+.explain {
+  margin: 0;
+  color: var(--dim);
+  font-size: 0.875rem;
+}
+
+.explain.small {
+  font-size: 0.8125rem;
+  margin-top: 0.25rem;
+}
+
+.error {
+  margin: 0;
+  color: var(--late-ink);
+  font-size: 0.875rem;
+}
+
+.empty {
+  margin: auto;
+  padding: 1.5rem;
+  color: var(--dim);
+  text-align: center;
+}
+
+.driver {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.who {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+/* ---------- the keypad: big, you type with one hand in the bus ---------- */
+
+.boxes {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.boxes span {
+  flex: 1;
+  min-width: 0;
+  height: 3.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--edge);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-small);
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.boxes span.full {
+  border-bottom-color: var(--route);
+}
+
+.boxes.wrong span {
+  border-color: var(--late);
+}
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+
+.keypad button {
+  height: 3.75rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-small);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 1.5rem;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.keypad button:active {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.keypad button.quiet {
+  background: transparent;
+  color: var(--dim);
+  font-size: 0.9375rem;
+}
+
+/* ---------- buttons ---------- */
+
+.action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 3rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-small);
+  background: rgba(255, 255, 255, 0.03);
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.action:active {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.action.main {
+  border-color: transparent;
+  background: var(--route);
+  color: var(--on-route);
+  font-size: 1rem;
+}
+
+.action.main:active {
+  background: var(--route-deep);
+}
+
+.action.quiet {
+  background: transparent;
+  color: var(--soft);
+}
+
+.action:disabled {
+  opacity: 0.55;
+}
+
+/* ---------- the duty order ---------- */
+
+.order dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.order dl div {
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-small);
+  background: var(--sheet);
+}
+
+.order dt {
+  color: var(--dim);
+  font-size: 0.75rem;
+}
+
+.order dd {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+
+/* the line number: a yellow plate, as on the bus */
+.plate {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 2.25rem;
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  border-radius: 0.3125rem;
+  background: var(--line);
+  color: var(--on-line);
+  font-weight: 900;
+  font-size: 0.875rem;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* an empty run has no line: an outlined tag saying so */
+.plate.empty {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: var(--dim);
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+h1 .plate {
+  height: 1.875rem;
+  font-size: 1.0625rem;
+}
+
+/* ---------- lists: lines, tours, screens ---------- */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 3.5rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-small);
+  background: rgba(255, 255, 255, 0.05);
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.row:active {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.row b,
+.row small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row small {
+  color: var(--dim);
+  font-size: 0.8125rem;
+}
+
+.row .time {
+  font-size: 1.125rem;
+  font-weight: 800;
+}
+
+.row .chev {
+  color: var(--dim);
+  font-size: 1.25rem;
+}
+
+.row .lead {
+  color: var(--dim);
+}
+
+.row span {
+  min-width: 0;
+}
+
+/* ---------- the navigator: a column beside the map, or a dock under it ---------- */
+
+.shell {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.shell.narrow {
+  flex-direction: column;
+}
+
+.shell.wide {
+  flex-direction: row;
+}
+
+.side {
+  width: clamp(20rem, 34vw, 27rem);
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--sheet);
+  border-right: 1px solid var(--edge);
+}
+
+.side-page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0.25rem 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.seg,
+.dock {
+  display: flex;
+  gap: 0.375rem;
+  flex: 0 0 auto;
+}
+
+.seg {
+  padding: 0.625rem 0.75rem;
+}
+
+.dock {
+  padding: 0.375rem 0.5rem calc(0.375rem + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--edge);
+  background: var(--sheet);
+}
+
+.seg button,
+.dock button {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 3.25rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.125rem;
+  border: 0;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--dim);
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.dock button {
+  padding: 0 0.125rem;
+  font-size: 0.6875rem;
+}
+
+.seg button span,
+.dock button span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seg button[aria-pressed='true'],
+.dock button[aria-pressed='true'] {
+  background: rgba(var(--route-rgb), 0.18);
+  color: var(--ink);
+}
+
+/* the break running: a dot on its button */
+.seg button i,
+.dock button i {
+  position: absolute;
+  top: 0.4rem;
+  right: calc(50% - 1.1rem);
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--now);
+}
+
+.navpane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- the map, and the words over it (the game's small navigator) ---------- */
+
+.navmap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 11rem;
+  overflow: hidden;
+  background: var(--map);
+}
+
+.map-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.map-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: grab;
+}
+
+.nav-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2.75rem;
+  padding: 0 0.875rem;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.nav-top .speed {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25rem;
+}
+
+.nav-top .speed b {
+  font-size: 1.375rem;
+  font-weight: 800;
+}
+
+.nav-top small {
+  color: var(--dim);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+/* the speed limit: the round sign */
+.limit {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-left: 0.5rem;
+  box-sizing: border-box;
+  border: 0.2rem solid #c82828;
+  border-radius: 50%;
+  background: #ebebeb;
+  color: #111;
+  font-style: normal;
+  font-size: 0.75rem;
+  font-weight: 900;
+}
+
+.limit.three {
+  font-size: 0.6rem;
+}
+
+.nav-top .mid {
+  overflow: hidden;
+  color: var(--dim);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-top .when {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+}
+
+.nav-top .when b {
+  font-size: 1.0625rem;
+  font-weight: 800;
+}
+
+/* the next turn: an arrow, how far, and the street it goes into */
+.turn {
+  position: absolute;
+  top: 3.25rem;
+  left: 0.625rem;
+  max-width: calc(100% - 5.5rem);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem 0.375rem 0.5rem;
+  border-radius: 0.5rem;
+  background: rgba(10, 10, 10, 0.88);
+  box-shadow: 0 0.375rem 1rem rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.turn .turn-icon {
+  display: flex;
+}
+
+.turn .turn-icon .icon {
+  width: 2.125rem;
+  height: 2.125rem;
+  stroke-width: 2.4;
+}
+
+.turn b {
+  font-size: 1.25rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.turn span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--soft);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mapbtns {
+  position: absolute;
+  top: 3.25rem;
+  right: 0.625rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.mapbtn {
+  width: 2.75rem;
+  height: 2.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--edge);
+  border-radius: 0.625rem;
+  background: rgba(20, 26, 38, 0.92);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.mapbtn.txt {
+  font-size: 0.8125rem;
+  font-weight: 800;
+}
+
+.mapbtn:active {
+  background: rgba(var(--route-rgb), 0.4);
+}
+
+/* the next stop: its name; its distance, the time to it and its time; the punctuality */
+.nav-next {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0.5rem 0.875rem 0.625rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.nav-next .street {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.5rem);
+  translate: -50% 0;
+  max-width: 70%;
+  overflow: hidden;
+  padding: 0.125rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(10, 10, 10, 0.82);
+  color: #b2b2b2;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-next .l1,
+.nav-next .l2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nav-next .l2 {
+  justify-content: space-between;
+}
+
+.nav-next .name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 1.0625rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-next .facts {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dim);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-next .facts.ontime {
+  color: var(--ontime-ink);
+}
+
+.nav-next .facts.warn {
+  color: var(--warn);
+}
+
+.nav-next .facts.late {
+  color: var(--late-ink);
+}
+
+/* the stop request, as the lamp over the door */
+.req {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.0625rem 0.4375rem;
+  border-radius: 0.3125rem;
+  background: #f0a030;
+  color: #1a1000;
+  font-size: 0.6875rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+}
+
+.req .icon {
+  width: 0.875rem;
+  height: 0.875rem;
+  stroke-width: 2.6;
+}
+
+/* punctuality: as letters (a tint) or as the board's filled chip */
+.chip {
+  flex: 0 0 auto;
+  padding: 0.125rem 0.625rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.chip.ontime {
+  background: rgba(55, 214, 122, 0.14);
+  color: var(--ontime-ink);
+}
+
+.chip.late {
+  background: rgba(255, 95, 87, 0.16);
+  color: var(--late-ink);
+}
+
+.chip.early {
+  background: rgba(77, 163, 255, 0.16);
+  color: var(--early-ink);
+}
+
+.chip.fill.ontime {
+  background: var(--ontime);
+  color: #fff;
+}
+
+.chip.fill.late {
+  background: var(--late);
+  color: #fff;
+}
+
+.chip.fill.early {
+  background: var(--early);
+  color: #fff;
+}
+
+.chip.fill.plain {
+  background: var(--field);
+  color: var(--ink);
+}
+
+.late {
+  color: var(--late-ink);
+}
+
+.ontime {
+  color: var(--ontime-ink);
+}
+
+.early {
+  color: var(--early-ink);
+}
+
+.soft {
+  color: var(--dim);
+}
+
+/* ---------- the duty board under the map (Shift+N's second step) ---------- */
+
+.board {
+  position: relative;
+  flex: 0 1 auto;
+  max-height: 46%;
+  overflow-y: auto;
+  padding: 0.25rem 0.875rem 0.625rem;
+  border-top: 1px solid var(--edge);
+  background: var(--sheet);
+}
+
+.board .handle {
+  position: absolute;
+  top: 0.125rem;
+  left: 50%;
+  translate: -50% 0;
+  width: 3rem;
+  height: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.board .handle .icon {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.bhead {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.75rem 0 0.375rem;
+  min-width: 0;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.bhead b,
+.bhead small,
+.trow b,
+.trow small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bhead b {
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.bhead small,
+.trow small {
+  color: var(--dim);
+  font-size: 0.75rem;
+}
+
+/* a stop on the rail: grey where the bus has been, amber where it heads, blue ahead */
+.srow {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1.75rem 1fr auto auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.6875rem;
+}
+
+.srow::before,
+.srow::after {
+  content: '';
+  position: absolute;
+  left: calc(0.875rem - 1.5px);
+  width: 3px;
+  background: #3f88e8;
+}
+
+.srow.above::before {
+  top: 0;
+  height: 50%;
+}
+
+.srow.below::after {
+  top: 50%;
+  height: 50%;
+}
+
+.srow.done::before,
+.srow.done::after,
+.srow.now::before {
+  background: #4a5462;
+}
+
+.srow .pin {
+  position: relative;
+  z-index: 1;
+  justify-self: center;
+  width: 0.5625rem;
+  height: 0.5625rem;
+  box-sizing: border-box;
+  border: 0.15625rem solid #3f88e8;
+  border-radius: 50%;
+  background: var(--sheet);
+}
+
+.srow.done .pin {
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 0;
+  background: #4a5462;
+}
+
+.srow.now .pin {
+  width: 0.8125rem;
+  height: 0.8125rem;
+  border: 0;
+  background: var(--now);
+  box-shadow: 0 0 0 0.25rem rgba(240, 180, 41, 0.22);
+}
+
+.srow .sname {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--soft);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.srow.done .sname,
+.srow.done .stime {
+  color: var(--faint);
+  font-weight: 400;
+}
+
+.srow.now .sname {
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 800;
+}
+
+.srow .stime {
+  color: var(--dim);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.srow.now .stime {
+  color: var(--now);
+  font-weight: 800;
+}
+
+.srow .exp {
+  font-size: 0.8125rem;
+  font-weight: 800;
+}
+
+.srow .tag {
+  padding: 0 0.375rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 0.25rem;
+  color: var(--dim);
+  font-size: 0.625rem;
+  font-weight: 600;
+}
+
+.more {
+  margin: 0.125rem 0 0;
+  padding-left: 2.25rem;
+  color: var(--faint);
+  font-size: 0.75rem;
+}
+
+/* what comes after this trip: Omsi-Hub's advice, warm on amber */
+.advice {
+  margin-top: 0.5rem;
+  padding: 0.4375rem 0.625rem;
+  border-left: 0.1875rem solid var(--now);
+  border-radius: 0.375rem;
+  background: rgba(240, 180, 41, 0.13);
+}
+
+.advice .aline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.advice .aline .grow {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.advice small {
+  display: block;
+  color: #f5e6c8;
+  font-size: 0.75rem;
+}
+
+.done-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+  color: var(--ontime-ink);
+  font-weight: 700;
+}
+
+/* ---------- the duty sheet (the game's city map column) ---------- */
+
+.sheet-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.875rem 0 0.25rem;
+}
+
+.sh-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.sh-title small {
+  color: var(--dim);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.tiles.three {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.tiles div {
+  min-width: 0;
+  padding: 0.5rem 0.625rem;
+  border-radius: 0.5rem;
+  background: rgba(27, 34, 49, 0.8);
+}
+
+.tiles b {
+  display: block;
+  overflow: hidden;
+  font-size: 1.0625rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tiles span {
+  display: block;
+  color: var(--dim);
+  font-size: 0.59375rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+}
+
+.trow {
+  display: grid;
+  grid-template-columns: 2.875rem auto 1fr auto;
+  align-items: center;
+  gap: 0.625rem;
+  min-height: 2.75rem;
+  padding: 0.25rem 0.5rem 0.25rem 0.375rem;
+  border-radius: 0.5rem;
+}
+
+.trow.now {
+  background: rgba(var(--route-rgb), 0.16);
+  box-shadow: inset 0.1875rem 0 0 var(--route);
+}
+
+.trow.done {
+  color: var(--faint);
+}
+
+.trow.done .plate {
+  opacity: 0.5;
+}
+
+.trow .ttime {
+  font-weight: 800;
+}
+
+.trow .tarr {
+  color: var(--dim);
+  font-size: 0.8125rem;
+}
+
+.sheet .srow {
+  padding-left: 0.5rem;
+}
+
+.sheet .srow::before,
+.sheet .srow::after {
+  left: calc(1.375rem - 1.5px);
+}
+
+.pause-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0.25rem 0 0.25rem 3.5rem;
+  color: var(--faint);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.pause-row .icon {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.foot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+/* ---------- the IBIS: what the driver types ---------- */
+
+.ibis-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding: 0.875rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background: var(--deep);
+}
+
+.ibis-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.ibis-head > b {
+  font-size: 0.8125rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+}
+
+.pill-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-align: right;
+}
+
+.pill-state .icon {
+  width: 0.875rem;
+  height: 0.875rem;
+  stroke-width: 2.8;
+}
+
+.pill-state.typed {
+  background: rgba(55, 214, 122, 0.14);
+  color: var(--ontime-ink);
+}
+
+.pill-state.typing {
+  background: rgba(77, 163, 255, 0.16);
+  color: var(--early-ink);
+  animation: breathe 1.4s ease-in-out infinite;
+}
+
+.pill-state.waiting {
+  background: rgba(240, 180, 41, 0.14);
+  color: var(--now);
+}
+
+@keyframes breathe {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.codes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+
+.code {
+  min-width: 0;
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 0.0625rem;
+  padding: 0.5rem 0.625rem 0.625rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.625rem;
+  background: #0f141e;
+}
+
+.code small {
+  color: var(--dim);
+  font-size: 0.625rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.code b {
+  overflow: hidden;
+  color: #ffe08a;
+  font-family: ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;
+  /* (five digits fit the tile however narrow the column is) */
+  font-size: min(1.625rem, 30cqi);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code b .dim {
+  opacity: 0.45;
+}
+
+.code.soft b {
+  color: var(--soft);
+  opacity: 0.6;
+}
+
+.code > span {
+  color: var(--faint);
+  font-size: 0.6875rem;
+  line-height: 1.25;
+}
+
+.ibis-card.big .code b {
+  font-size: min(2.5rem, 30cqi);
+}
+
+.ibis-to {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.ibis-to span {
+  color: var(--dim);
+}
+
+.ibis-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  color: var(--dim);
+  font-size: 0.8125rem;
+}
+
+.ibis-facts b {
+  color: var(--ink);
+}
+
+/* ---------- the break: a ring that fills as the break goes on ---------- */
+
+.ring {
+  --part: 0;
+  --arc: rgba(255, 255, 255, 0.22);
+  position: relative;
+  flex: 0 0 auto;
+  width: 10.5rem;
+  height: 10.5rem;
+  margin: 0.375rem auto;
+  border-radius: 50%;
+  background: conic-gradient(var(--arc) calc(var(--part) * 1turn), rgba(255, 255, 255, 0.06) 0);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.ring::before {
+  content: '';
+  position: absolute;
+  inset: 0.625rem;
+  border-radius: 50%;
+  background: var(--ground);
+}
+
+.side .ring::before {
+  background: var(--sheet);
+}
+
+.ring.ontime {
+  --arc: var(--ontime-ink);
+}
+
+.ring.late {
+  --arc: var(--late);
+}
+
+.ring b,
+.ring span {
+  position: relative;
+}
+
+.ring b {
+  font-size: 2.875rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.ring span {
+  color: var(--dim);
+}
+
+.label {
+  margin: 0;
+  text-align: center;
+  color: var(--dim);
+}
+
+/* ---------- this device ---------- */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.setting.col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.375rem;
+}
+
+.setting > span {
+  color: var(--soft);
+  font-weight: 600;
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.stepper button {
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-small);
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.stepper button:disabled {
+  opacity: 0.4;
+}
+
+.stepper b {
+  min-width: 3.5rem;
+  text-align: center;
+}
+
+.segbtns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 0.375rem;
+}
+
+.segbtns button {
+  min-height: 2.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-small);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--soft);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.segbtns button[aria-pressed='true'] {
+  border-color: var(--route);
+  background: rgba(var(--route-rgb), 0.18);
+  color: var(--ink);
+}
+
+.segbtns .sign {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.qr-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: center;
+}
+
+.qr {
+  width: min(15rem, 70vw);
+  height: auto;
+  border-radius: 0.75rem;
+}
+
+.qr-url {
+  margin: 0;
+  font-family: ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.9375rem;
+  font-weight: 700;
+}
+
+.qr-box .pcode {
+  color: var(--ink);
+  font-size: 1.125rem;
+  letter-spacing: 0.18em;
+}
+
+/* ---------- the report at the end of a trip ---------- */
+
+#modal {
+  position: fixed;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.modal-card {
+  width: min(26rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.25rem;
+  border: 1px solid var(--edge);
+  border-radius: 1.125rem;
+  background: var(--sheet);
+  box-shadow: 0 1.5rem 3rem rgba(0, 0, 0, 0.5);
+  animation: rise 0.22s ease-out;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(0.75rem);
+  }
+}
+
+.modal-card .bhead {
+  padding-top: 0;
+}
+
+.big-offset {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.big-offset b {
+  font-size: 2.25rem;
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.big-offset span {
+  color: var(--dim);
+  font-size: 0.875rem;
+}
+
+.split {
+  display: flex;
+  height: 0.5rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.split i.ontime {
+  background: var(--ontime-ink);
+}
+
+.split i.early {
+  background: var(--early-ink);
+}
+
+.split i.late {
+  background: var(--late-ink);
+}
+
+/* ---------- a screen of the bus, full size ---------- */
+
+#screen {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  background: #05070c;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+#screen .bar {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  height: 3rem;
+  padding: 0 0.625rem;
+  flex: 0 0 auto;
+}
+
+#screen .bar b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#screen .bar button {
+  height: 2.375rem;
+  padding: 0 0.875rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-small);
+  background: transparent;
+  cursor: pointer;
+}
+
+#screen .bar .hint {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#screen .stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* a device's picture (an IBIS, an ALMEX): the whole screen, black beside it, and only a small
+   back button over the corner */
+#screen.full {
+  background: #000;
+}
+
+#screen.full .pane.full {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* turned a quarter: a wide device across a phone held upright */
+#screen.full .pane.full.turned {
+  transform: rotate(90deg);
+}
+
+#screen .back {
+  position: absolute;
+  top: calc(env(safe-area-inset-top) + 0.5rem);
+  left: calc(env(safe-area-inset-left) + 0.5rem);
+  z-index: 1;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0 0 0.125rem;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 1.75rem;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+#screen .back:active {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+/* a device drawn by the page: its canvas, and over it (letting the finger through) the faint
+   shade of a touch field held down; nothing else over the device but the small back button */
+.pane.form {
+  background: #000;
+}
+
+.pane .formfx {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+#screen.full .back {
+  width: 2.25rem;
+  height: 2.25rem;
+  font-size: 1.5rem;
+  opacity: 0.6;
+}
+
+#screen.full .back:active {
+  opacity: 1;
+}
+
+/* the display and the device's picture, placed by app.js (layoutScreen) */
+.pane {
+  position: absolute;
+  margin: 0;
+  border-radius: 0.625rem;
+  background: #000;
+  box-shadow: 0 0 0 1px var(--edge);
+  overflow: hidden;
+}
+
+.pane .pic {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  visibility: hidden;
+  touch-action: none;
+  cursor: pointer;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+.pane .pic.on {
+  visibility: visible;
+}
+
+/* a small display's pixels, enlarged: square and sharp, as an LCD's */
+.pane .pic.pixel {
+  image-rendering: pixelated;
+}
+
+/* where a finger went on the device's picture, and the key under it, at once */
+.touchdot {
+  position: absolute;
+  width: 2.75rem;
+  height: 2.75rem;
+  margin: -1.375rem 0 0 -1.375rem;
+  border: 2px solid var(--route);
+  border-radius: 50%;
+  background: rgba(var(--route-rgb), 0.3);
+  pointer-events: none;
+  animation: touchdot 0.45s ease-out forwards;
+}
+
+@keyframes touchdot {
+  from {
+    transform: scale(0.5);
+    opacity: 1;
+  }
+  to {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+}
+
+.spot {
+  position: absolute;
+  border: 2px solid var(--route);
+  border-radius: 0.375rem;
+  background: rgba(var(--route-rgb), 0.28);
+  pointer-events: none;
+  animation: spot 0.4s ease-out forwards;
+}
+
+@keyframes spot {
+  to {
+    opacity: 0;
+  }
+}
+
+.waiting {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
+  margin: 0;
+  color: var(--dim);
+  text-align: center;
+}
+
+/* the pairing QR code and code, covered while streaming */
+.covered {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: min(15rem, 70vw);
+  aspect-ratio: 1;
+  border: 1px dashed var(--edge);
+  border-radius: 0.75rem;
+  background: repeating-linear-gradient(135deg, var(--field) 0 0.625rem, var(--sheet) 0.625rem 1.25rem);
+  color: var(--dim);
+}
+
+.covered .icon {
+  width: 2rem;
+  height: 2rem;
+}
+
+/* the connection lost: a pill at the top, so it is plain the picture stands still */
+#pill {
+  position: fixed;
+  z-index: 6;
+  left: 50%;
+  top: calc(env(safe-area-inset-top) + 0.625rem);
+  translate: -50% 0;
+  max-width: calc(100% - 2rem);
+  padding: 0.4375rem 0.875rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(20, 26, 38, 0.96);
+  box-shadow: 0 0.5rem 1.25rem rgba(0, 0, 0, 0.35);
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pill-state.typing,
+  .modal-card {
+    animation: none;
+  }
+}
+
+/* ---------- the company (the launcher's bus company, from afar) ---------- */
+
+.co-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.co-head h2 {
+  margin: 0;
+}
+
+.co-head small {
+  color: var(--dim);
+  font-size: 0.8125rem;
+}
+
+.co-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: var(--radius-small);
+  color: #fff;
+  font-size: 0.9375rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+
+.co-note {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-small);
+  background: rgba(55, 214, 122, 0.1);
+  color: var(--ontime-ink);
+  font-size: 0.875rem;
+}
+
+.co-note.bad {
+  background: rgba(235, 170, 60, 0.12);
+  color: var(--warn);
+}
+
+.co-good {
+  color: var(--ontime-ink);
+}
+
+.co-bad {
+  color: var(--late-ink);
+}
+
+.co-warn {
+  color: var(--warn);
+}
+
+.co-card h2 {
+  margin: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.co-alerts p {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--warn);
+  font-size: 0.875rem;
+}
+
+.co-alerts .icon {
+  flex: none;
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.co-big {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 800;
+}
+
+.co-list,
+.co-rows {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.co-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4375rem 0;
+  border-top: 1px solid var(--hair);
+  font-size: 0.875rem;
+}
+
+.co-list li > span:not(.plate) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.co-list em,
+.co-rows em {
+  font-style: normal;
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.co-rows li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--hair);
+}
+
+.co-rows li > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.co-rows b {
+  overflow: hidden;
+  font-size: 0.9375rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.co-rows small {
+  color: var(--dim);
+  font-size: 0.75rem;
+}
+
+.action.co-small {
+  flex: none;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+}
+
+.co-bars {
+  display: grid;
+  grid-auto-columns: 1fr;
+  grid-auto-flow: column;
+  gap: 0.375rem;
+}
+
+.co-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.co-pair {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0.1875rem;
+  width: 100%;
+  height: 5rem;
+}
+
+.co-pair i,
+.co-legend i {
+  display: block;
+  width: 0.625rem;
+  border-radius: 0.1875rem 0.1875rem 0 0;
+}
+
+.co-pair i.in,
+.co-legend i.in {
+  background: var(--ontime-ink);
+}
+
+.co-pair i.out,
+.co-legend i.out {
+  background: var(--faint);
+}
+
+.co-bar b {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 0.6875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.co-bar span {
+  color: var(--dim);
+  font-size: 0.6875rem;
+}
+
+.co-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  color: var(--dim);
+  font-size: 0.75rem;
+}
+
+.co-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+}
+
+.co-legend i {
+  height: 0.625rem;
+  border-radius: 0.1875rem;
+}

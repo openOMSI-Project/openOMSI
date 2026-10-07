@@ -332,6 +332,11 @@ pub(crate) struct App {
     pub(crate) career: career::Career,
     /// The duty's stops with their times as driven, kept in a file (`journey`).
     pub(crate) journey: Option<crate::journey::Journey>,
+    /// The report of each trip of the duty as it ends: its card and the driver's record.
+    pub(crate) trip_report: crate::trip_report::TripReport,
+    /// Red lights, speed cameras and the passengers' comfort, said on the screen and taken
+    /// into each trip's report.
+    pub(crate) drive_watch: crate::drive_watch::DriveWatch,
     /// How wet the roads are (0..1), built up by rain and dried by the sun.
     pub(crate) wetness: f32,
     /// How far the cloud cover has drifted with the wind (fractions of its tiling), summed
@@ -711,6 +716,9 @@ impl App {
                         trip: None,
                         autostart: false,
                         situation_next_stop: None,
+                        // (the bus options are the player's bus's, as is its display font)
+                        setvar: None,
+                        display_font: None,
                         ..self.args.clone()
                     };
                     match spawn_player(&one, &w, &renderer, &mut scene) {
@@ -733,7 +741,11 @@ impl App {
                 if let Some(n) = self.navigator.as_mut() {
                     n.arrows = self.settings.nav_arrows;
                     n.show_ai = self.settings.nav_ai;
+                    n.size = self.settings.nav_scale;
+                    n.board = self.settings.nav_board;
+                    n.set_rect(&self.settings.nav_rect);
                 }
+                crate::stop_signs::set_style(crate::stop_signs::Style::from_setting(&self.settings.stop_style));
                 if let Some(d) = self.args.driver.as_deref() {
                     self.career = career::Career::load(&self.args.root, d);
                 }
@@ -795,14 +807,12 @@ impl App {
                             self.traffic.as_mut(),
                             parse_time(&self.args.time),
                         );
-                        if let (Some(line), Some(p)) = (&self.args.line, self.player.as_mut()) {
-                            self.duty = match sch.player_duty(
+                        if let (Some(_), Some(p)) = (&self.args.line, self.player.as_mut()) {
+                            self.duty = match crate::duty_start::player_duty(
+                                &mut sch,
                                 &w,
-                                line,
-                                self.args.tour.as_deref().unwrap_or(""),
+                                &self.args,
                                 parse_time(&self.args.time),
-                                self.args.trip.as_deref(),
-                                self.args.whole_tour,
                             ) {
                                 Ok(mut d) => {
                                     if let Some(k) = self.args.duty_trip {

@@ -37,11 +37,9 @@ pub struct TimetableView {
     dirty: std::collections::BTreeSet<String>,
     /// The reset button was pressed once: the next press puts the map's own timetable back.
     reset_armed: bool,
+    /// On a phone, which of the three columns is shown (0 the lines, 1 the tours, 2 the trips).
+    column: usize,
 }
-
-/// Marks a `TTData` folder the launcher copied into the content folder (see `save_target`):
-/// the reset deletes such a copy, and only such a one.
-const COPY_MARK: &str = ".openomsi-ttdata-copy";
 
 /// "h:mm" (or "h:mm:ss") from minutes after midnight.
 pub fn fmt_time(min: f32) -> String {
@@ -65,61 +63,30 @@ pub fn parse_time(t: &str) -> Option<f32> {
     (h < 48 && m < 60 && s < 60).then(|| h as f32 * 60.0 + m as f32 + s as f32 / 60.0)
 }
 
-/// Where a map's line is written: in place when the map lies unpacked in the content folder
-/// (its file backed up as `<file>.orig` the first time, for the reset), else in the content
-/// folder's copy of its `TTData` (made whole first - the game reads the one folder, not a mix
-/// of both). A map inside a mod archive (`.zip`) counts as not in the content folder: its
-/// file was "saved in place" into the archive's path, which is no folder, and never saved.
+/// Where a map's line is written (see `core::ttstore::save_target`): in place when the map
+/// lies unpacked in the content folder, else in the content folder's copy of its `TTData`
+/// (made whole first - the game reads the one folder, not a mix of both). A map inside a mod
+/// archive (`.zip`) counts as not in the content folder.
 fn save_target(line: &Line, map_folder: &str, original_ttdata: &Path) -> Result<PathBuf, String> {
     let content = core::content_dir().ok_or("no content folder")?;
-    let file = line.path.file_name().map(|f| f.to_owned()).unwrap_or_else(|| format!("{}.ttl", line.name).into());
-    if line.path.starts_with(&content) && omsi_cfg::vfs::archive_of(&line.path).is_none() {
-        let orig = PathBuf::from(format!("{}.orig", line.path.display()));
-        let copied = line.path.parent().is_some_and(|d| d.join(COPY_MARK).is_file());
-        if !copied && line.path.is_file() && !orig.exists() {
-            std::fs::copy(&line.path, &orig).map_err(|e| e.to_string())?;
-        }
-        return Ok(line.path.clone());
-    }
-    let dir = content.join("maps").join(map_folder).join("TTData");
-    if !dir.is_dir() {
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        for (name, is_dir) in omsi_cfg::vfs::list_dir(original_ttdata).ok_or_else(|| format!("{} cannot be read", original_ttdata.display()))? {
-            if !is_dir {
-                let bytes = omsi_cfg::vfs::read(&original_ttdata.join(&name)).map_err(|e| e.to_string())?;
-                std::fs::write(dir.join(&name), bytes).map_err(|e| e.to_string())?;
-            }
-        }
-        std::fs::write(dir.join(COPY_MARK), b"TTData copied by the openOMSI launcher's timetable editor; its reset deletes this folder\n").map_err(|e| e.to_string())?;
-    }
-    Ok(dir.join(file))
+    let file = line.path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| format!("{}.ttl", line.name));
+    core::ttstore::save_target(&content, &line.path, &file, map_folder, original_ttdata)
 }
 
-/// The map's own timetable back: the launcher's copy of its `TTData` deleted, or (a map
-/// unpacked in the content folder) every line saved over put back from its `.orig`.
-/// Returns what was done.
+/// The map's own timetable back (see `core::ttstore::reset_timetable`) - with the player's
+/// own lines of the line editor written into it again from their registry: a reset takes
+/// back what was changed of the map's lines, not the lines the player made.
 fn reset_timetable(map_dir: &Path, map_folder: &str) -> Result<String, String> {
     let content = core::content_dir().ok_or("no content folder")?;
-    let copy = content.join("maps").join(map_folder).join("TTData");
-    if copy.join(COPY_MARK).is_file() {
-        std::fs::remove_dir_all(&copy).map_err(|e| e.to_string())?;
-        return Ok(format!("The timetable of {map_folder} is the map's own again (the edited copy was removed)"));
+    let done = core::ttstore::reset_timetable(&content, map_dir, map_folder)?;
+    let reg = core::lines::load_registry(&core::lines::registry_path(map_folder));
+    if reg.lines.is_empty() {
+        return Ok(done);
     }
-    let own = map_dir.join("TTData");
-    let mut restored = 0;
-    if own.is_dir() {
-        for e in std::fs::read_dir(&own).map_err(|e| e.to_string())?.flatten() {
-            let p = e.path();
-            if let Some(orig) = p.to_str().and_then(|s| s.strip_suffix(".orig")) {
-                std::fs::rename(&p, orig).map_err(|e| e.to_string())?;
-                restored += 1;
-            }
-        }
-    }
-    if restored > 0 {
-        Ok(format!("{restored} line(s) of {map_folder} put back as they were"))
-    } else {
-        Err(format!("The timetable of {map_folder} has not been changed here"))
+    match core::lines::export_to_map(&content, map_dir, &reg) {
+        Ok((n, _)) if n > 0 => Ok(format!("{done}; {}", omsi_ui::tr("your %{n} own line(s) written again").replace("%{n}", &n.to_string()))),
+        Ok(_) => Ok(done),
+        Err(e) => Ok(format!("{done}; {}", omsi_ui::tr("your own lines could not be written again: %{error}").replace("%{error}", &e.to_string()))),
     }
 }
 
@@ -141,7 +108,7 @@ fn save_all(tv: &mut TimetableView) -> (usize, Option<String>) {
                 saved += 1;
             }
             Err(e) => {
-                err.get_or_insert(format!("line {}: {e}", line.name));
+                err.get_or_insert(format!("{}: {e}", omsi_ui::tr("line %{line}").replace("%{line}", &line.name)));
             }
         }
     }
@@ -179,7 +146,7 @@ fn next_number(tours: &[Tour]) -> String {
 }
 
 pub fn draw(l: &mut Launcher, area: Rect) {
-    let body = l.page_title(area, "Timetable", "A map's lines: their tours and when each trip leaves. Saved as the line's .ttl (in the content folder; OMSI 2's own files stay as they are).");
+    let body = area;
     let maps: Vec<(String, String)> = l.state.maps.iter().map(|m| (m.friendly.clone(), m.file.clone())).collect();
     if maps.is_empty() {
         l.ui.paragraph("No maps found.", glam::Vec2::new(body.x, body.y), body.w, 14.0, Weight::Regular, TEXT_DIM);
@@ -214,16 +181,31 @@ pub fn draw(l: &mut Launcher, area: Rect) {
     if tv.until.is_empty() {
         tv.until = "22:00".into();
     }
-    let col1 = (body.w * 0.24).min(300.0);
-    let col2 = (body.w * 0.22).min(260.0);
-    let left = Rect::new(body.x, body.y, col1, body.h);
-    let mid = Rect::new(left.right() + GAP * 2.0, body.y, col2, body.h);
-    let right = Rect::new(mid.right() + GAP * 2.0, body.y, body.right() - mid.right() - GAP * 2.0, body.h);
+    // (a phone: one column at a time, the chips over it choosing which - three side by side
+    // left each a few letters wide; the ones not shown are laid off the screen)
+    let narrow = body.w < 640.0;
+    let (left, mid, right) = if narrow {
+        let mut col = tv.column;
+        if l.ui.chips("tt-column", Rect::new(body.x, body.y, body.w, 34.0), &mut col, &["Lines", "Tours", "Trips"]) {
+            tv.column = col;
+        }
+        let r = Rect::new(body.x, body.y + 48.0, body.w, (body.h - 48.0).max(0.0));
+        let away = Rect::new(-20000.0, r.y, r.w, r.h);
+        let pick = |k: usize| if tv.column == k { r } else { away };
+        (pick(0), pick(1), pick(2))
+    } else {
+        let col1 = (body.w * 0.24).min(300.0);
+        let col2 = (body.w * 0.22).min(260.0);
+        let left = Rect::new(body.x, body.y, col1, body.h);
+        let mid = Rect::new(left.right() + GAP * 2.0, body.y, col2, body.h);
+        (left, mid, Rect::new(mid.right() + GAP * 2.0, body.y, body.right() - mid.right() - GAP * 2.0, body.h))
+    };
     let mut status: Option<(String, bool)> = None;
+    let mut reload = false;
 
     // --- the map and its lines
     let ui: &mut Ui = &mut l.ui;
-    ui.panel(left);
+    ui.card(left);
     let inner = ui.heading(Rect::new(left.x + 18.0, left.y + 14.0, left.w - 36.0, left.h - 28.0), "Lines", Some("route"));
     let names: Vec<String> = maps.iter().map(|m| m.0.clone()).collect();
     let mut m = tv.map;
@@ -232,8 +214,8 @@ pub fn draw(l: &mut Launcher, area: Rect) {
         if !tv.dirty.is_empty() {
             let (saved, err) = save_all(tv);
             match err {
-                Some(e) => l.state.set_status(format!("Not saved: {e}"), true),
-                None => l.state.set_status(format!("{saved} line(s) saved"), false),
+                Some(e) => l.state.set_status(omsi_ui::tr("Not saved: %{error}").replace("%{error}", &e), true),
+                None => l.state.set_status(omsi_ui::tr("%{n} line(s) saved").replace("%{n}", &saved.to_string()), false),
             }
         }
         tv.map = m;
@@ -256,6 +238,7 @@ pub fn draw(l: &mut Launcher, area: Rect) {
                     // read again from where the game reads it
                     tv.loaded = None;
                     l.state.set_status(m, false);
+                    l.state.load_lines();
                     return;
                 }
                 Err(e) => status = Some((e, true)),
@@ -271,7 +254,7 @@ pub fn draw(l: &mut Launcher, area: Rect) {
         if name.is_empty() || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
             status = Some(("Type the new line's name (it becomes the file name, so no / \\ : * ? \" < > |)".into(), true));
         } else if data.lines.iter().any(|x| x.name.eq_ignore_ascii_case(&name)) {
-            status = Some((format!("Line {name} is there already"), true));
+            status = Some((omsi_ui::tr("Line %{line} is there already").replace("%{line}", &name), true));
         } else {
             let path = omsi_cfg::resolve_path(&tv.map_dir, "TTData").join(format!("{name}.ttl"));
             data.lines.push(Line { path, name: name.clone(), user_allowed: true, priority: 0, tours: Vec::new() });
@@ -281,7 +264,7 @@ pub fn draw(l: &mut Launcher, area: Rect) {
             tv.times_for = None;
             tv.dirty.insert(name.clone());
             tv.new_line.clear();
-            status = Some((format!("Line {name} added: give it tours, then save"), false));
+            status = Some((omsi_ui::tr("Line %{line} added: give it tours, then save").replace("%{line}", &name), false));
         }
     }
     let mut pick_line = None;
@@ -294,8 +277,12 @@ pub fn draw(l: &mut Launcher, area: Rect) {
                 pick_line = Some(i);
             }
             let star = if dirty.contains(name) { " •" } else { "" };
-            ui.text_in(&format!("{name}{star}"), Rect::new(r.x + 12.0, r.y, r.w - 90.0, r.h), 13.0, Weight::Medium, TEXT, Align::Left);
-            ui.text_in(&format!("{tours} tours"), Rect::new(r.right() - 90.0, r.y, 80.0, r.h), 11.5, Weight::Regular, TEXT_DIM, Align::Right);
+            let w = ui.text_in(&format!("{name}{star}"), Rect::new(r.x + 12.0, r.y, r.w - 90.0, r.h), 13.0, Weight::Medium, TEXT, Align::Left);
+            // (a line the player made in the line editor, among the map's)
+            if core::lines::is_own_file(name) && w < r.w - 150.0 {
+                super::ownlines::badge(ui, glam::Vec2::new(r.x + 18.0 + w, r.center().y - 8.0));
+            }
+            ui.text_in(&if *tours == 1 { omsi_ui::tr("one tour").into_owned() } else { omsi_ui::tr("%{n} tours").replace("%{n}", &tours.to_string()) }, Rect::new(r.right() - 90.0, r.y, 80.0, r.h), 11.5, Weight::Regular, TEXT_DIM, Align::Right);
         }
         lines.len() as f32 * 42.0
     });
@@ -308,6 +295,7 @@ pub fn draw(l: &mut Launcher, area: Rect) {
         tv.line = i;
         tv.tour = 0;
         tv.times_for = None;
+        tv.column = 1;
     }
     tv.line = tv.line.min(data.lines.len() - 1);
     let line_name = data.lines[tv.line].name.clone();
@@ -330,8 +318,8 @@ pub fn draw(l: &mut Launcher, area: Rect) {
     let line = &mut data.lines[tv.line];
 
     // --- its tours
-    ui.panel(mid);
-    let inner = ui.heading(Rect::new(mid.x + 18.0, mid.y + 14.0, mid.w - 36.0, mid.h - 28.0), &format!("Line {line_name}"), Some("directions_bus"));
+    ui.card(mid);
+    let inner = ui.heading(Rect::new(mid.x + 18.0, mid.y + 14.0, mid.w - 36.0, mid.h - 28.0), &omsi_ui::tr("Line %{line}").replace("%{line}", &line_name), Some("directions_bus"));
     let mut pick_tour = None;
     let tours: Vec<(String, String, usize)> = line.tours.iter().map(|t| (t.number.clone(), t.trips.first().map(|x| fmt_time(x.departure)).unwrap_or_default(), t.trips.len())).collect();
     let sel_tour = tv.tour;
@@ -342,13 +330,14 @@ pub fn draw(l: &mut Launcher, area: Rect) {
             if ui.row(&format!("tt-tour-{i}"), r, i == sel_tour) {
                 pick_tour = Some(i);
             }
-            ui.text_in(&format!("Tour {num}"), Rect::new(r.x + 12.0, r.y, r.w - 100.0, r.h), 13.0, Weight::Medium, TEXT, Align::Left);
+            ui.text_in(&omsi_ui::tr("Tour %{tour}").replace("%{tour}", num), Rect::new(r.x + 12.0, r.y, r.w - 100.0, r.h), 13.0, Weight::Medium, TEXT, Align::Left);
             ui.text_in(&format!("{first} · {n}"), Rect::new(r.right() - 100.0, r.y, 90.0, r.h), 11.5, Weight::Regular, TEXT_DIM, Align::Right);
         }
         tours.len() as f32 * 42.0
     });
     if let Some(i) = pick_tour {
         tv.tour = i;
+        tv.column = 2;
     }
     let mut y = inner.y + list_h + 8.0;
     let half = (inner.w - GAP) * 0.5;
@@ -389,7 +378,7 @@ pub fn draw(l: &mut Launcher, area: Rect) {
                     tv.tour = line.tours.len() - 1;
                     tv.dirty.insert(line_name.clone());
                 }
-                status = Some((format!("{made} tour(s) made, every {every} min up to {}", fmt_time(until)), false));
+                status = Some((omsi_ui::tr("%{n} tour(s) made, every %{every} min up to %{time}").replace("%{n}", &made.to_string()).replace("%{every}", &every.to_string()).replace("%{time}", &fmt_time(until)), false));
             }
             (None, _, _) => status = Some(("Type the minutes between the tours (1 or more) in the field above".into(), true)),
             (_, None, _) => status = Some(("Type the last departure as h:mm".into(), true)),
@@ -405,14 +394,14 @@ pub fn draw(l: &mut Launcher, area: Rect) {
     tv.tour = tv.tour.min(line.tours.len().saturating_sub(1));
 
     // --- the tour's trips
-    ui.panel(right);
+    ui.card(right);
     let Some(tour) = line.tours.get_mut(tv.tour) else {
         if let Some(s) = status {
             l.state.set_status(s.0, s.1);
         }
         return;
     };
-    let inner = ui.heading(Rect::new(right.x + 18.0, right.y + 14.0, right.w - 36.0, right.h - 28.0), &format!("Tour {} - {}", tour.number, tour.ai_group), Some("schedule"));
+    let inner = ui.heading(Rect::new(right.x + 18.0, right.y + 14.0, right.w - 36.0, right.h - 28.0), &format!("{} - {}", omsi_ui::tr("Tour %{tour}").replace("%{tour}", &tour.number), tour.ai_group), Some("schedule"));
     if tv.times_for != Some((tv.line, tv.tour)) || tv.times.len() != tour.trips.len() {
         tv.times = tour.trips.iter().map(|t| fmt_time(t.departure)).collect();
         tv.times_for = Some((tv.line, tv.tour));
@@ -422,32 +411,47 @@ pub fn draw(l: &mut Launcher, area: Rect) {
     let dest_w = 170.0;
     let trip_w = (inner.w - tw - pw - dest_w - 40.0 - 4.0 * GAP).max(120.0);
     let head = |ui: &mut Ui, x: f32, w: f32, t: &str| ui.text_in(t, Rect::new(x, inner.y, w, 18.0), 11.5, Weight::Bold, TEXT_DIM, Align::Left);
-    head(ui, inner.x, tw, "Departs");
-    head(ui, inner.x + tw + GAP, trip_w, "Trip");
-    head(ui, inner.x + tw + trip_w + 2.0 * GAP, pw, "Profile");
-    head(ui, inner.x + tw + trip_w + pw + 3.0 * GAP, dest_w, "To");
+    // (a phone: a trip in two lines - when and which, then its profile and where it goes - and
+    // the buttons in two rows)
+    let (dep_w, rh) = if narrow { (84.0, 2.0 * ROW + 16.0) } else { (tw, ROW + 6.0) };
+    head(ui, inner.x, dep_w, "Departs");
+    head(ui, inner.x + dep_w + GAP, trip_w, "Trip");
+    if !narrow {
+        head(ui, inner.x + tw + trip_w + 2.0 * GAP, pw, "Profile");
+        head(ui, inner.x + tw + trip_w + pw + 3.0 * GAP, dest_w, "To");
+    }
     let mut remove = None;
     let mut changed = false;
-    let rows = Rect::new(inner.x - 6.0, inner.y + 24.0, inner.w + 12.0, inner.h - 24.0 - ROW - 14.0);
+    let foot = if narrow { 2.0 * ROW + 8.0 } else { ROW };
+    let rows = Rect::new(inner.x - 6.0, inner.y + 24.0, inner.w + 12.0, inner.h - 24.0 - foot - 14.0);
     let times = &mut tv.times;
     let key = format!("{line_name}-{}", tv.tour);
     ui.scroll_area(&format!("tt-trips-{key}"), rows, &mut |ui, v| {
-        let rh = ROW + 6.0;
         for (i, t) in tour.trips.iter_mut().enumerate() {
             let y = v.y + i as f32 * rh;
             let x = v.x + 6.0;
+            let w = v.w - 16.0;
+            let (dep, trip, prof, to) = if narrow {
+                let below = y + ROW + 6.0;
+                (Rect::new(x, y, dep_w, ROW), Rect::new(x + dep_w + GAP, y, (w - dep_w - GAP - 30.0).max(60.0), ROW), Rect::new(x, below, w * 0.45, ROW), Rect::new(x + w * 0.45 + GAP, below, w * 0.55 - GAP, ROW))
+            } else {
+                (Rect::new(x, y, tw, ROW), Rect::new(x + tw + GAP, y, trip_w, ROW), Rect::new(x + tw + trip_w + 2.0 * GAP, y, pw, ROW), Rect::new(x + tw + trip_w + pw + 3.0 * GAP, y, dest_w, ROW))
+            };
+            if !ui.rect_visible(Rect::new(x, y, w, rh)) {
+                continue;
+            }
             let bad = parse_time(&times[i]).is_none();
-            if ui.text_input(&format!("tt-dep-{key}-{i}"), Rect::new(x, y, tw, ROW), &mut times[i], "h:mm", None) {
+            if ui.text_input(&format!("tt-dep-{key}-{i}"), dep, &mut times[i], "h:mm", None) {
                 if let Some(m) = parse_time(&times[i]) {
                     t.departure = m;
                     changed = true;
                 }
             }
             if bad {
-                ui.p().rounded_border(Rect::new(x, y, tw, ROW), 6.0, 1.5, DANGER);
+                ui.p().rounded_border(dep, 6.0, 1.5, DANGER);
             }
             let mut ti = trip_names.iter().position(|n| n.eq_ignore_ascii_case(&t.trip)).unwrap_or(0);
-            if ui.select(&format!("tt-trip-{key}-{i}"), Rect::new(x + tw + GAP, y, trip_w, ROW), &mut ti, &trip_names) {
+            if ui.select(&format!("tt-trip-{key}-{i}"), trip, &mut ti, &trip_names) {
                 t.trip = trip_names[ti].clone();
                 t.profile = 0;
                 changed = true;
@@ -455,11 +459,11 @@ pub fn draw(l: &mut Launcher, area: Rect) {
             let (_, profs, dest) = profiles.iter().find(|p| p.0.eq_ignore_ascii_case(&t.trip)).cloned().unwrap_or_default();
             let profs = if profs.is_empty() { vec![t.profile.to_string()] } else { profs };
             let mut pi = (t.profile.max(0) as usize).min(profs.len() - 1);
-            if ui.select(&format!("tt-prof-{key}-{i}"), Rect::new(x + tw + trip_w + 2.0 * GAP, y, pw, ROW), &mut pi, &profs) {
+            if ui.select(&format!("tt-prof-{key}-{i}"), prof, &mut pi, &profs) {
                 t.profile = pi as i32;
                 changed = true;
             }
-            ui.text_in(&dest, Rect::new(x + tw + trip_w + pw + 3.0 * GAP, y, dest_w, ROW), 12.5, Weight::Regular, TEXT_SOFT, Align::Left);
+            ui.text_in(&dest, to, 12.5, Weight::Regular, TEXT_SOFT, Align::Left);
             if ui.icon_button(&format!("tt-x-{key}-{i}"), glam::Vec2::new(v.right() - 26.0, y + ROW * 0.5), 14.0, "close", "Remove this trip") {
                 remove = Some(i);
             }
@@ -471,10 +475,10 @@ pub fn draw(l: &mut Launcher, area: Rect) {
         tv.times.remove(i);
         changed = true;
     }
-    // the buttons under the list
+    // the buttons under the list (a phone: adding and shifting over saving)
     let by = inner.bottom() - ROW;
-    let bw = 150.0;
-    if ui.button("tt-add-trip", Rect::new(inner.x, by, bw, ROW), "Add trip", Some("add"), ButtonKind::Normal) {
+    let (ay, bw, sw) = if narrow { (by - ROW - 8.0, inner.w * 0.5 - GAP, (inner.w * 0.5 - GAP) * 0.5) } else { (by, 150.0, 100.0) };
+    if ui.button("tt-add-trip", Rect::new(inner.x, ay, bw, ROW), "Add trip", Some("add"), ButtonKind::Normal) {
         // the next of the alternation (there and back), as far after as the last gap
         let n = tour.trips.len();
         let t = match n {
@@ -487,7 +491,7 @@ pub fn draw(l: &mut Launcher, area: Rect) {
         changed = true;
     }
     for (k, (label, d)) in [("−1 min", -1.0f32), ("+1 min", 1.0)].iter().enumerate() {
-        if ui.button(&format!("tt-shift-{k}"), Rect::new(inner.x + bw + GAP + k as f32 * (100.0 + GAP), by, 100.0, ROW), label, None, ButtonKind::Normal) {
+        if ui.button(&format!("tt-shift-{k}"), Rect::new(inner.x + bw + GAP + k as f32 * (sw + GAP), ay, sw, ROW), label, None, ButtonKind::Normal) {
             for t in &mut tour.trips {
                 t.departure += d;
             }
@@ -499,11 +503,11 @@ pub fn draw(l: &mut Launcher, area: Rect) {
         tv.dirty.insert(line_name.clone());
     }
     let n = tv.dirty.len();
-    let save_r = Rect::new(inner.right() - 170.0, by, 170.0, ROW);
+    let save_r = if narrow { Rect::new(inner.x, by, inner.w, ROW) } else { Rect::new(inner.right() - 170.0, by, 170.0, ROW) };
     let label = match n {
         0 => "Saved".to_string(),
         1 => "Save".to_string(),
-        n => format!("Save all ({n} lines)"),
+        n => omsi_ui::tr("Save all (%{n} lines)").replace("%{n}", &n.to_string()),
     };
     if ui.button("tt-save", save_r, &label, Some("save"), if n > 0 { ButtonKind::Primary } else { ButtonKind::Normal }) && n > 0 {
         if tv.times.iter().any(|t| parse_time(t).is_none()) {
@@ -511,14 +515,20 @@ pub fn draw(l: &mut Launcher, area: Rect) {
         } else {
             let (saved, err) = save_all(tv);
             tv.times_for = None;
+            reload = saved > 0;
             status = Some(match err {
-                Some(e) => (format!("Not saved: {e}"), true),
-                None => (format!("{saved} line(s) saved"), false),
+                Some(e) => (omsi_ui::tr("Not saved: %{error}").replace("%{error}", &e), true),
+                None => (omsi_ui::tr("%{n} line(s) saved").replace("%{n}", &saved.to_string()), false),
             });
         }
     }
     if let Some((s, err)) = status {
         l.state.set_status(s, err);
+    }
+    // (the Drive page's lists are read again: they showed the lines as they were until the
+    // map or the date changed)
+    if reload {
+        l.state.load_lines();
     }
 }
 

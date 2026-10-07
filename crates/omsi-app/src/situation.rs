@@ -4,12 +4,17 @@ use super::*;
 
 /// The depot file of a vehicle for this map: `--hof`, else the hof named by the map's
 /// `[aigroup_depot]`, else the first .hof next to the .bus file.
+///
+/// The files next to the bus are those of its folder, else - a bus in a folder of a pack
+/// without depot files of its own - the pack's (`omsi_vehicle::hof::depot_dir`), as the
+/// launcher's depot tiles show them: a depot file given to such a bus (the player's own, the
+/// map's) lies there and is the one `--hof` names.
 pub(crate) fn find_hof(
     args: &Args,
     world: &World,
     vt: &omsi_sim::VehicleType,
 ) -> Option<std::sync::Arc<omsi_vehicle::Hof>> {
-    let dir = vt.def.dir();
+    let dir = &omsi_vehicle::hof::depot_dir(vt.def.dir());
     let mut names: Vec<String> = Vec::new();
     if let Some(h) = &args.hof {
         names.push(h.clone());
@@ -48,7 +53,7 @@ pub(crate) fn find_hof(
         log::info!("using depot file {} (named like the map)", h.path.display());
         return Some(std::sync::Arc::new(h));
     }
-    let p = omsi_vehicle::hof::depot_files(dir).into_iter().next()?;
+    let p = omsi_vehicle::hof::depot_files(dir).into_iter().find(|p| !omsi_vehicle::hof::is_players(p))?;
     log::info!("using depot file {}", p.display());
     omsi_vehicle::Hof::load(&p).ok().map(std::sync::Arc::new)
 }
@@ -301,12 +306,14 @@ pub(crate) fn build_situation(
         my = 0;
         let mut rec = vehicle_record(&p.vehicle, true);
         // the duty: line, tour, the trip under way and its next stop (OMSI writes two more
-        // numbers whose meaning is not settled; they are left at 0 and not read back)
-        if let Some(d) = duty {
+        // numbers whose meaning is not settled; they are left at 0 and not read back). A free
+        // drive along a line has no tour to write: read back, it would come as the line's
+        // first tour, a duty - it goes on as a free drive instead.
+        if let Some(d) = duty.filter(|d| !d.free) {
             rec.timetable = vec![
                 d.line.clone(),
                 d.tour.clone(),
-                (d.first_trip + d.trip_index).to_string(),
+                d.tour_trip().to_string(),
                 d.next_stop.to_string(),
                 "0".into(),
                 "0".into(),

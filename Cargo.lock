@@ -3237,6 +3237,7 @@ dependencies = [
  "parking_lot",
  "pollster",
  "rayon",
+ "resvg",
  "rfd",
  "rust-i18n",
  "rustrict",
@@ -3309,6 +3310,7 @@ dependencies = [
 name = "omsi-content"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "log",
  "omsi-cfg",
 ]

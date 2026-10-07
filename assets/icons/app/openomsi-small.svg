@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<!-- openOMSI: the ring - a bus loop that opens into the route - round the front of a bus, the line running on out of the square. -->
+<defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1B2737"/><stop offset="1" stop-color="#0E151E"/></linearGradient><clipPath id="sc"><rect x="24" y="24" width="976" height="976" rx="200"/></clipPath></defs>
+<rect x="24" y="24" width="976" height="976" rx="200" fill="url(#sg)"/>
+<g clip-path="url(#sc)"><g transform="matrix(2.0115 0 0 2.0115 -159.8477 -51.2256)"><path d="M485.35 362.58 A167 167 0 1 0 334 459 L1334 459" fill="none" stroke="#1E86F7" stroke-width="64.4" stroke-linecap="round"/><path d="M272 212 H396 A26 26 0 0 1 422 238 V358 A10 10 0 0 1 412 368 H256 A10 10 0 0 1 246 358 V238 A26 26 0 0 1 272 212ZM258.5 358 H287.5 A0.5 0.5 0 0 1 288 358.5 V384 A8 8 0 0 1 280 392 H266 A8 8 0 0 1 258 384 V358.5 A0.5 0.5 0 0 1 258.5 358ZM380.5 358 H409.5 A0.5 0.5 0 0 1 410 358.5 V384 A8 8 0 0 1 402 392 H388 A8 8 0 0 1 380 384 V358.5 A0.5 0.5 0 0 1 380.5 358ZM272 234 A6 6 0 0 0 266 240 V298 A12 12 0 0 0 278 310 H390 A12 12 0 0 0 402 298 V240 A6 6 0 0 0 396 234 H272ZM293 339 A14 14 0 1 0 265 339 A14 14 0 1 0 293 339ZM403 339 A14 14 0 1 0 375 339 A14 14 0 1 0 403 339Z" fill="#EEF1F5"/></g></g>
+</svg>

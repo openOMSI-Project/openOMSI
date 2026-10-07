@@ -1,0 +1,24 @@
+_version: 2
+# The livery studio: the other side's picture put away, and every change kept at once in a
+# temporary file: the English text is the key, as in app.yml.
+"Hide the other side":
+  nl: "De andere kant verbergen"
+  de: "Die andere Seite ausblenden"
+  fr: "Masquer l'autre côté"
+  ru: "Скрыть другую сторону"
+  uk: "Сховати інший бік"
+  pl: "Ukryj drugą stronę"
+"Every change is kept at once in a temporary file: after a crash the studio opens with it":
+  nl: "Elke wijziging wordt meteen in een tijdelijk bestand bewaard: na een crash opent de studio daarmee"
+  de: "Jede Änderung wird sofort in einer temporären Datei gesichert: nach einem Absturz öffnet das Studio damit"
+  fr: "Chaque modification est gardée aussitôt dans un fichier temporaire : après un plantage, le studio s'ouvre avec"
+  ru: "Каждое изменение сразу сохраняется во временный файл: после сбоя студия откроется с ним"
+  uk: "Кожна зміна одразу зберігається в тимчасовий файл: після збою студія відкриється з ним"
+  pl: "Każda zmiana jest od razu zapisywana w pliku tymczasowym: po awarii studio otworzy się z nim"
+"Your last changes were brought back from the temporary file":
+  nl: "Je laatste wijzigingen zijn teruggezet uit het tijdelijke bestand"
+  de: "Deine letzten Änderungen wurden aus der temporären Datei wiederhergestellt"
+  fr: "Vos dernières modifications ont été restaurées depuis le fichier temporaire"
+  ru: "Последние изменения восстановлены из временного файла"
+  uk: "Останні зміни відновлено з тимчасового файлу"
+  pl: "Ostatnie zmiany przywrócono z pliku tymczasowego"

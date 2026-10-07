@@ -1,0 +1,39 @@
+_version: 2
+# The day's sheet and the time step (crate::launcher::daytime, drive): the computer's time
+# and date at a click. The English text is the key, as in app.yml.
+
+"Current time":
+  nl: "Huidige tijd"
+  de: "Aktuelle Uhrzeit"
+  fr: "Heure actuelle"
+  ru: "Текущее время"
+  uk: "Поточний час"
+  pl: "Bieżąca godzina"
+"Current date":
+  nl: "Huidige datum"
+  de: "Aktuelles Datum"
+  fr: "Date du jour"
+  ru: "Текущая дата"
+  uk: "Поточна дата"
+  pl: "Bieżąca data"
+"Bus ready before departure":
+  nl: "Bus klaar vóór vertrek"
+  de: "Bus bereit vor der Abfahrt"
+  fr: "Bus prêt avant le départ"
+  ru: "Автобус готов до отправления"
+  uk: "Автобус готовий до відправлення"
+  pl: "Autobus gotowy przed odjazdem"
+"at the departure":
+  nl: "op de vertrektijd"
+  de: "zur Abfahrtszeit"
+  fr: "à l'heure du départ"
+  ru: "ко времени отправления"
+  uk: "на час відправлення"
+  pl: "na czas odjazdu"
+"the game starts at %{time}":
+  nl: "het spel begint om %{time}"
+  de: "das Spiel beginnt um %{time}"
+  fr: "le jeu commence à %{time}"
+  ru: "игра начинается в %{time}"
+  uk: "гра починається о %{time}"
+  pl: "gra zaczyna się o %{time}"

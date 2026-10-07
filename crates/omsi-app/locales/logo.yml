@@ -1,0 +1,18 @@
+_version: 2
+# The company's mark (crate::launcher::company): its logo picture, chosen when it is founded
+# and changed in its settings. The English text is the key, as in app.yml.
+
+"Remove the picture":
+  nl: "Plaatje weghalen"
+  de: "Bild entfernen"
+  fr: "Retirer l'image"
+  ru: "Убрать изображение"
+  uk: "Прибрати зображення"
+  pl: "Usuń obraz"
+"The company's mark":
+  nl: "Het merkteken van het bedrijf"
+  de: "Das Zeichen des Unternehmens"
+  fr: "L'emblème de l'entreprise"
+  ru: "Знак компании"
+  uk: "Знак компанії"
+  pl: "Znak firmy"

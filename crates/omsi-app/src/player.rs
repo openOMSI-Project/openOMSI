@@ -220,6 +220,8 @@ pub(crate) struct Player {
     /// The IBIS typing looks for its keys on a worker thread (in the window: the trials
     /// would hold a frame up to a second and a half; an offscreen run waits for them).
     pub(crate) ibis_background: bool,
+    /// The game types the duty into the IBIS (the `ibis_auto` setting); off, the driver does.
+    pub(crate) ibis_auto: bool,
     /// The outside camera's arm (how far out it is swung right now).
     pub(crate) arm: camera_arm::SpringArm,
     /// What `Z`/`X`/`C` last turned on, so a repeat press of the same key turns it back off
@@ -1190,8 +1192,13 @@ impl Player {
     }
 
     /// Put the duty's trip on the IBIS, at the stop the bus is at: now, or when the running
-    /// auto-start is done.
+    /// auto-start is done. Not with the `ibis_auto` setting off: the driver types line, route
+    /// and destination, and the displays follow what is typed.
     pub(crate) fn set_duty_destination(&mut self, trip: &schedule::PlannedTrip, stop: usize) {
+        if !self.ibis_auto {
+            log::info!("IBIS: line {} to {} left for the driver to type (ibis_auto off)", trip.line.trim(), trip.terminus.trim());
+            return;
+        }
         self.duty_typed = true;
         let stops: Vec<String> = trip.stops.iter().map(|s| s.name.clone()).collect();
         let name = trip
@@ -1869,6 +1876,24 @@ impl Player {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| def.file.clone());
         Some((name, false))
+    }
+
+    /// Mesh `i` of the bus clicked as the mouse clicks it (a phone's or a tablet's tap on its
+    /// touch area): its `[mouseevent]`, held until [`Player::release`]. None when it is no
+    /// switch or is not shown.
+    pub(crate) fn click_mesh(&mut self, i: usize) -> Option<String> {
+        self.release();
+        let ev = self.vehicle.ty.meshes.get(i).and_then(|m| self.vehicle.ty.model.meshes.get(m.def_index)).and_then(|d| d.mouse_event.clone())?;
+        if !self.vehicle.mesh_props.get(i).is_some_and(|p| p.visible) {
+            return None;
+        }
+        log::info!("mouse event {ev} (from a device)");
+        let plain = self.vehicle.trigger(&ev);
+        self.repair_roller_blind(&ev);
+        self.pressed_mesh = Some(i);
+        self.press_info = (plain, 0.0);
+        self.auto_drag = None;
+        Some(ev)
     }
 
     pub(crate) fn click(&mut self, origin: DVec3, dir: Vec3, spread: f32) -> Option<usize> {

@@ -35,7 +35,15 @@ pub fn find_cloudflared() -> Option<PathBuf> {
         dirs.extend(std::env::split_paths(&path));
     }
     dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].iter().map(PathBuf::from));
+    // (one the player put in the game's tools folder, `~/.openomsi/tools`)
+    dirs.extend(own_dir().and_then(|d| d.parent().map(|p| p.join("tools"))));
     dirs.into_iter().map(|d| d.join(exe)).find(|p| p.is_file()).or(own)
+}
+
+/// The arguments that start a quick tunnel to `http://127.0.0.1:<port>` (no updating
+/// itself while the game runs).
+pub fn quick_tunnel_args(port: u16) -> Vec<String> {
+    vec!["tunnel".into(), "--no-autoupdate".into(), "--url".into(), format!("http://127.0.0.1:{port}")]
 }
 
 /// The game's own folder for the tools it fetches (`~/.openomsi/bin`).
@@ -148,27 +156,32 @@ pub struct Tunnel {
     child: Child,
     /// The public address, once cloudflared has said it.
     pub url: Arc<Mutex<Option<String>>>,
+    /// Where its process id is kept.
+    pid_name: &'static str,
 }
 
 impl Drop for Tunnel {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        if let Some(p) = pid_file() {
+        if let Some(p) = pid_file(self.pid_name) {
             let _ = std::fs::remove_file(p);
         }
     }
 }
 
-/// Where the running tunnel's process id is kept (`~/.openomsi/cloudflared.pid`).
-fn pid_file() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| std::path::PathBuf::from(h).join(".openomsi").join("cloudflared.pid"))
+/// The multiplayer gateway's tunnel's process id file.
+const GATEWAY_PID: &str = "cloudflared.pid";
+
+/// Where a running tunnel's process id is kept (`~/.openomsi/<name>`).
+fn pid_file(name: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| std::path::PathBuf::from(h).join(".openomsi").join(name))
 }
 
 /// A cloudflared an earlier game left running (it was killed, or crashed before it could
 /// stop its tunnel): stopped before a new one starts.
-fn kill_stale() {
-    let Some(p) = pid_file() else { return };
+fn kill_stale(pid_name: &str) {
+    let Some(p) = pid_file(pid_name) else { return };
     let Some(pid) = std::fs::read_to_string(&p).ok().and_then(|s| s.trim().parse::<u32>().ok()) else { return };
     let _ = std::fs::remove_file(&p);
     #[cfg(unix)]
@@ -195,10 +208,17 @@ impl Tunnel {
     /// is not installed: this may take a while). None when there is no cloudflared.
     pub fn start(port: u16) -> Option<Tunnel> {
         let bin = ensure_cloudflared()?;
-        kill_stale();
-        let mut command = Command::new(&bin);
+        Tunnel::start_with(&bin, port, GATEWAY_PID)
+    }
+
+    /// Start a quick tunnel to `http://127.0.0.1:<port>` with the cloudflared at `bin` (none
+    /// is fetched), its process id kept in `~/.openomsi/<pid_name>` (a tunnel of its own for
+    /// each user of it: one's leftover process is stopped, never another's running one).
+    pub fn start_with(bin: &std::path::Path, port: u16, pid_name: &'static str) -> Option<Tunnel> {
+        kill_stale(pid_name);
+        let mut command = Command::new(bin);
         command
-            .args(["tunnel", "--no-autoupdate", "--url", &format!("http://127.0.0.1:{port}")])
+            .args(quick_tunnel_args(port))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -228,10 +248,10 @@ impl Tunnel {
             })
             .ok()?;
         log::info!("tunnel: {} started for port {port}", bin.display());
-        if let Some(p) = pid_file() {
+        if let Some(p) = pid_file(pid_name) {
             let _ = std::fs::write(p, child.id().to_string());
         }
-        Some(Tunnel { child, url })
+        Some(Tunnel { child, url, pid_name })
     }
 
     /// Whether cloudflared still runs (it ends when Cloudflare drops a quick tunnel, or the
@@ -254,7 +274,7 @@ impl Tunnel {
 }
 
 /// The `https://….trycloudflare.com` address in a line of cloudflared's log.
-fn trycloudflare_url(line: &str) -> Option<String> {
+pub fn trycloudflare_url(line: &str) -> Option<String> {
     let start = line.find("https://")?;
     let rest = &line[start..];
     let end = rest.find(|c: char| c.is_whitespace() || c == '|' || c == '"').unwrap_or(rest.len());
@@ -269,5 +289,12 @@ mod tests {
         let l = "2026-09-26T10:00:00Z INF |  https://quiet-river-sample-words.trycloudflare.com                                   |";
         assert_eq!(super::trycloudflare_url(l).as_deref(), Some("https://quiet-river-sample-words.trycloudflare.com"));
         assert_eq!(super::trycloudflare_url("https://api.trycloudflare.com/tunnel"), None);
+        assert_eq!(super::trycloudflare_url("2026-10-04T10:00:00Z INF Requesting new quick Tunnel on trycloudflare.com..."), None);
+        assert_eq!(super::trycloudflare_url("INF +----+ https://example.com/x |"), None);
+    }
+
+    #[test]
+    fn a_quick_tunnel_goes_to_the_local_port_and_does_not_update_itself() {
+        assert_eq!(super::quick_tunnel_args(47811), vec!["tunnel", "--no-autoupdate", "--url", "http://127.0.0.1:47811"]);
     }
 }

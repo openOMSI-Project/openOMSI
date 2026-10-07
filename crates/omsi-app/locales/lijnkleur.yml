@@ -1,0 +1,38 @@
+_version: 2
+# The line editor: any colour of a line, the display texts folded away, the timetable's table
+# that follows the patterns, and a bus brand: the English text is the key, as in app.yml.
+"Any colour":
+  nl: "Elke kleur"
+  de: "Beliebige Farbe"
+  fr: "N'importe quelle couleur"
+  ru: "Любой цвет"
+  uk: "Будь-який колір"
+  pl: "Dowolny kolor"
+"Hide the %{n} empty texts":
+  nl: "De %{n} lege teksten verbergen"
+  de: "Die %{n} leeren Texte ausblenden"
+  fr: "Masquer les %{n} textes vides"
+  ru: "Скрыть %{n} пустых текстов"
+  uk: "Сховати %{n} порожніх текстів"
+  pl: "Ukryj %{n} pustych tekstów"
+"%{n} more texts, empty for this depot file":
+  nl: "Nog %{n} teksten, leeg bij dit hofbestand"
+  de: "%{n} weitere Texte, leer bei dieser Hofdatei"
+  fr: "%{n} autres textes, vides pour ce fichier de dépôt"
+  ru: "Ещё %{n} текстов, пустых в этом файле депо"
+  uk: "Ще %{n} текстів, порожніх у цьому файлі депо"
+  pl: "%{n} kolejnych tekstów, pustych w tym pliku zajezdni"
+"The table is the line's timetable: a change to the patterns below fills that group of days anew at once; the times typed into the other groups stay.":
+  nl: "De tabel is de dienstregeling van de lijn: een wijziging in de patronen hieronder vult die groep dagen meteen opnieuw; de getypte tijden in de andere groepen blijven staan."
+  de: "Die Tabelle ist der Fahrplan der Linie: eine Änderung an den Mustern unten füllt diese Tagesgruppe sofort neu; die in anderen Gruppen eingetippten Zeiten bleiben."
+  fr: "Le tableau est l'horaire de la ligne : une modification des modèles ci-dessous remplit aussitôt ce groupe de jours ; les heures saisies dans les autres groupes restent."
+  ru: "Таблица — это расписание линии: изменение шаблонов ниже сразу заполняет эту группу дней заново; времена, введённые в другие группы, остаются."
+  uk: "Таблиця — це розклад лінії: зміна шаблонів нижче одразу заповнює цю групу днів наново; час, уведений в інші групи, залишається."
+  pl: "Tabela jest rozkładem linii: zmiana wzorców poniżej od razu wypełnia tę grupę dni od nowa; czasy wpisane w innych grupach zostają."
+"All brands":
+  nl: "Alle merken"
+  de: "Alle Marken"
+  fr: "Toutes les marques"
+  ru: "Все марки"
+  uk: "Усі марки"
+  pl: "Wszystkie marki"

@@ -54,6 +54,10 @@ pub(crate) struct Args {
     /// from the game menu, or a placed one taken over at its driver's door (G).
     #[arg(long)]
     pub(crate) on_foot: bool,
+    /// Start with the object editor on (the map's objects and terrain, as Ctrl+Shift+E turns it
+    /// on), once the world is loaded: the launcher's editor hub starts the game so.
+    #[arg(long)]
+    pub(crate) editor: bool,
     /// Control preset: `simple` (W/S/A/D and Up/Down drive, Left/Right switch the interior
     /// camera as in OMSI; the default), `wasd`,
     /// `arrows` (leaves W, S and D to the jobs `Inputs/keyboard.cfg` gives them - wipers,
@@ -102,6 +106,14 @@ pub(crate) struct Args {
     /// variable and, unless the plate is free, gives the plate that list pairs with it.
     #[arg(long)]
     pub(crate) number: Option<String>,
+    /// Display font of the player vehicle's destination displays, e.g. `--display-font
+    /// "Annax Small"`: a `[newfont]` name from a `Fonts/*.oft` of any content root, or a
+    /// TrueType/OpenType font with its settings after it (`"Arial Bold|file=C:/Windows/Fonts/
+    /// arialbd.ttf|rows=16|bold|spacing=1"`, see `omsi_content::dotfont::DisplayFontSpec`),
+    /// drawn in place of the bus's own display fonts in their grid of dots - on its text
+    /// displays and on the matrices its scripts draw (the launcher's bus step).
+    #[arg(long)]
+    pub(crate) display_font: Option<String>,
     /// Time of day at start, HH:MM (default 09:00).
     #[arg(long, default_value = "09:00")]
     pub(crate) time: String,
@@ -228,6 +240,19 @@ pub(crate) struct Args {
     /// duty at its terminus.
     #[arg(long)]
     pub(crate) whole_tour: bool,
+    /// A duty of several tours, one part each (repeated, in order): `line|tour|first|trips`,
+    /// so many trips of the tour from its trip `first` (1 = the first) on - the launcher's
+    /// composed duty. With it --line, --tour and --trip name the first part (for the entry
+    /// point and the start), and the bus goes on with the next part where one ends.
+    #[arg(long = "duty-leg")]
+    pub(crate) duty_legs: Vec<String>,
+    /// With --line: no duty but a free drive along one route of the line, named by its trip
+    /// file (the route as the map names it, e.g. "4 Liman-ZS") - the launcher's free drive
+    /// with a line chosen by the player. The bus starts at the route's first stop (with
+    /// --auto-entry at the entry point nearest to it), the navigator draws the way and the
+    /// IBIS can be typed for it, but no tour is booked and nobody keeps the time.
+    #[arg(long)]
+    pub(crate) free_line: Option<String>,
     /// Write the player's vehicle (with --bus and --paint) as a binary glTF file for the
     /// launcher's 3D preview, and quit.
     #[arg(long)]
