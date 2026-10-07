@@ -92,7 +92,15 @@ pub struct TripTimes {
     /// `[profile_otherstopping]` per station (0 when not given): 1 and 4 stop whoever
     /// wants to get on or off, 2 is passed, 3 is served when the bus would be more than 20 s
     /// early (Omsi.exe 0x7da6f0 .. 0x7da8bf; see `bus_service::BusService::must_serve`).
+    /// This is the editor's per-station stop setting; whether the bus *waits* there is a
+    /// separate question (`bus_service::BusService::waits_here`).
     pub kinds: Vec<u8>,
+    /// The stations whose time the map wrote itself (`[profile_man_arr_time]` /
+    /// `[profile_man_dep_time]`): the bus waits there for its departure. A station whose
+    /// time is only shared out of the trip's duration is no time point - a bus that beat
+    /// its running time serves it and drives on, instead of standing there until its time
+    /// (which held up every bus behind it; see `bus_service::BusService::waits_here`).
+    pub holds: Vec<bool>,
     /// Seconds from the departure to the arrival at the last station.
     pub duration: f64,
 }
@@ -112,16 +120,19 @@ impl TripTimes {
         let mut dep: Vec<Option<f64>> = vec![None; n];
         let mut stops = vec![true; n];
         let mut kinds = vec![0u8; n];
+        let mut holds = vec![false; n];
         if let Some(p) = profile {
             let at = |i: i32| usize::try_from(i).ok().filter(|i| *i < n);
             for (i, m) in &p.man_arr_time {
                 if let Some(i) = at(*i) {
                     arr[i] = Some(*m as f64 * 60.0);
+                    holds[i] = true;
                 }
             }
             for (i, m) in &p.man_dep_time {
                 if let Some(i) = at(*i) {
                     dep[i] = Some(*m as f64 * 60.0);
+                    holds[i] = true;
                 }
             }
             for (i, v) in &p.other_stopping {
@@ -192,6 +203,7 @@ impl TripTimes {
             stations: out,
             stops,
             kinds,
+            holds,
             duration: duration.max(1.0),
         }
     }
@@ -1389,14 +1401,22 @@ impl Schedule {
 
     /// When departure `i`'s bus is at its trip's stations.
     /// The stations departure `i` serves whoever wants them or not (`[profile_otherstopping]`
-    /// 1 or 4), and those it serves when it would be early (3), by object id.
-    fn special_stops(&self, i: usize) -> (Vec<i64>, Vec<i64>) {
+    /// 1 or 4), those it serves when it would be early (3), and the ones whose time the map
+    /// wrote itself (the bus waits there for its departure), by object id.
+    fn special_stops(&self, i: usize) -> (Vec<i64>, Vec<i64>, Vec<i64>) {
         let stations = trip_stations(&self.data.trips[self.departures[i].trip]);
-        let kinds = &self.times_of(i).kinds;
+        let times = self.times_of(i);
+        let kinds = &times.kinds;
         let of = |want: &[u8]| -> Vec<i64> {
             stations.iter().zip(kinds).filter(|(_, k)| want.contains(k)).map(|(id, _)| *id).collect()
         };
-        (of(&[1, 4]), of(&[3]))
+        let holds: Vec<i64> = stations
+            .iter()
+            .zip(&times.holds)
+            .filter(|(_, h)| **h)
+            .map(|(id, _)| *id)
+            .collect();
+        (of(&[1, 4]), of(&[3]), holds)
     }
 
     fn times_of(&self, i: usize) -> &TripTimes {
@@ -2505,7 +2525,7 @@ impl Schedule {
             let terminus = self.data.trips[self.departures[i].trip].terminus.clone();
             let names = self.trip_stop_names(self.departures[i].trip);
             let last_stop = trip_stations(&self.data.trips[self.departures[i].trip]).last().copied();
-            let (always, early) = self.special_stops(i);
+            let (always, early, holds) = self.special_stops(i);
             let car = &mut traffic.cars[ci];
             if let Some(k) = car.vehicle.ty.program.str_var("Linie") {
                 car.vehicle.state.str_vars[k as usize] = line.clone();
@@ -2525,6 +2545,7 @@ impl Schedule {
                 b.last_stop = last_stop;
                 b.always = always;
                 b.serve_early = early;
+                b.holds = holds;
             }
             let id = car.id;
             self.car_departure.insert(id, i);
@@ -2708,7 +2729,7 @@ impl Schedule {
         let names = self.trip_stop_names(self.departures[i].trip);
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
         let last_stop = trip_stations(&self.data.trips[self.departures[i].trip]).last().copied();
-        let (always, early) = self.special_stops(i);
+        let (always, early, holds) = self.special_stops(i);
         let car = &mut traffic.cars[ci];
         // on its layover only when it stands at its first stop now (the trip's first station
         // may lie on a part of the track that is not loaded): it waits there for its departure
@@ -2720,6 +2741,7 @@ impl Schedule {
             b.last_stop = last_stop;
             b.always = always;
             b.serve_early = early;
+            b.holds = holds;
         }
         // the bus scripts read the line/terminus for their displays
         if let Some(i) = ty.program.str_var("Linie") {
@@ -5502,6 +5524,8 @@ pub(crate) mod tests {
         let arr: Vec<f64> = t.stations.iter().map(|s| s.0).collect();
         assert_eq!(arr, vec![0.0, 100.0, 200.0, 500.0, 600.0]);
         assert_eq!(t.duration, 600.0);
+        // no time of a stop's own: none of them is a time point the bus waits at
+        assert_eq!(t.holds, vec![false; 5]);
         // manual minutes win, the rest in between by length; a passed station stops nowhere
         let p = omsi_timetable::TripProfile {
             name: "p".into(),
@@ -5518,6 +5542,8 @@ pub(crate) mod tests {
         assert_eq!(t.stations[3], (360.0, 360.0));
         assert_eq!(t.duration, 540.0);
         assert_eq!(t.stops, vec![true, true, false, true, true]);
+        // the stops the map wrote a time for are the ones the bus waits at
+        assert_eq!(t.holds, vec![true, true, false, true, true]);
         // a profile without stations keeps its duration (flights on a track)
         assert_eq!(
             TripTimes::new(

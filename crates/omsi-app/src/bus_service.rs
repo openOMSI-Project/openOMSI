@@ -124,6 +124,11 @@ pub struct BusService {
     /// more than `EARLY_STOP_SHORT` early (`schedule::TripTimes::kinds`).
     pub always: Vec<i64>,
     pub serve_early: Vec<i64>,
+    /// The stops whose time the map wrote itself (`schedule::TripTimes::holds`): the only
+    /// ordinary stops the bus waits at for its departure. At every other stop the timetable's
+    /// time is just the running time shared out by distance, so an early bus serves it and
+    /// drives on instead of standing there until its time (`waits_here`).
+    pub holds: Vec<i64>,
 }
 
 /// The side the bus pulls out towards: left (1) from a bay on the right, else right (2).
@@ -144,6 +149,8 @@ fn boarding_time(id: u64) -> f32 {
 /// station until `EARLY_LEAVE_RAIL` before (Omsi.exe 0x7d9bdc: it stands while it is more
 /// than 20 s, a train 120 s, early). Capped at 40 s, the buses no longer waited for their
 /// times at the stops where a timetable holds them all for a connection (#1012).
+/// Only applied where the timetable gives the stop a time of its own, and at the trip's
+/// ends and a layover - see `BusService::waits_here`.
 const EARLY_LEAVE: f64 = 20.0;
 const EARLY_LEAVE_RAIL: f64 = 120.0;
 /// A layover waits for the departure however long (a tour's bus in on its previous trip).
@@ -244,6 +251,7 @@ impl BusService {
             last_stop: None,
             always: Vec::new(),
             serve_early: Vec::new(),
+            holds: Vec::new(),
         }
     }
 
@@ -312,7 +320,8 @@ impl BusService {
     }
 
     /// A stop it serves whoever wants it or not: the trip's first (a layover) and last, the
-    /// ones its timetable says it always serves, and any stop it would reach more than
+    /// ones its timetable says it always serves (`[profile_otherstopping]` 1 or 4 - the
+    /// editor's "stop" setting on its own), and any stop it would reach more than
     /// `EARLY_STOP` early (`EARLY_STOP_SHORT` at a stop marked for it).
     fn must_serve(&self, stop: &Stop, day_time: f64) -> bool {
         let last = (self.stops.len() == 1 && !self.route_open) || self.last_stop == Some(stop.id);
@@ -323,6 +332,32 @@ impl BusService {
             || (early > EARLY_STOP_SHORT && self.serve_early.contains(&stop.id))
     }
 
+    /// Whether the bus waits at its front stop for the departure time. True at the trip's
+    /// first stop (a layover), at its last, at a station on a railway (a train keeps to its
+    /// times), at a stop the timetable wrote a time for (`schedule::TripTimes::holds`), and
+    /// at a stop marked to be served when early (`[profile_otherstopping]` 3, `early`
+    /// seconds before its departure). Everywhere else - an ordinary on-demand stop, even one
+    /// marked 1/4 to be served whoever wants it - the timetable's time is only the running
+    /// time shared out by distance: the bus serves the stop and drives on, rather than
+    /// standing there until its time and holding up the traffic behind it (a map like London
+    /// writes such times for nearly none of its stops, and the buses stood at every one).
+    ///
+    /// So the two knobs the OMSI timetable editor offers per station decide this between
+    /// them: the departure-time box (`Edits_dep`/`CheckBoxes_dep`) and the stop setting
+    /// (`ComboBoxes_stopping`). Stopping and waiting are not the same thing.
+    fn waits_here(&self, layover: bool, rail: bool, early: f64) -> bool {
+        let last = self.stops.len() == 1 && !self.route_open;
+        let id = self.stops.front().map(|s| s.id);
+        layover
+            || rail
+            || last
+            || id.is_some_and(|id| {
+                self.last_stop == Some(id)
+                    || self.holds.contains(&id)
+                    || (early > EARLY_STOP_SHORT && self.serve_early.contains(&id))
+            })
+    }
+
     /// Arrived at the front stop: what now.
     fn arrive(&mut self, ctx: &Ctx, depart: f64, at: (usize, f32)) {
         if omsi_cfg::env::var_os("OMSI_DEBUG_STOPS").is_some() {
@@ -330,7 +365,13 @@ impl BusService {
         }
         let layover = std::mem::take(&mut self.layover);
         let rail = ctx.net.lanes.get(at.0).is_some_and(|l| l.kind == LaneKind::Rail);
-        let wait = early_wait(depart, ctx.day_time, layover, rail);
+        // only a stop the timetable actually puts a time on holds the bus for it; elsewhere
+        // its time is the running time shared out, and an early bus serves and drives on
+        let wait = if self.waits_here(layover, rail, depart - ctx.day_time) {
+            early_wait(depart, ctx.day_time, layover, rail)
+        } else {
+            0.0
+        };
         self.leave_at = ctx.day_time + wait;
         self.boarding = boarding_time(ctx.id);
         self.boarded = false;
@@ -721,6 +762,34 @@ mod tests {
         s.serve_early = vec![2];
         assert!(!s.must_serve(&stop(2, 200.0), 190.0));
         assert!(s.must_serve(&stop(2, 200.0), 170.0));
+    }
+
+    #[test]
+    fn only_a_stop_the_timetable_times_holds_the_bus() {
+        let stop = |id: i64, depart: f64| Stop::from_tuple((0, 0.0, 0.0, depart, id, 0.0));
+        // an ordinary stop whose time is only the running time shared out: served and left
+        let mut s = BusService::new(vec![stop(2, 200.0), stop(3, 300.0)]);
+        s.last_stop = Some(3);
+        assert!(!s.waits_here(false, false, 100.0));
+        // a stop the map gave a time of its own: the bus waits for it
+        s.holds = vec![2];
+        assert!(s.waits_here(false, false, 100.0));
+        // a stop marked to be served when early (kind 3) also holds the bus when it is early
+        s.holds.clear();
+        s.serve_early = vec![2];
+        assert!(!s.waits_here(false, false, 5.0));
+        assert!(s.waits_here(false, false, 100.0));
+        s.serve_early.clear();
+        // a stop the timetable only says it stops at in any case (kind 1/4) is served, not
+        // waited at: stopping and waiting are different settings of the editor
+        s.always = vec![2];
+        assert!(!s.waits_here(false, false, 100.0));
+        s.always.clear();
+        // the trip's last stop always waits, and so do a layover and a railway station
+        s.last_stop = Some(2);
+        assert!(s.waits_here(false, false, 100.0));
+        assert!(s.waits_here(true, false, 100.0));
+        assert!(s.waits_here(false, true, 100.0));
     }
 
     #[test]
