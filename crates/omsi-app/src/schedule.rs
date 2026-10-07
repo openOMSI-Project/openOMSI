@@ -443,6 +443,9 @@ pub struct Schedule {
     /// Plain `[aigroup_2]` vehicle pools, loaded the first time a trip asks for one
     /// (the Tegel approaches are flown by the group's own aircraft, not by depot buses).
     pools: HashMap<String, Vec<Arc<VehicleType>>>,
+    /// Per vehicle folder: the depot file a bus of a plain `[aigroup_2]` runs with
+    /// (see [`pool_depot`]), looked up the first time such a bus is chosen.
+    pool_hofs: HashMap<std::path::PathBuf, Option<Arc<omsi_vehicle::Hof>>>,
     /// Departures that are due but not on the road yet. Putting twenty minutes of a Berlin
     /// timetable on the map at once costs several seconds in one frame, so they are spawned
     /// a few at a time.
@@ -786,6 +789,7 @@ impl Schedule {
             next_number: 0,
             trains,
             pools: HashMap::new(),
+            pool_hofs: HashMap::new(),
             pending: Default::default(),
             tour_prev,
             waiting: Vec::new(),
@@ -1377,7 +1381,8 @@ impl Schedule {
         let pooled: Vec<Arc<VehicleType>> = self.pools.values().flatten().cloned().collect();
         for ty in &pooled {
             if seen.insert(ty.def.path.clone()) {
-                crate::traffic::warm_up(world, ty, None);
+                let hof = self.pool_hof(ty.def.dir(), world);
+                crate::traffic::warm_up(world, ty, hof);
             }
         }
         // what was read ahead and not used (textures of variants the AI never shows)
@@ -1466,12 +1471,17 @@ impl Schedule {
             _ => {
                 // a plain [aigroup_2] flies/drives its own vehicles (the Tegel approach)
                 let root = world.root.clone();
-                let pool = self.pool(&root, world, &group);
-                (
-                    pool.get((h % pool.len().max(1) as u64) as usize).cloned()?,
-                    Vec::new(),
-                    None,
-                )
+                let ty = {
+                    let pool = self.pool(&root, world, &group);
+                    pool.get((h % pool.len().max(1) as u64) as usize).cloned()?
+                };
+                // The group names no depot file, so Omsi.exe leaves the bus's selected-hof
+                // index at 0: it runs with the depot of its own folder (see [`pool_depot`]).
+                // Without one such a bus got no `SetLineTo`, no `AI_target_index` and no
+                // `ai_scheduled_settarget` trigger at all - and a mod bus that switches its
+                // destination picture on in that trigger drove with a blank display.
+                let hof = self.pool_hof(ty.def.dir(), world);
+                (ty, Vec::new(), hof)
             }
         };
         // A depot bus as Omsi.exe makes it (0x70a174): the fleet number of its ailists line;
@@ -1843,6 +1853,23 @@ impl Schedule {
             self.pools.insert(group.to_string(), out);
         }
         self.pools.get(group).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// The depot file a bus of a plain `[aigroup_2]` group runs with (see [`pool_depot`]),
+    /// looked up once per vehicle folder.
+    fn pool_hof(&mut self, dir: &Path, world: &World) -> Option<Arc<omsi_vehicle::Hof>> {
+        if let Some(h) = self.pool_hofs.get(dir) {
+            return h.clone();
+        }
+        let names: Vec<&str> = world
+            .ailists
+            .groups
+            .iter()
+            .filter_map(|g| g.hof.as_deref())
+            .collect();
+        let h = pool_depot(dir, &names).map(Arc::new);
+        self.pool_hofs.insert(dir.to_path_buf(), h.clone());
+        h
     }
 
     /// How many due departures are still waiting to be put on the road.
@@ -2930,6 +2957,25 @@ fn section_around(slots: &[Slot], at: usize) -> (usize, usize) {
     (start, end)
 }
 
+/// The depot file of a bus whose AI group names none (a plain `[aigroup_2]` pool): the one
+/// of the map's own depots where its vehicle folder has it (the group is the map author's
+/// shortcut for a fleet the `[aigroup_depot]` groups name with a depot), else the folder's
+/// first `.hof` - what Omsi.exe uses for such a bus, whose selected-hof index stays 0
+/// ("the hofs are loaded in the order the folder lists them", [`omsi_vehicle::hof::depot_files`]).
+///
+/// A timetable bus is spawned with this depot file: with none it got no `SetLineTo`, no
+/// `AI_target_index` and no `ai_scheduled_settarget` trigger, and a mod bus that switches
+/// its destination picture on in that trigger (the HK roller blinds, the LED matrices)
+/// drove with a blank display instead of its destination.
+fn pool_depot(dir: &Path, map_depots: &[&str]) -> Option<omsi_vehicle::Hof> {
+    omsi_vehicle::hof::depot_like(dir, map_depots).or_else(|| {
+        let files = omsi_vehicle::hof::depot_files(dir);
+        // (the first file that loads: one unreadable depot must not leave the bus without
+        // the displays and the stops of the rest)
+        files.iter().find_map(|p| omsi_vehicle::Hof::load(p).ok())
+    })
+}
+
 /// The depot file an `[aigroup_depot]` names for a vehicle: a file of that name next to the
 /// vehicle, else the one whose `[name]` it is - the stock groups name the depot
 /// ("Spandau 1986"), not the file ("Spandau 86.hof"), and without it no scheduled bus had
@@ -3567,11 +3613,20 @@ fn set_destination(
     stops: &[&str],
     player: bool,
 ) {
-    let Some(hof) = hof else { return };
     let terminus = terminus.trim();
-    if terminus.is_empty() {
+    // Omsi.exe's `TRoadVehicleInst.virtual_10` runs for every trip a bus starts: the line
+    // goes into `SetLineTo` and the script's `ai_scheduled_settarget` trigger runs even when
+    // the depot file has no such terminus (`AI_target_index` then stays as it was) and even
+    // for a bus whose group names no depot file at all. The mods' roller blinds and matrices
+    // switch their destination picture on in that trigger, so an AI bus that skipped it
+    // drove with a blank display (see `pool_depot`).
+    let Some(hof) = hof.filter(|_| !terminus.is_empty()) else {
+        if !player {
+            set_line_to(v, line);
+            v.trigger("ai_scheduled_settarget");
+        }
         return;
-    }
+    };
     // (an AI bus shows the first row of the name, as Omsi.exe gives it; the player's IBIS
     // the row its route leads to, as the typing does)
     let term_index = if player {
@@ -3585,6 +3640,10 @@ fn set_destination(
             hof.name,
             hof.termini.len()
         );
+        if !player {
+            set_line_to(v, line);
+            v.trigger("ai_scheduled_settarget");
+        }
         return;
     };
     log::debug!(
@@ -5822,6 +5881,33 @@ pub(crate) mod tests {
         }
         assert_eq!(target(&hof, "39", &["Vokzal", "Rynok", "ul. Xutorskaya"]), (Some(2), None, 2));
         assert_eq!(target(&hof, "41", &["Vokzal", "Shkola", "ul. Xutorskaya"]), (Some(2), None, 4));
+    }
+
+    /// An AI group that names no depot file, or a terminus its depot file has no row for:
+    /// Omsi.exe still puts the line into `SetLineTo` and runs `ai_scheduled_settarget`, which
+    /// is what the mods' roller blinds and matrices switch their destination picture on in.
+    #[test]
+    fn an_ai_bus_without_a_destination_still_gets_its_line_and_the_ai_trigger() {
+        let osc = "{trigger:ai_scheduled_settarget}\n(L.$.SetLineTo) (S.$.shown)\n1 (S.L.elec_busbar_main_sw)\n{end}\n";
+        let vars = "AI_target_index\nelec_busbar_main_sw\n";
+        let strings = "SetLineTo\nshown\n";
+        // no depot file at all (a plain [aigroup_2] group)
+        let mut v = script_test_vehicle(osc, vars, strings);
+        set_ai_destination(&mut v, None, "82A", "82A Seaview Bay", &[]);
+        assert_eq!(v.str_var("SetLineTo"), "82A");
+        assert_eq!(v.str_var("shown"), "82A");
+        assert_eq!(v.var("elec_busbar_main_sw"), Some(1.0));
+        // a terminus the depot file knows nothing of (AI_target_index stays as it was)
+        let hof = omsi_vehicle::Hof {
+            termini: vec![omsi_vehicle::hof::Terminus { code: 92, texture_id: "Xut_92".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let mut v = script_test_vehicle(osc, vars, strings);
+        set_ai_destination(&mut v, Some(&hof), "7", "Hafen", &[]);
+        assert_eq!(v.str_var("SetLineTo"), "7");
+        assert_eq!(v.str_var("shown"), "7");
+        assert_eq!(v.var("elec_busbar_main_sw"), Some(1.0));
+        assert_eq!(v.var("AI_target_index"), Some(0.0));
     }
 
     fn early_departure_duty() -> PlayerDuty {
