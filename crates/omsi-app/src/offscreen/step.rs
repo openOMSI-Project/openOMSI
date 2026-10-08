@@ -664,6 +664,7 @@ impl Offscreen<'_> {
             ref mut traffic,
             ref camera,
             ref duty,
+            ref schedule,
             ref renderer,
             ref mut scene,
             ref mut sim_view,
@@ -677,6 +678,9 @@ impl Offscreen<'_> {
             // value and the new formula returns 0 for the whole session when the map has
             // a low hourly density at the start time)
             steps::humans_by_hour(h, world, run_clock.time, settings.pax_density, duty.as_ref());
+            // and the trips due at the stops (made at the start only, they left every stop
+            // without a trip in the first quarter of an hour empty for good)
+            steps::humans_due_trips(h, schedule.as_ref(), traffic.as_ref());
             // populate stops near every LAN player every 2 seconds, as app_events.rs
             // does every 2 s near the local player.  At startup `center` is ZERO (no
             // player bus on a headless server), so stops on the actual map – which can

@@ -29,13 +29,7 @@ impl App {
                 .map(|p| p.vehicle.position)
                 .or(self.camera.as_ref().map(|c| c.position))
                 .unwrap_or(DVec3::ZERO);
-            // (the trips due at the stops soon: once a game minute, #1415)
-            if let (Some(s), Some(t)) = (self.session.schedule.as_ref(), self.session.traffic.as_ref()) {
-                if (t.day_time - h.due_at).abs() >= 60.0 {
-                    h.due_dests = Some(s.due_destinations(t.day_time));
-                    h.due_at = t.day_time;
-                }
-            }
+            steps::humans_due_trips(h, self.session.schedule.as_ref(), self.session.traffic.as_ref());
             if h.stop_targets.is_none() {
                 h.stop_targets = self.session.schedule.as_ref().map(|s| s.stop_targets());
                 h.stop_names = self.session.schedule.as_ref().map(|s| s.stop_names());
