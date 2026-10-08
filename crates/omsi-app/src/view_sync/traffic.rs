@@ -57,6 +57,11 @@ impl TrafficView {
         }
     }
 
+    /// The renders of car `id`.
+    pub(crate) fn car(&self, id: u64) -> Option<&CarRender> {
+        self.cars.get(&id)
+    }
+
     /// Take the renders of car `id` out (it is made anew under the same id).
     pub(crate) fn take(&mut self, id: u64) -> Option<CarRender> {
         self.cars.remove(&id)

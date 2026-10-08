@@ -398,6 +398,8 @@ flags! {
     OMSI_ROAD_PHOTO_N: Num, Test, Use, "400", "With OMSI_ROAD_PHOTO: number of sample points.";
     OMSI_ROAD_PHOTO_SIDE: Num, Test, Use, "0", "With OMSI_ROAD_PHOTO: metres to either side of the carriageway.";
     OMSI_ROAD_PHOTO_SLANT: Num, Test, Use, "-", "With OMSI_ROAD_PHOTO: from a driver's eye this far back instead of from above.";
+    OMSI_ROAD_SNOW: Text, Switch, Use, "on", "Snow on the roads builds up while it snows and thaws again, with ruts and tyre tracks: off for the weather's on/off snow on road, a number 0..1 for the cover to start with.";
+    OMSI_ROAD_SNOW_GRID: Bool, Test, Use, "off", "With the roads' snow: a 4 m grid in the track field instead of the lanes' ruts (to see it lie on the world).";
     OMSI_ROOT: Text, Setup, Use, "found", "The OMSI 2 installation folder (also the content root for tests that need real content).";
     OMSI_RT_REFL_HALF: Bool, Switch, Use, "off", "Trace reflections at half size.";
     OMSI_SAFE_GPU: Num, Setup, Use, "0", "Restarts after a lost graphics device: lighter on the card each time. Set at runtime on Android and by the restart.";

@@ -281,6 +281,8 @@ impl<'a> Offscreen<'a> {
             remotes_off,
             run_clock,
             wetness,
+            road_snow: Default::default(),
+            snow_tracks: Default::default(),
             cabin_air,
             srv_admin,
             srv_clock,

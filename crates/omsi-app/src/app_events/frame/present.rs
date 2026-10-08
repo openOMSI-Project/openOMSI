@@ -14,7 +14,7 @@ impl App {
             Some(rv) => Some(rv.vehicle()),
             None => self.player.as_ref().map(|p| &p.vehicle),
         };
-        steps::picture_lighting(
+        let mut lighting = steps::picture_lighting(
             &daylight,
             self.session.weather.as_ref(),
             self.session.cloud_drift,
@@ -25,7 +25,11 @@ impl App {
             self.session.cabin_air.appearance(),
             &self.settings,
             self.clock.run_time as f32,
-        )
+        );
+        if crate::road_snow::enabled() {
+            self.session.road_snow.light(&mut lighting, &self.session.snow_tracks);
+        }
+        lighting
     }
 
     /// The frame drawn and shown (or, with the window hidden, the simulation kept at a

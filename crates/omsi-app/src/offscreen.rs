@@ -64,6 +64,9 @@ struct Offscreen<'a> {
     run_clock: omsi_sim::SimClock,
     /// how wet the roads are, rain wetting them and dry weather drying them as in the window
     wetness: f32,
+    /// the snow on the roads and its ruts and tracks, as in the window (see `road_snow`)
+    road_snow: crate::road_snow::RoadSnow,
+    snow_tracks: crate::road_snow::SnowTracks,
     /// the cabin air of the player's bus and the condensation on its glass
     cabin_air: crate::condensation::CabinAir,
     /// a dedicated server's administration and clock (see `admin`)

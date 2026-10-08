@@ -62,6 +62,30 @@ impl App {
             w.update_light_map_atlas(r, cam.position);
         }
         *self.perf.profile.entry("lights.atlas").or_default() += __ta.elapsed().as_secs_f64();
+        // the snow on the roads: how far it has built up, and the ruts and the tyres'
+        // tracks around the camera (road_snow.wgsl)
+        if crate::road_snow::enabled() {
+            let __tr = Instant::now();
+            if let Some(wt) = &self.session.weather {
+                self.session.road_snow.step(if self.paused { 0.0 } else { dt * self.time_speed() as f32 }, wt);
+            }
+            if let (Some(r), Some(cam)) = (self.renderer.as_ref(), self.camera.as_ref()) {
+                let tyres = crate::road_snow::tyres(self.player.as_ref(), self.session.traffic.as_ref(), &self.net.remotes);
+                let net = self.session.traffic.as_ref().map(|t| &t.net);
+                let (cover, fallen) = (self.session.road_snow.cover, self.session.road_snow.fallen);
+                self.session.snow_tracks.update(r, cam.position, net, &tyres, cover, fallen);
+            }
+            // the snow on the roofs of the player's bus and of the traffic
+            {
+                let vehicles = crate::road_snow::roof_vehicles(self.player.as_ref(), self.session.traffic.as_ref());
+                let (cover, fallen) = (self.session.road_snow.cover, self.session.road_snow.fallen);
+                self.session.road_snow.roofs.step(&vehicles, cover, fallen);
+            }
+            if let (Some(r), Some(scene)) = (self.renderer.as_ref(), self.scene.as_mut()) {
+                crate::road_snow::show_roofs(r, scene, &self.session.road_snow.roofs, self.player.as_ref(), self.session.traffic.as_ref(), &self.gfx.sim_view.traffic);
+            }
+            *self.perf.profile.entry("lights.road_snow").or_default() += __tr.elapsed().as_secs_f64();
+        }
         if let (Some(w), Some(scene), Some(cam)) = (
             self.world.as_ref(),
             self.scene.as_mut(),

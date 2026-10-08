@@ -78,6 +78,8 @@ impl Offscreen<'_> {
             ref player,
             ref cabin_air,
             wetness,
+            ref road_snow,
+            ref snow_tracks,
             ..
         } = *self;
         let daylight = omsi_sim::Daylight::compute(clock, envir.as_ref());
@@ -101,6 +103,9 @@ impl Offscreen<'_> {
             settings,
             args.drive.unwrap_or(0.0) + service_seconds as f32,
         );
+        if crate::road_snow::enabled() {
+            road_snow.light(&mut lighting, snow_tracks);
+        }
         // OMSI_CONDENSATION=<minutes>,<people>[,engine 0/1]: the cabin air and the condensation
         // on the player's glass after that long with that many aboard
         if let (Some(spec), Some(p)) = (omsi_cfg::flags::OMSI_CONDENSATION.var(), player_ref.as_ref().or(player.as_ref())) {

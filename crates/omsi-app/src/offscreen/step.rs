@@ -810,6 +810,9 @@ impl Offscreen<'_> {
             ref mut spray,
             ref mut cabin_air,
             ref mut wetness,
+            ref mut road_snow,
+            ref mut snow_tracks,
+            ref renderer,
             ref traffic,
             ref player,
             ref camera,
@@ -836,6 +839,16 @@ impl Offscreen<'_> {
             steps::throw_spray(spray, dt, player.as_ref(), traffic.as_ref(), remotes_off, eye, steps::spray_wind(weather), world, spray_wet);
         }
         *wetness = crate::weather_setup::road_wetness(precip_of(weather).1, dt as f64, *wetness);
+        // the snow on the roads and the tyres' tracks in it, as the window's `frame_lights`
+        if crate::road_snow::enabled() {
+            road_snow.step(dt, weather);
+            let eye = player.as_ref().filter(|_| args.cam.is_none()).map(|p| p.vehicle.position).unwrap_or(camera.position);
+            let tyres = crate::road_snow::tyres(player.as_ref(), traffic.as_ref(), remotes_off);
+            snow_tracks.update(renderer, eye, traffic.as_ref().map(|t| &t.net), &tyres, road_snow.cover, road_snow.fallen);
+            let vehicles = crate::road_snow::roof_vehicles(player.as_ref(), traffic.as_ref());
+            let (cover, fallen) = (road_snow.cover, road_snow.fallen);
+            road_snow.roofs.step(&vehicles, cover, fallen);
+        }
     }
 
     /// A snapshot due at `t_s` (`--snapshots`).
@@ -858,6 +871,8 @@ impl Offscreen<'_> {
             ref weather,
             ref remotes_off,
             ref spray,
+            ref road_snow,
+            ref snow_tracks,
             ..
         } = *self;
         // mid-run snapshots (relative to the first overtake with --follow auto)
@@ -903,7 +918,7 @@ impl Offscreen<'_> {
                 }
                 spray.sprites(cam.position, &mut scene.smoke);
                 let driven = player.as_ref().map(|p| &p.vehicle);
-                let lighting = steps::picture_lighting(
+                let mut lighting = steps::picture_lighting(
                     &daylight,
                     Some(weather),
                     cloud_drift_at(weather, run_clock.time),
@@ -915,6 +930,10 @@ impl Offscreen<'_> {
                     settings,
                     run_clock.run_time as f32,
                 );
+                if crate::road_snow::enabled() {
+                    road_snow.light(&mut lighting, snow_tracks);
+                    crate::road_snow::show_roofs(renderer, scene, &road_snow.roofs, player.as_ref(), traffic.as_ref(), &sim_view.traffic);
+                }
                 world.finish_texture_upgrades(renderer, scene);
                 let pixels = renderer.render_to_image(scene, w, h, &cam, &lighting)?;
                 let path = out.with_file_name(format!(

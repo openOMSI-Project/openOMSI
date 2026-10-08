@@ -60,6 +60,7 @@ mod puddles;
 mod quit;
 mod condensation;
 mod rain;
+mod road_snow;
 mod window_wipers;
 mod window_drops;
 mod scene;
@@ -555,6 +556,8 @@ fn assemble_app(args: Args, settings: settings::Settings) -> App {
             career: Default::default(),
             journey: None,
             wetness: 0.0,
+            road_snow: Default::default(),
+            snow_tracks: Default::default(),
             cloud_drift: [0.0; 2],
             weather_blend: None,
             weather_cycle: None,

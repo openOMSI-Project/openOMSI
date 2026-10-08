@@ -227,6 +227,22 @@ impl Renderer {
             let v: [f32; 4] = [(lx - ro.x) as f32, (ly - ro.y) as f32, side as f32, if side > 0.0 { 1.0 } else { 0.0 }];
             self.queue.write_buffer(&self.lm_uniform, 0, bytemuck::cast_slice(&v));
         }
+        // the snow track field: the render origin modulo its side (it wraps around the
+        // world), and how the roads' snow stands (road_snow.wgsl)
+        {
+            let side = SNOW_TRACK_SIDE;
+            let v: [f32; 8] = [
+                ro.x.rem_euclid(side) as f32,
+                ro.y.rem_euclid(side) as f32,
+                side as f32,
+                if lighting.snow_tracks { 1.0 } else { 0.0 },
+                lighting.road_snow.map(|r| r.clamp(0.0, 1.0)).unwrap_or(-1.0),
+                lighting.snow_fallen.rem_euclid(65536.0) as f32,
+                lighting.snow_ruts.clamp(0.0, 1.0),
+                0.0,
+            ];
+            self.queue.write_buffer(&self.snow_track_uniform, 0, bytemuck::cast_slice(&v));
+        }
         let cu = CameraUniform {
             post: [
                 if enhanced { 1.0 } else { 0.0 },

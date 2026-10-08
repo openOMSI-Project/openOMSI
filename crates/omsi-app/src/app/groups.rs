@@ -416,6 +416,10 @@ pub(crate) struct SessionState {
     pub(crate) journey: Option<crate::journey::Journey>,
     /// How wet the roads are (0..1), built up by rain and dried by the sun.
     pub(crate) wetness: f32,
+    /// The snow on the roads, built up while it snows (see `road_snow`), and its ruts and
+    /// tyre tracks around the camera.
+    pub(crate) road_snow: crate::road_snow::RoadSnow,
+    pub(crate) snow_tracks: crate::road_snow::SnowTracks,
     /// How far the cloud cover has drifted with the wind (fractions of its tiling), summed
     /// up frame by frame so that a change of wind does not throw the sky around.
     pub(crate) cloud_drift: [f32; 2],

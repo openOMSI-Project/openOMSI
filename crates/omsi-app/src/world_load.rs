@@ -22,6 +22,10 @@ pub(crate) fn season_folder_on(args: &Args, global: &omsi_map::GlobalCfg, day_of
     }
     let mut folder = omsi_map::global::Season::folder(kind).map(|f| f.to_string());
     if snow {
+        // (with the roads' snow built up in the picture the carriageways keep their own
+        // textures and take a cover of their own: the season's WinterSnowfall pictures are
+        // the roads white all at once)
+        let snow_on_road = snow_on_road && !crate::road_snow::enabled();
         folder = Some(if snow_on_road { "WinterSnowfall" } else { "WinterSnow" }.to_string());
     }
     (kind, folder)
