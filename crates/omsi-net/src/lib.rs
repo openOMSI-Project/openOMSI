@@ -1945,6 +1945,30 @@ impl LanSession {
         Ok(())
     }
 
+    /// A host line under a chosen name (admin notices to every player). Not rate-limited.
+    pub fn announce(&mut self, name: &str, text: &str) -> Result<(), String> {
+        let text = clean_text(text, MAX_CHAT);
+        if text.is_empty() {
+            return Err("nothing to say".into());
+        }
+        if !matches!(self.role, Role::Host) {
+            return Err("only the host announces".into());
+        }
+        if !self.connected {
+            return Err("not connected to a session".into());
+        }
+        let name = clean_text(name, MAX_NAME);
+        self.broadcast(format!("SAY|{}|{name}|{text}", self.my_id).as_bytes(), None);
+        log::info!("LAN announce <{name}> {text}");
+        self.events.push(LanEvent::Chat {
+            id: self.my_id,
+            name,
+            text,
+            mine: true,
+        });
+        Ok(())
+    }
+
     fn send(&self, data: &[u8], to: SocketAddr) {
         if self.socket.send_to(data, to).is_ok() {
             self.sent.set(self.sent.get() + data.len() as u64);

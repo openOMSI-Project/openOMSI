@@ -980,7 +980,7 @@ mod tests {
         assert_eq!(st, "200 OK");
         assert!(ctype.starts_with("text/html"));
         let page = String::from_utf8_lossy(&body);
-        assert!(page.contains("openOMSI dispatch") && page.contains("POST") && page.contains("/admin"), "{page}");
+        assert!(page.contains("openOMSI") && page.contains("Call log") && page.contains("/admin") && page.contains("Live map"), "{page}");
         // not from this machine
         assert_eq!(local_dispatch(get, Some(SocketAddr::from(([10, 0, 0, 2], 5000)))).0, "403 Forbidden");
         // through a tunnel on the loopback

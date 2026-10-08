@@ -91,7 +91,13 @@ pub(crate) fn run_offscreen(
             break;
         }
     }
-    run.finish()
+    let restart = crate::quit::requested() == Some(crate::quit::RESTART);
+    run.finish()?;
+    if restart {
+        // start.sh / start.cmd start the process again on this exit code
+        std::process::exit(crate::quit::RESTART);
+    }
+    Ok(())
 }
 
 impl Offscreen<'_> {

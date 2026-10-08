@@ -40,11 +40,14 @@ Players reach it two ways:
   Weather/#CAVOK.owt`, `say …`, `kick 3`, as the Administration menu sends them), the
   password in `X-Admin-Password`; five wrong ones in two minutes close it for a while. The
   same door serves `GET /dispatch`: open `http://127.0.0.1:<web_port>/dispatch` on the
-  server machine for a small local admin page (live status, say / kick / clock / weather /
-  traffic / speed, and a live player list when `share_positions = 1`). A script that posts
-  to `/admin` works the same way. Neither `/dispatch` nor `/admin` answers through a
-  tunnel or reverse proxy - only from the machine itself. A reverse proxy on the same
-  machine connects from 127.0.0.1 as well: do not let it pass `/admin` or `/dispatch` on.
+  server machine for the local dispatch console (live status, call log, say / kick / clock /
+  weather / traffic / speed, Stop / Restart, and when `share_positions = 1` a player list
+  and live map). Clock, weather, traffic, speed, kick/ban and stop/restart also post a short
+  line to the players' chat as **Admin**. `stop` ends the process; `restart` exits with code
+  75 so `start.sh` / `start.cmd` launch it again. A script that posts to `/admin` works the
+  same way. Neither `/dispatch` nor `/admin` answers through a tunnel or reverse proxy -
+  only from the machine itself. A reverse proxy on the same machine connects from 127.0.0.1
+  as well: do not let it pass `/admin` or `/dispatch` on.
   With `share_positions = 1` it also answers
   `GET /players`: a JSON array of the players (`id`, `name`, `bus`, `line`, `destination`,
   `tour`, `x`/`y` in world metres east/north, `heading` in degrees clockwise from north,
