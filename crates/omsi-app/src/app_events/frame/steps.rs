@@ -243,6 +243,7 @@ pub(crate) fn tick_humans(
     if let Some(t) = traffic {
         let (alighting, waiting) = h.stop_wishes();
         t.set_stop_wishes(alighting, waiting);
+        t.bus_loads = h.bus_loads();
         for (id, stop, secs) in h.take_holds() {
             t.hold_boarding(id, stop, secs);
         }

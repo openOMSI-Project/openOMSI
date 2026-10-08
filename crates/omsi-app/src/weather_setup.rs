@@ -119,6 +119,7 @@ pub(crate) fn load_weather(args: &Args) -> omsi_content::weather::Weather {
         let w = crate::weather_model::start(&crate::situation::start_clock(args));
         scene::SNOW_WEATHER.store(w.snow, std::sync::atomic::Ordering::Relaxed);
         omsi_sim::host::set_ambient_weather(w.temp.0, w.temp.1);
+        crate::weather_setup::publish_page_weather(&w);
         return w;
     }
     crate::weather_model::stop();
@@ -131,6 +132,7 @@ pub(crate) fn load_weather(args: &Args) -> omsi_content::weather::Weather {
         log::info!("weather custom: fog range {} m, precip {:?}, temp {:?}",w.fog.0,w.precip,w.temp);
         scene::SNOW_WEATHER.store(w.snow,std::sync::atomic::Ordering::Relaxed);
         omsi_sim::host::set_ambient_weather(w.temp.0,w.temp.1);
+        crate::weather_setup::publish_page_weather(&w);
         return w;
     }
     // OMSI 2's current weather: `metar:<ICAO>` fetches the airport's report
@@ -163,6 +165,7 @@ pub(crate) fn load_weather(args: &Args) -> omsi_content::weather::Weather {
             scene::SNOW_WEATHER.store(w.snow, std::sync::atomic::Ordering::Relaxed);
             // and their {init} reads the temperature
             omsi_sim::host::set_ambient_weather(w.temp.0, w.temp.1);
+            crate::weather_setup::publish_page_weather(&w);
             w
         }
         Err(e) => {
@@ -500,6 +503,19 @@ pub(crate) fn precip_of(w: &omsi_content::weather::Weather) -> (i32, f32) {
     (kind, rate)
 }
 
+/// Tell the htmltexture pages the weather (`omsi.weather`), with the temperature the
+/// vehicles get.
+pub(crate) fn publish_page_weather(w: &omsi_content::weather::Weather) {
+    let (kind, rate) = precip_of(w);
+    omsi_sim::vehicle_api::set_page_weather(omsi_sim::vehicle_api::PageWeather {
+        temperature: w.temp.0,
+        abs_humidity: w.temp.1,
+        visibility: w.fog.0,
+        clouds: w.clouds.0.clone(),
+        precip: (kind as f32, rate * 255.0),
+    });
+}
+
 pub(crate) fn apply_weather(
     v: &mut omsi_sim::VehicleInstance,
     w: &omsi_content::weather::Weather,
@@ -515,6 +531,7 @@ pub(crate) fn apply_weather(
     v.host.temperature = w.temp.0;
     v.host.abs_humidity = w.temp.1;
     omsi_sim::host::set_ambient_weather(w.temp.0, w.temp.1);
+    crate::weather_setup::publish_page_weather(&w);
 }
 
 /// `OMSI_DEBUG_SOUND[=seconds]`: how often the mixer says what every sound entry of the

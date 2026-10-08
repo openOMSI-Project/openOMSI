@@ -346,7 +346,7 @@ pub struct StopBoards {
     pub wanted_names: Vec<String>,
     /// Per stop name of `wanted_names`: the departures of the next two hours, soonest first,
     /// at most 20, as (line, destination, timestamp).
-    pub departures: std::collections::HashMap<String, Vec<(String, String, f64)>>,
+    pub departures: std::collections::HashMap<String, Vec<omsi_sim::vehicle_api::Departure>>,
     /// Counts up whenever `departures` was made anew.
     pub departures_gen: u64,
 }

@@ -106,24 +106,82 @@ pub fn environment(clock: &SimClock, locale: &str) -> ApiValue {
         ),
         ("locale", ApiValue::Str(locale.to_string())),
         ("timestamp", ApiValue::Num(timestamp(clock, secs.rem_euclid(86_400) as f64))),
+        ("weather", page_weather().map(|w| w.api()).unwrap_or(ApiValue::Null)),
     ])
 }
 
-/// `window.omsi.departures`: per stop key the departures as `{ line, destination, time }`, `time`
+/// The weather as pages see it (`omsi.weather`): set by the game whenever the weather is
+/// loaded or changes, `null` until then.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PageWeather {
+    /// Air temperature (°C).
+    pub temperature: f32,
+    /// Absolute humidity (g/m³), as `Weather_AbsHum`.
+    pub abs_humidity: f32,
+    /// How far one sees (m): the weather's `[fog]`.
+    pub visibility: f32,
+    /// The weather's `[clouds]` type (`-1` clear, `Cumulus 2`, `AddOn - Overcast 3` ...).
+    pub clouds: String,
+    /// `[precip]` type (0 none, 1 rain, 2 snow) and rate (0..255).
+    pub precip: (f32, f32),
+}
+
+impl PageWeather {
+    /// Relative humidity 0..1 (Magnus formula for the saturation).
+    pub fn relative_humidity(&self) -> f32 {
+        let t = self.temperature;
+        let es = 6.112 * ((17.62 * t) / (243.12 + t)).exp();
+        let sat = 216.7 * es / (273.15 + t);
+        if sat > 0.0 { (self.abs_humidity / sat).clamp(0.0, 1.0) } else { 0.0 }
+    }
+
+    fn api(&self) -> ApiValue {
+        let kind = if self.precip.0 >= 0.5 && self.precip.1 > 0.0 { self.precip.0.round() } else { 0.0 };
+        map(vec![
+            ("temperature", ApiValue::Num((self.temperature as f64 * 10.0).round() / 10.0)),
+            ("humidity", ApiValue::Num((self.relative_humidity() as f64 * 100.0).round() / 100.0)),
+            ("visibility", ApiValue::Num(self.visibility.round() as f64)),
+            ("clouds", ApiValue::Str(self.clouds.trim().to_string())),
+            ("precip", ApiValue::Num(kind as f64)),
+            ("precipRate", ApiValue::Num(if kind > 0.0 { ((self.precip.1 / 255.0).clamp(0.0, 1.0) as f64 * 100.0).round() / 100.0 } else { 0.0 })),
+        ])
+    }
+}
+
+static PAGE_WEATHER: RwLock<Option<PageWeather>> = RwLock::new(None);
+
+/// Tell the pages what the weather is (see [`PageWeather`]).
+pub fn set_page_weather(w: PageWeather) {
+    if let Ok(mut g) = PAGE_WEATHER.write() {
+        *g = Some(w);
+    }
+}
+
+fn page_weather() -> Option<PageWeather> {
+    PAGE_WEATHER.read().ok().and_then(|g| g.clone())
+}
+
+/// `window.omsi.departures`: per stop key the departures as `{ line, destination, time,
+/// stopsAway, load, delaySec, lastTrip }` (see [`Departure`]; unknown ones `null`), `time`
 /// being a timestamp on the scale of `omsi.timestamp` (see [`timestamp`]).
-pub fn departures(by_key: &std::collections::HashMap<String, Vec<(String, String, f64)>>) -> ApiValue {
+pub fn departures(by_key: &std::collections::HashMap<String, Vec<Departure>>) -> ApiValue {
     let mut keys: Vec<&String> = by_key.keys().collect();
     keys.sort();
+    let opt = |v: Option<f64>| v.map(ApiValue::Num).unwrap_or(ApiValue::Null);
     ApiValue::Map(
         keys.into_iter()
             .map(|k| {
                 let list = by_key[k]
                     .iter()
-                    .map(|(line, destination, time)| {
+                    .map(|d| {
                         map(vec![
-                            ("line", ApiValue::Str(line.clone())),
-                            ("destination", ApiValue::Str(destination.clone())),
-                            ("time", ApiValue::Num(time.round())),
+                            ("line", ApiValue::Str(d.line.clone())),
+                            ("destination", ApiValue::Str(d.destination.clone())),
+                            ("time", ApiValue::Num(d.time.round())),
+                            ("stopsAway", opt(d.stops_away.map(|n| n as f64))),
+                            ("load", opt(d.load.map(|l| (l as f64 * 100.0).round() / 100.0))),
+                            ("delaySec", opt(d.delay.map(f64::round))),
+                            ("lastTrip", ApiValue::Bool(d.last_trip)),
                         ])
                     })
                     .collect();
@@ -131,6 +189,24 @@ pub fn departures(by_key: &std::collections::HashMap<String, Vec<(String, String
             })
             .collect(),
     )
+}
+
+/// One departure of a stop for the pages (`omsi.getDepartures`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Departure {
+    pub line: String,
+    pub destination: String,
+    /// Departure as a timestamp ([`timestamp`]), delay included.
+    pub time: f64,
+    /// Stops the bus still has to call at up to this one (this one counted; 0 = standing
+    /// here). `None` while the bus is not on the road.
+    pub stops_away: Option<u32>,
+    /// How full the bus is (0..1 of its places) - only a bus whose passengers are simulated.
+    pub load: Option<f32>,
+    /// How late the bus runs (s), when it is on the road.
+    pub delay: Option<f64>,
+    /// The last departure of its line at this stop today.
+    pub last_trip: bool,
 }
 
 /// A value of the snapshot tree.
@@ -384,6 +460,10 @@ pub fn depot(h: &Hof) -> ApiValue {
                 ("code", ApiValue::Num(t.code as f64)),
                 ("id", ApiValue::Str(t.texture_id.clone())),
                 ("name", ApiValue::Str(t.menu_name())),
+                // the terminus strings as the depot file has them (`GetTerminusString`'s
+                // indices): a page that draws the destination sign itself finds the
+                // Krueger/K++ bitmap names (`{{folder\file.png*POLY}}`) here
+                ("strings", ApiValue::List(t.strings.iter().map(|s| ApiValue::Str(s.clone())).collect())),
             ])
         })
         .collect();
@@ -776,5 +856,41 @@ mod tests {
         assert_eq!(at(&s, "lights.indicator"), &ApiValue::Num(2.0));
         let h = snap(&[("lights_sw_warnblinker", 1.0)], &[]);
         assert_eq!(at(&h, "lights.hazard"), &ApiValue::Bool(true));
+    }
+
+    #[test]
+    fn departures_carry_stops_load_delay_and_last_trip() {
+        let mut by = std::collections::HashMap::new();
+        by.insert(
+            "harbor a".to_string(),
+            vec![
+                Departure { line: "221".into(), destination: "X".into(), time: 100.4, stops_away: Some(2), load: Some(0.456), delay: Some(95.6), last_trip: true },
+                Departure { line: "1".into(), destination: "Y".into(), time: 200.0, ..Default::default() },
+            ],
+        );
+        let v = departures(&by);
+        let l = match v.get("harbor a") { Some(ApiValue::List(l)) => l.clone(), _ => panic!() };
+        assert_eq!(l[0].get("stopsAway"), Some(&ApiValue::Num(2.0)));
+        assert_eq!(l[0].get("load"), Some(&ApiValue::Num(0.46)));
+        assert_eq!(l[0].get("delaySec"), Some(&ApiValue::Num(96.0)));
+        assert_eq!(l[0].get("lastTrip"), Some(&ApiValue::Bool(true)));
+        assert_eq!(l[1].get("stopsAway"), Some(&ApiValue::Null));
+        assert_eq!(l[1].get("load"), Some(&ApiValue::Null));
+        assert_eq!(l[1].get("lastTrip"), Some(&ApiValue::Bool(false)));
+    }
+
+    #[test]
+    fn the_weather_reaches_the_environment() {
+        let w = PageWeather { temperature: 14.0, abs_humidity: 6.0, visibility: 49999.9, clouds: "AddOn - Cumulus 7".into(), precip: (1.0, 127.5) };
+        // 14 °C holds about 12 g/m³: 6 g/m³ is half
+        assert!((w.relative_humidity() - 0.5).abs() < 0.03);
+        set_page_weather(w);
+        let env = environment(&SimClock::default(), "ko");
+        let x = env.get("weather").unwrap();
+        assert_eq!(x.get("temperature"), Some(&ApiValue::Num(14.0)));
+        assert_eq!(x.get("visibility"), Some(&ApiValue::Num(50000.0)));
+        assert_eq!(x.get("clouds"), Some(&ApiValue::Str("AddOn - Cumulus 7".into())));
+        assert_eq!(x.get("precip"), Some(&ApiValue::Num(1.0)));
+        assert_eq!(x.get("precipRate"), Some(&ApiValue::Num(0.5)));
     }
 }

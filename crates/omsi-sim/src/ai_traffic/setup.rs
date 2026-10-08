@@ -87,6 +87,7 @@ impl TrafficSim {
             root: root.to_path_buf(),
             held_at_red: 0,
             stop_wishes: None,
+            bus_loads: hashbrown::HashMap::new(),
             player_still: 0.0,
             day_time: 0.0,
             time_scale: 1.0,

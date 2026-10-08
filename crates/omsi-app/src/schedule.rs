@@ -144,7 +144,10 @@ impl Schedule {
         let now = clock.time;
         let mut boards = world.timetable_boards.lock();
         boards.clock = Some(clock.clone());
-        if self.sim.boards_fresh(now) || (boards.wanted.is_empty() && boards.wanted_names.is_empty()) {
+        // (a stop a page asks for anew is made at once, not up to a second later: the boards of
+        // the map's own displays may just have been made without it)
+        let new_name = boards.wanted_names.iter().any(|k| !boards.departures.contains_key(k));
+        if (self.sim.boards_fresh(now) && !new_name) || (boards.wanted.is_empty() && boards.wanted_names.is_empty()) {
             return;
         }
         let (wanted, wanted_names) = (boards.wanted.clone(), boards.wanted_names.clone());

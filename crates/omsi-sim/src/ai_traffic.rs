@@ -113,6 +113,8 @@ pub struct TrafficSim {
     /// aboard wants to get off, the stops where somebody waits. None without passengers:
     /// every bus then serves every stop.
     pub stop_wishes: Option<(hashbrown::HashSet<u64>, hashbrown::HashSet<i64>)>,
+    /// How full each timetable bus is (`PeopleSim::bus_loads`), for the departure displays.
+    pub bus_loads: hashbrown::HashMap<u64, f32>,
     /// Seconds the player's vehicle has been standing.
     pub player_still: f32,
     /// Time of day (seconds since midnight); light cycles and timetables run on it.

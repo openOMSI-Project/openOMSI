@@ -112,7 +112,7 @@ pub struct VehicleHost {
     pub html_requests: Vec<crate::htmltex::HtmlRequest>,
     /// The departures the game made for the stops the pages asked for (`omsi.getDepartures`),
     /// by key (trimmed, lower case): (line, destination, timestamp), soonest first.
-    pub html_departures: std::collections::HashMap<String, Vec<(String, String, f64)>>,
+    pub html_departures: std::collections::HashMap<String, Vec<crate::vehicle_api::Departure>>,
     /// Which board generation of the game `html_departures` is from.
     pub html_departures_gen: u64,
     /// The stops the pages asked departures for, taken by the game: the `MAX_HTML_DEPARTURE_STOPS`
