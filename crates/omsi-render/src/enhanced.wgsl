@@ -1169,8 +1169,10 @@ fn shade_enhanced(in: FsIn, puddle_weight: ptr<function, vec2<f32>>, capture: bo
         // white light map's, so it goes out with that map's variable (the busbar, the
         // lights) as the Omsi.exe stage does.
         let lm_gate = select(1.0, clamp(in.params2.x, 0.0, 1.0), material.params2.x > 0.5);
-        // (in the cab - a dashboard's LCD lit by a white map reads as a panel - it dims at night)
-        emit = emit + tex.rgb * enh.led.x * alpha * lm_gate * max(enh.exposure.z * 2.0, 0.8) * mix(1.0, display_dim(1.0), 1.0 - outside);
+        // (in the cab - a dashboard's LCD lit by a white map reads as a panel - it dims at night;
+        // not a page's destination sign (-3), which is read from the street through the windscreen)
+        let cab_dim = select(1.0 - outside, 0.0, material.emissive.w < -2.5);
+        emit = emit + tex.rgb * enh.led.x * alpha * lm_gate * max(enh.exposure.z * 2.0, 0.8) * mix(1.0, display_dim(1.0), cab_dim);
     } else if (material.emissive.w < -0.5) {
         // a display's text (see MaterialExtra::display)
         emit = emit + tex.rgb * 0.35 * max(enh.exposure.z * 2.0, 0.8) * display_dim(1.0);

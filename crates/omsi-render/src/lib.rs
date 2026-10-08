@@ -1045,6 +1045,10 @@ pub struct MaterialExtra {
     /// (Only a panel whose `[matl_lightmap]` is white all over: a flipdot carries the same
     /// mask, but its light map is a picture of the lamps over it, and it does not glow.)
     pub led: bool,
+    /// An LED panel drawn by a page (`[useHtmlTexture]`): a destination sign, made to be read
+    /// from the street, so it keeps its brightness at night even where it sits in the cab
+    /// (behind a coach's windscreen) - the cab's dimming at night is for the dashboard's LCDs.
+    pub led_sign: bool,
     /// The film of water on a window (`[alphascale] Rain_Window_…`): drawn as drops that sit,
     /// gather and run down the glass instead of the texture sliding down as a whole.
     pub rain_film: bool,
@@ -4286,7 +4290,7 @@ impl Renderer {
                     + if extra.transmap_declared || transmap.is_some() { 2.0 } else { 0.0 }
                     + if extra.metal_ok { 4.0 } else { 0.0 },
             ],
-            emissive: [emissive[0], emissive[1], emissive[2], if extra.rain_film { 2.0 } else if extra.glass { 1.0 } else if extra.led { -2.0 } else if extra.display { -1.0 } else { 0.0 }],
+            emissive: [emissive[0], emissive[1], emissive[2], if extra.rain_film { 2.0 } else if extra.glass { 1.0 } else if extra.led && extra.led_sign { -3.0 } else if extra.led { -2.0 } else if extra.display { -1.0 } else { 0.0 }],
             specular: extra.specular,
             bump: [
                 bump.map(|b| b.1).unwrap_or(0.0),
