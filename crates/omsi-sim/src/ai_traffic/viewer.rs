@@ -35,7 +35,47 @@ pub const NEAR_HIDE: f64 = 350.0;
 /// view (m): the mirrors look behind, and a car beside the view throws its shadow into it.
 pub const UNSEEN_NEAR: f64 = 80.0;
 
+/// How far above where a LAN player's vehicle stands their eye is taken to be (m): a
+/// driver's in a bus.
+pub const LAN_EYE_HEIGHT: f64 = 2.5;
+
 impl Viewer {
+    /// A LAN player's view as the host can tell it (host): from the driver's seat of their
+    /// vehicle at `pos`, facing its `heading` (degrees clockwise from north), as wide as the
+    /// view the population takes when it has no camera. Where they really look the host
+    /// does not know; within `NEAR_HIDE` that does not matter (see [`Viewer::hides`]).
+    pub fn lan_player(pos: DVec3, heading: f64) -> Viewer {
+        let h = heading.to_radians();
+        Viewer {
+            pos: pos + DVec3::Z * LAN_EYE_HEIGHT,
+            forward: DVec3::new(h.sin(), h.cos(), 0.0),
+            tan_x: 1.2,
+            tan_y: 0.6,
+            range: VISIBLE_RANGE,
+            min_size: 0.0,
+            max_dist: 0.0,
+            fov: 1.0,
+        }
+    }
+
+    /// Could nobody looking from here see a vehicle of radius `r` at `p` appear or vanish?
+    /// Never close by; within `NEAR_HIDE` only behind something (`occluded`: buildings or
+    /// the ground hide it from here), wherever the camera looks; further off beyond what is
+    /// drawn, out of the picture, or behind something.
+    pub fn hides(&self, p: DVec3, r: f64, occluded: impl FnOnce() -> bool) -> bool {
+        let d = (p - self.pos).length();
+        if d < NEVER_VANISH_WITHIN {
+            return false;
+        }
+        if !self.draws(d, r) {
+            return true;
+        }
+        if d < NEAR_HIDE {
+            return occluded();
+        }
+        !self.frames(p, r) || occluded()
+    }
+
     /// The view of a camera at `position` looking along `forward`, with a vertical field of
     /// view of `fov_deg` and its far plane at `far`, a picture `aspect` wide to high, in fog
     /// that hides everything beyond `fog_range`.
@@ -106,5 +146,127 @@ impl Viewer {
         let (x, y) = (rel.dot(right), rel.dot(up));
         x.abs() <= z * self.tan_x + r * (1.0 + self.tan_x * self.tan_x).sqrt()
             && y.abs() <= z * self.tan_y + r * (1.0 + self.tan_y * self.tan_y).sqrt()
+    }
+}
+
+impl TrafficSim {
+    /// Could neither the player nor any LAN player (`lan_eyes`, host) see a vehicle of
+    /// radius `r` at `p` appear or vanish? `occluded(v)`: buildings or the ground hide it
+    /// from `v`. Asked of the host's own camera alone, a dedicated server's (where the map
+    /// starts, kilometres from the players) saw nothing near them: cars came into being and
+    /// vanished in plain view of every player - beside a bus at a junction in Gladbeck seven
+    /// a minute appeared and five vanished within 150 m, the queue that had waited a minute
+    /// at the lights all at once.
+    pub fn unseen(&self, p: DVec3, r: f64, mut occluded: impl FnMut(&Viewer) -> bool) -> bool {
+        self.viewer
+            .map(|v| v.hides(p, r, || occluded(&v)))
+            .unwrap_or(true)
+            && self.lan_eyes.iter().all(|v| v.hides(p, r, || occluded(v)))
+    }
+
+    /// How far the nearest one looking (the player's camera or a LAN player's eye) is from
+    /// `p`, None when nobody looks.
+    pub fn nearest_eye(&self, p: DVec3) -> Option<f64> {
+        self.viewer
+            .iter()
+            .chain(self.lan_eyes.iter())
+            .map(|v| (p - v.pos).length())
+            .reduce(f64::min)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn camera(pos: DVec3, forward: DVec3) -> Viewer {
+        Viewer {
+            pos,
+            forward,
+            tan_x: 1.2,
+            tan_y: 0.6,
+            range: VISIBLE_RANGE,
+            min_size: 0.0,
+            max_dist: 0.0,
+            fov: 1.0,
+        }
+    }
+
+    #[test]
+    fn a_lan_player_looks_ahead_from_the_drivers_seat() {
+        let v = Viewer::lan_player(DVec3::new(100.0, 200.0, 30.0), 90.0);
+        assert!((v.pos - DVec3::new(100.0, 200.0, 30.0 + LAN_EYE_HEIGHT)).length() < 1e-9);
+        assert!(
+            (v.forward - DVec3::X).length() < 1e-9,
+            "east: {:?}",
+            v.forward
+        );
+        let north = Viewer::lan_player(DVec3::ZERO, 0.0);
+        assert!((north.forward - DVec3::Y).length() < 1e-9);
+    }
+
+    #[test]
+    fn a_lan_players_view_hides_only_what_they_cannot_see() {
+        let v = Viewer::lan_player(DVec3::ZERO, 0.0);
+        let open = || false;
+        let behind_a_house = || true;
+        // close by: never, behind something or not
+        assert!(!v.hides(DVec3::new(0.0, 100.0, 0.0), 2.5, behind_a_house));
+        assert!(!v.hides(DVec3::new(0.0, -100.0, 0.0), 2.5, behind_a_house));
+        // within NEAR_HIDE, wherever they look: only behind something
+        assert!(!v.hides(DVec3::new(0.0, -250.0, 0.0), 2.5, open));
+        assert!(v.hides(DVec3::new(0.0, -250.0, 0.0), 2.5, behind_a_house));
+        // further off: in the picture ahead only behind something, out of it or beyond the
+        // range always
+        assert!(!v.hides(DVec3::new(0.0, 500.0, 0.0), 2.5, open));
+        assert!(v.hides(DVec3::new(0.0, 500.0, 0.0), 2.5, behind_a_house));
+        assert!(v.hides(DVec3::new(0.0, -500.0, 0.0), 2.5, open));
+        assert!(v.hides(DVec3::new(0.0, VISIBLE_RANGE + 50.0, 0.0), 2.5, open));
+    }
+
+    #[test]
+    fn what_a_lan_player_sees_is_not_hidden_by_the_hosts_camera_far_away() {
+        let random = super::super::setup::RandomTypes {
+            types: Vec::new(),
+            groups: Vec::new(),
+            group_curves: false,
+            group_uvg: Vec::new(),
+            uvg_defaults: Vec::new(),
+        };
+        let mut t = TrafficSim::assemble(
+            Path::new("."),
+            Network::default(),
+            random,
+            Vec::new(),
+            HashMap::new(),
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+            (1.0, 0),
+            0,
+        );
+        // a dedicated server's camera, where the map starts, looking away
+        t.viewer = Some(camera(
+            DVec3::new(-2000.0, 0.0, 2.0),
+            DVec3::new(-1.0, 0.0, 0.0),
+        ));
+        let at_the_lights = DVec3::new(0.0, 80.0, 0.0);
+        let down_the_road = DVec3::new(0.0, 250.0, 0.0);
+        let open = |_: &Viewer| false;
+        // nobody else: the host's camera alone decides
+        assert!(t.unseen(at_the_lights, 2.5, open));
+        assert_eq!(
+            t.nearest_eye(at_the_lights).map(|d| d.round()),
+            Some(2002.0)
+        );
+        // a player's bus waits at the lights: what they see stays, behind a house it may go
+        t.lan_eyes = vec![Viewer::lan_player(DVec3::ZERO, 0.0)];
+        assert!(!t.unseen(at_the_lights, 2.5, open));
+        assert!(!t.unseen(down_the_road, 2.5, open));
+        let behind_a_house_from_the_bus = |v: &Viewer| v.pos.truncate().length() < 1.0;
+        assert!(t.unseen(down_the_road, 2.5, behind_a_house_from_the_bus));
+        assert_eq!(t.nearest_eye(at_the_lights).map(|d| d.round()), Some(80.0));
+        // and the host's own camera still counts where it looks
+        t.viewer = Some(camera(DVec3::new(0.0, -500.0, 2.0), DVec3::Y));
+        assert!(!t.unseen(down_the_road, 2.5, behind_a_house_from_the_bus));
     }
 }

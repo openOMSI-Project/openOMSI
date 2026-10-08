@@ -118,20 +118,10 @@ impl Traffic {
     /// the mirrors look back, and the head turns: buses appeared 160 m behind the player
     /// in plain sight of the mirrors, and a bus waiting at the edge of the loaded route
     /// vanished beside the player's bus because the camera was looking ahead. Further off:
-    /// beyond what is drawn, out of the picture, or behind something.
+    /// beyond what is drawn, out of the picture, or behind something (`Viewer::hides`). A
+    /// LAN host asks it of every other player's bus too (`TrafficSim::unseen`).
     pub fn hidden(&self, world: &World, p: DVec3, r: f64) -> bool {
-        let Some(v) = self.sim.viewer else { return true };
-        let d = (p - v.pos).length();
-        if d < NEVER_VANISH_WITHIN {
-            return false;
-        }
-        if !v.draws(d, r) {
-            return true;
-        }
-        if d < NEAR_HIDE {
-            return self.occluded(world, &v, p, r);
-        }
-        !v.frames(p, r) || self.occluded(world, &v, p, r)
+        self.sim.unseen(p, r, |v| self.occluded(world, v, p, r))
     }
 
     /// Spawn cars until `target` are within `spawn_radius` of `center`; despawn far ones.
@@ -212,7 +202,8 @@ impl Traffic {
                 && c.stopped > if c.is_bus() { 20.0 } else { 0.5 }
                 && c.state.route.is_empty()
                 && self.sim.net.lanes[c.state.lane].next.is_empty();
-            let from_eye = self.sim.viewer.map(|v| (p - v.pos).length()).unwrap_or(dist);
+            // (the other players of a LAN session look too)
+            let from_eye = self.sim.nearest_eye(p).unwrap_or(dist);
             // a timetable bus waiting where the loaded part of its route ends
             let at_edge = c.route_open()
                 && c.state.speed < 0.1

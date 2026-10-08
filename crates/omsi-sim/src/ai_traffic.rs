@@ -227,6 +227,9 @@ pub struct TrafficSim {
     pub count_near: Option<(DVec3, f64)>,
     /// LAN play: where the other players are (host): the traffic is kept around them too.
     pub lan_centers: Vec<DVec3>,
+    /// LAN play: where the other players look from (host): what they could see, the
+    /// population may not be seen doing either (see `TrafficSim::unseen`).
+    pub lan_eyes: Vec<Viewer>,
     /// Cars the last `tick` took off the road (their ids): their sounds and pictures are
     /// for the game to let go (see omsi-app's `Traffic::tick`).
     pub retired: Vec<u64>,
