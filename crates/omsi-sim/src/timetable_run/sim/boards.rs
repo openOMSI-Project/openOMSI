@@ -2,6 +2,23 @@
 
 use super::*;
 
+/// One timetable bus on the road, for outside tools (`telemetry` in `omsi-app`).
+pub struct AiBusRow {
+    pub id: u64,
+    pub line: String,
+    pub tour: String,
+    pub trip: String,
+    pub terminus: String,
+    pub depart: f64,
+    pub next_stop_id: Option<i64>,
+    pub at_stop: bool,
+    pub trip_done: bool,
+    pub delay_s: f64,
+    pub x: f64,
+    pub y: f64,
+    pub number: String,
+}
+
 impl ScheduleSim {
     /// The buses due at one bus stop (map object id) within the next two hours, unsorted, as
     /// (expected arrival, line, terminus, time it stands at the stop), all in seconds of the day:
@@ -250,6 +267,34 @@ impl ScheduleSim {
             .enumerate()
             .map(|(i, id)| self.station_name(trip, i, *id))
             .collect()
+    }
+
+    /// The timetable buses on the road (those a departure drives), for outside tools.
+    pub fn ai_bus_rows(&self, traffic: &TrafficSim) -> Vec<AiBusRow> {
+        let mut out = Vec::new();
+        for car in &traffic.cars {
+            let Some(&i) = self.car_departure.get(&car.id) else { continue };
+            let Some(b) = car.bus.as_ref() else { continue };
+            let d = &self.departures[i];
+            let trip = &self.data.trips[d.trip];
+            let pos = car.vehicle.position;
+            out.push(AiBusRow {
+                id: car.id,
+                line: self.display_line(i),
+                tour: d.tour.to_string(),
+                trip: trip.name.to_string(),
+                terminus: b.terminus.trim().to_string(),
+                depart: d.time,
+                next_stop_id: b.stops.front().map(|s| s.id),
+                at_stop: car.at_stop(),
+                trip_done: car.trip_done(),
+                delay_s: b.delay,
+                x: pos.x,
+                y: pos.y,
+                number: car.vehicle.str_var("number").trim().to_string(),
+            });
+        }
+        out
     }
 
     pub fn display_line(&self, i: usize) -> String {

@@ -68,6 +68,7 @@ mod schedule;
 mod schedule_paper;
 mod real_time;
 mod settings;
+mod telemetry;
 mod threads;
 mod tiles;
 mod traffic;

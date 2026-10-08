@@ -155,3 +155,26 @@ impl Schedule {
         boards.departures_gen = boards.departures_gen.wrapping_add(1);
     }
 }
+
+impl Schedule {
+    /// The timetable buses on the road, for outside tools (`telemetry`): line, tour, trip file,
+    /// next stop (map object), standing at it, delay, position and fleet number of each.
+    pub fn telemetry_ai(&self, traffic: Option<&crate::traffic::Traffic>) -> serde_json::Value {
+        let Some(t) = traffic else { return serde_json::Value::Array(Vec::new()) };
+        let list = self.sim.ai_bus_rows(&t.sim);
+        serde_json::Value::Array(list.into_iter().map(|b| serde_json::json!({
+            "id": b.id,
+            "line": b.line,
+            "tour": b.tour,
+            "trip": b.trip,
+            "terminus": b.terminus,
+            "depart": b.depart,
+            "next_stop_id": b.next_stop_id,
+            "at_stop": b.at_stop,
+            "trip_done": b.trip_done,
+            "delay_s": b.delay_s,
+            "x": b.x, "y": b.y,
+            "number": b.number,
+        })).collect())
+    }
+}
