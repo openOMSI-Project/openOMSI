@@ -68,6 +68,7 @@ _version: 2
 "The wheel eases after the cursor; off: it follows at once, as in OMSI":
   fr: "Le volant suit le curseur en douceur ; désactivé : il suit immédiatement, comme sur OMSI"
   ca: "El volant segueix el cursor suaument; desactivat: el segueix immediatament, com a OMSI"
+  de: "Das Lenkrad folgt der Maus verzörgert; Aus: Lenkrad folgt sofort, wie in OMSI"
   zh-tw: "方向盤會在游標之後平滑移動；關閉：方向盤會立即跟隨游標，如同 OMSI"
   pt: "O volante segue o cursor suavemente; desativado: segue imediatamente, como no OMSI"
   pt-pt: "O volante segue o cursor suavemente; desativado: segue-o imediatamente, como no OMSI"
@@ -81,7 +82,7 @@ _version: 2
 "Remove the current AI cars from the road; random traffic will return automatically.":
   fr: "Supprimer les véhicules IA actuels de la route, ainsi le trafic aléatoire reviendra automatiquement."
   ca: "Retira els cotxes d'IA de la carretera; el trànsit aleatori tornarà automàticament."
-  de: "Den aktuellen KI-Verkehr auf den Straßen löschen; Zufälliger Verkehr wird wieder automatisch generiert."
+  de: "Entfernt den aktuellen KI-Verkehr auf den Straßen; Zufälliger Verkehr wird wieder automatisch generiert."
   zh-tw: "從道路上移除目前的 AI 車輛；隨機交通會自動恢復。"
   pt: "Remover os carros de IA atuais da via; o tráfego aleatório voltará automaticamente."
   pt-pt: "Remover os carros de IA atuais da estrada; o tráfego aleatório regressará automaticamente."
@@ -95,7 +96,7 @@ _version: 2
 'Count me in the website''s "playing now" (anonymous)':
   fr: 'Me compter dans le compteur "joueurs en ligne" du site (anonyme)'
   ca: "Compta'm a «jugant ara» del web (anònim)"
-  de: 'Mich zu "Spielt aktuell" auf der Website dazuzählen (Anonym)'
+  de: 'Mich zu "Spielen aktuell" auf der Website dazuzählen (Anonym)'
   zh-tw: "將我計入網站的「目前遊玩人數」（匿名）"
   pt: 'Incluir-me no "jogando agora" do site (anônimo)'
   pt-pt: 'Incluir-me no "a jogar agora" do site (anónimo)'
@@ -137,7 +138,7 @@ _version: 2
 "Vibration fade-out":
   fr: "Atténuation de la vibration"
   ca: "Atenuació de la vibració"
-  de: ""
+  de: "Abschwächung Force Feedback"
   zh-tw: "震動淡出"
   pt: "Redução gradual da vibração"
   pt-pt: "Redução gradual da vibração"
@@ -221,7 +222,7 @@ _version: 2
 "The chat's texts on top of the interface size (also Ctrl + the mouse wheel over the chat)":
   fr: "Taille des textes du chat par rapport à la taille de l'interface (également Ctrl + molette sur le chat)"
   ca: "Mida del text del xat respecte de la interfície (també amb Ctrl i la roda del ratolí al xat)"
-  de: "Verhältnis der Größe der Chat-Nachrichten zur Benutzeroberfläche (auch mit Srtg + Mausrad über dem Chat)"
+  de: "Verhältnis der Größe von Chat-Nachrichten zur Benutzeroberfläche (auch mit Srtg + Mausrad über dem Chat)"
   zh-tw: "聊天文字相對於介面大小的比例（也可在聊天視窗上按住 Ctrl 滾動滑鼠滾輪）"
   pt: "Tamanho do texto do chat em relação ao tamanho da interface (também Ctrl + roda do mouse sobre o chat)"
   pt-pt: "Tamanho do texto do chat em relação ao tamanho da interface (também Ctrl + roda do rato sobre o chat)"
@@ -3931,6 +3932,7 @@ _version: 2
   tl: "Driving score (0 ang pinakamahusay)"
 "comfort":
   ca: "confort"
+  de: "Komfort"
   zh: "舒适度"
   zh-tw: "舒適度"
   fr: "confort"
@@ -3966,6 +3968,7 @@ _version: 2
 "runs":
   fr: "services"
   ca: "serveis"
+  de: "Fahrten"
   zh: "行车数"
   zh-tw: "運行次數"
   pt: "viagens"
@@ -22741,6 +22744,7 @@ _version: 2
 
 "Enables/Disables the Minimap":
   ca: "Activa o desactiva el minimapa"
+  de: "Aktiviert/Deaktiviert die Minikarte"
   pt: "Ativa/desativa o minimapa"
   pt-pt: "Ativa/desativa o minimapa"
   zh: "启用/禁用小地图"
@@ -22750,6 +22754,7 @@ _version: 2
 
 "Shows/hides the other (AI) vehicles on the Minimap and the city map":
   ca: "Mostra o amaga els altres vehicles (IA) al minimapa i al mapa de la ciutat"
+  de: "Zeitg/versteckt die anderen Fahrzeuge (KI) auf der Mini- und Stadtkarte"
   pt: "Mostra/oculta os outros veículos (IA) no minimapa e no mapa da cidade"
   pt-pt: "Mostra/oculta os outros veículos (IA) no minimapa e no mapa da cidade"
   zh: "显示/隐藏小地图和城市地图上的其他(AI)车辆"
@@ -22759,6 +22764,7 @@ _version: 2
 
 "Shows OMSI 2's route arrows over the road":
   ca: "Mostra les fletxes de ruta d'OMSI 2 sobre la carretera"
+  de: "Zeigt OMSI's Routenpfeile über der Straße"
   pt: "Mostra as setas de rota do OMSI 2 sobre a via"
   pt-pt: "Mostra as setas de rota do OMSI 2 sobre a via"
   zh: "在路面上显示 OMSI 2 的路线箭头"
@@ -24429,7 +24435,6 @@ _version: 2
   pl: "mówi"
   zh: "正在说话"
   zh-tw: "說話中"
-
   pt: "falando"
   pt-pt: "a falar"
 "radio":
@@ -24445,20 +24450,21 @@ _version: 2
   ca: "ràdio"
 "Beige":
   ca: "Beix"
+  de: "Beige"
   fr: "Beige"
   zh-tw: "淺褐色"
-
   pt: "Bege"
   pt-pt: "Bege"
 "Brightness":
   ca: "Lluminositat"
+  de: "Helligkeit"
   fr: "Luminosité"
   zh-tw: "亮度"
-
   pt: "Brilho"
   pt-pt: "Brilho"
 "Brightness of the custom weather lighting.":
   ca: "Lluminositat de la il·luminació del temps personalitzat."
+  de: "Helligkeit der Beleuchtung des benutzerdefinierten Wetters"
   zh-tw: "自訂天氣照明的亮度。"
   fr: "Luminosité de l'éclairage météorologique personnalisé."
 
@@ -24466,30 +24472,35 @@ _version: 2
   pt-pt: "Brilho da iluminação da meteorologia personalizada."
 "Broken":
   ca: "Núvols abundants"
+  de: "Aufgebrochen"
   zh-tw: "破碎雲層"
   fr: "Nuages épars"
   pt: "Quebrado"
   pt-pt: "Avariado"
 "Change the current depot file (used for the timetable)":
   ca: "Canvia el fitxer de cotxeres actual (utilitzat per als horaris)"
+  de: "Aktuelle Depot-/Hofdatei ändern (wird für den Fahrplan genutzt)"
   zh-tw: "變更目前使用於時刻表的車庫檔案"
   fr: "Changer le fichier de dépôt actuel (utilisé pour l'horaire)"
   pt: "Alterar o arquivo da garagem atual (usado pela tabela horária)"
   pt-pt: "Alterar o ficheiro da garagem atual (usado pelo horário)"
 "Change the current destination":
   ca: "Canvia la destinació actual"
+  de: "Aktuelles Ziel ändern"
   zh-tw: "更改目前目的地"
   fr: "Changer la destination actuelle"
   pt: "Alterar o destino atual"
   pt-pt: "Alterar o destino atual"
 "Change the current driver profile":
   ca: "Canvia el perfil de conductor actual"
+  de: "Das aktuelle Fahrerprofil ändern"
   zh-tw: "變更目前的駕駛員設定檔"
   fr: "Changer le profil de conducteur actuel"
   pt: "Alterar o perfil de motorista atual"
   pt-pt: "Alterar o perfil de condutor atual"
 "Change the vehicle's current fleet number":
   ca: "Canvia el número de flota actual del vehicle"
+  de: "Die aktuelle Wagennummer ändern"
   zh-tw: "更改車輛當前的車隊號碼"
   fr: "Changer le numéro de parc actuel du véhicule"
   pt: "Alterar o número de frota atual do veículo"
@@ -24502,92 +24513,98 @@ _version: 2
   pt-pt: "Largura combinada das duas molduras adjacentes"
 "Cumulus 1":
   ca: "Cúmuls 1"
+  de: "Cumulus 1"
   zh-tw: "積雲 1"
   fr: "Cumulus 1"
   pt: "Cumulus 1"
   pt-pt: "Cumulus 1"
 "Cumulus 2":
   ca: "Cúmuls 2"
+  de: "Cumulus 2"
   zh-tw: "積雲 2"
   fr: "Cumulus 2"
   pt: "Cumulus 2"
   pt-pt: "Cumulus 2"
 "Cumulus 3":
   ca: "Cúmuls 3"
+  de: "Cumulus 3"
   zh-tw: "積雲 3"
   fr: "Cumulus 3"
   pt: "Cumulus 3"
   pt-pt: "Cumulus 3"
 "Changes every 25-60 minutes, as the month allows":
   ca: "Canvia cada 25-60 minuts, segons el mes"
+  de: "Ändert sich alle 25-60 Minuten, je nachdem wie der Monat es zulässt"
   fr: "Change toutes les 25 à 60 minutes, selon le mois"
   zh-tw: "每 25 至 60 分鐘變更一次，視月份而定"
-
   pt: "Muda a cada 25–60 minutos, conforme o mês permite"
   pt-pt: "Muda a cada 25–60 minutos, conforme o mês permite"
 "Choose a weather preset":
   ca: "Tria un temps predefinit"
+  de: "Vordefiniertes Wetter auswählen"
   fr: "Choisissez une météo prédéfinie"
   zh-tw: "選擇天氣預設"
-
   pt: "Escolher uma predefinição de clima"
   pt-pt: "Escolher uma predefinição de meteorologia"
 "Cloud type":
   ca: "Tipus de núvols"
+  de: "Wolkenart"
   fr: "Type de nuages"
   zh-tw: "雲層類型"
-
   pt: "Tipo de nuvem"
   pt-pt: "Tipo de nuvem"
 "Continue where you left off on this map":
   ca: "Continua on ho vas deixar en aquest mapa"
+  de: "Fortsetzen wo Sie auf der Karte aufgehört haben"
   fr: "Reprendre là où vous vous étiez arrêté sur cette carte"
   zh-tw: "繼續此地圖上次離開的位置"
-
   pt: "Continuar de onde você parou neste mapa"
   pt-pt: "Continuar de onde ficou neste mapa"
 "Custom weather":
   ca: "Personalitzat"
+  de: "Benutzerdefiniert"
   fr: "Météo personnalisée"
   zh-tw: "自訂天氣"
-
   pt: "Clima personalizado"
   pt-pt: "Meteorologia personalizada"
 "Depot file (HOF)":
   ca: "Fitxer de cotxeres (HOF)"
+  de: "Depot-/Hofdatei (HOF)"
   zh-tw: "HOF 文件"
   fr: "Fichier girouettes (HOF)"
   pt: "Arquivo da garagem (HOF)"
   pt-pt: "Ficheiro da garagem (HOF)"
 "Destination display":
   ca: "Rètol de destinació"
+  de: "Zielanzeige"
   zh-tw: "目的地顯示"
   fr: "Système d'information voyageurs"
   pt: "Letreiro de destino"
   pt-pt: "Indicador de destino"
 "Edit selected weather as custom":
   ca: "Edita el temps seleccionat com a personalitzat"
+  de: "Ausgewähltes Wetter als benutzerdefiniert bearbeiten"
   fr: "Modifier la météo choisie en météo personnalisée"
   zh-tw: "將選定天氣編輯為自訂天氣"
-
   pt: "Editar o clima selecionado como personalizado"
   pt-pt: "Editar a meteorologia selecionada como personalizada"
 "Free driving: the bus starts where you chose, with the traffic and the timetable's buses around it, but no line of your own. Pick the place below or click an entry point on the map.":
   ca: "Conducció lliure: l'autobús comença on has triat, amb el trànsit i els autobusos programats al voltant, però sense línia pròpia. Tria el lloc a sota o clica un punt d'entrada al mapa."
+  de: "Freies Fahren: Der Bus startet am ausgewählten Ort, mit Verkehr und anderen Bussen aus dem Fahrplan in der Umgebung, jedoch ohne festgelegte Linie. Wählen Sie unten einen Ort oder klicken Sie auf einen Punkt auf der Karte."
   fr: "Conduite libre : le bus part où vous l'avez choisi, avec la circulation et les bus de l'horaire autour, mais sans ligne à vous. Choisissez l'endroit ci-dessous ou cliquez sur un point d'entrée de la carte."
   zh-tw: "自由駕駛：巴士從你選擇的位置出發，周圍有交通和時刻表巴士，但沒有自己的路線。請選擇下方位置，或點選地圖上的入口點。"
-
   pt: "Direção livre: o ônibus começa onde você escolheu, com o trânsito e os ônibus do horário ao redor, mas sem uma linha própria. Escolha o local abaixo ou clique em um ponto de entrada no mapa."
   pt-pt: "Condução livre: o autocarro começa onde escolheu, com o trânsito e os autocarros do horário à volta, mas sem uma linha própria. Escolha o local abaixo ou clique num ponto de entrada no mapa."
 "Humidity":
   ca: "Humitat"
+  de: "Luftfeuchtigkeit"
   fr: "Humidité"
   zh-tw: "濕度"
-
   pt: "Umidade"
   pt-pt: "Humidade"
 "Indicators cancel themselves":
   ca: "Els intermitents s'apaguen automàticament"
+  de: "Blinker schlaten sich selbst ab"
   zh-tw: "指標自行取消"
   fr: "Les clignotants s'éteignent automatiquement"
 
@@ -24609,9 +24626,9 @@ _version: 2
   pt-pt: "Pintura"
 "Precipitation intensity":
   ca: "Intensitat de la precipitació"
+  de: "Niderschlagsintensität"
   fr: "Intensité des précipitations"
   zh-tw: "降水強度"
-
   pt: "Intensidade da precipitação"
   pt-pt: "Intensidade da precipitação"
 "Put the roadbook away (the button on the map brings it back)":
@@ -24623,36 +24640,37 @@ _version: 2
   pt-pt: "Ocultar o itinerário (o botão no mapa volta a mostrá-lo)"
 "Road wetness":
   ca: "Humitat de la carretera"
+  de: "Fahrbahnnässe"
   fr: "Humidité de la route"
   zh-tw: "路面濕度"
-
   pt: "Umidade da pista"
   pt-pt: "Humidade da estrada"
 "Set visibility, wind, clouds, rain, temperature and road state":
   ca: "Ajusta la visibilitat, el vent, els núvols, la pluja, la temperatura i l'estat de la carretera"
+  de: "Einstellen von Sichtweite, Wind, Regen, Temperatur und Straßenzustand"
   fr: "Réglez la visibilité, le vent, les nuages, la pluie, la température et l'état de la route"
   zh-tw: "設定能見度、風、雲、雨、溫度和路況"
-
   pt: "Ajustar visibilidade, vento, nuvens, chuva, temperatura e estado da pista"
   pt-pt: "Ajustar visibilidade, vento, nuvens, chuva, temperatura e estado da estrada"
 "Snow cover":
   ca: "Capa de neu"
+  de: "Schneedecke"
   fr: "Couverture neigeuse"
   zh-tw: "積雪覆蓋"
-
   pt: "Cobertura de neve"
   pt-pt: "Cobertura de neve"
 "Snow lying on the world and ground.":
   ca: "Neu acumulada al món i al terra."
+  de: "Schnee der in der Welt und auf dem Boden liegt."
   zh-tw: "世界與地面的積雪。"
   fr: "Neige recouvrant le monde et le sol."
   pt: "Neve acumulada no cenário e no solo."
   pt-pt: "Neve acumulada no cenário e no solo."
 "Snow on road":
   ca: "Neu a la carretera"
+  de: "Schnee auf der Straße"
   fr: "Neige sur la route"
   zh-tw: "路面積雪"
-
   pt: "Neve na pista"
   pt-pt: "Neve na estrada"
 "The trips of the chosen tour, where they call, and what to type into the IBIS":
@@ -24664,48 +24682,46 @@ _version: 2
   pt-pt: "As viagens da escala escolhida, as suas paragens e o que introduzir no IBIS"
 "Where the bus is put down. The orange marks on the map are the same places: click one to take it.":
   ca: "On es col·loca l'autobús. Les marques taronges del mapa són els mateixos llocs: clica'n una per triar-la."
+  de: "Ort wo der Bus platziert wird. Die orangenen Markierungen auf der Karte sind die gleichen: Klicken zum Auswählen."
   fr: "L'endroit où le bus est posé. Les repères orange sur la carte sont les mêmes endroits : cliquez sur l'un d'eux pour le choisir."
   zh-tw: "巴士放置的位置。地圖上的橙色標記是相同位置；點選其中一個即可前往。"
-
   pt: "Onde o ônibus será colocado. As marcas laranja no mapa são os mesmos locais: clique em uma para escolhê-lo."
   pt-pt: "Onde o autocarro será colocado. As marcas laranja no mapa são os mesmos locais: clique numa para escolhê-lo."
 "Depot":
   ca: "Cotxeres"
+  de: "Depot"
   fr: "Dépôt"
   zh-tw: "車庫"
-
   pt: "Garagem"
   pt-pt: "Garagem"
 "Station":
   ca: "Estació"
+  de: "Haltestelle"
   fr: "Gare"
   zh-tw: "車站"
-
   pt: "Estação"
   pt-pt: "Estação"
 "The launcher rests while a game runs":
   ca: "El launcher queda en repòs mentre hi ha una partida en marxa"
   fr: "Le lanceur se met en arrière plan pendant une partie"
   zh-tw: "啟動器在遊戲執行時暫停"
-
   pt: "O launcher fica em repouso enquanto o jogo está em execução"
   pt-pt: "O launcher fica em repouso enquanto o jogo está em execução"
 "The launcher rests while you drive, so that the game has the graphics card to itself. It is back as soon as the game ends.":
   ca: "El launcher queda en repòs mentre condueixes perquè el joc tingui la targeta gràfica en exclusiva. Es reprèn tan bon punt acaba la partida."
   fr: "Le lanceur se met en arrière plan pendant que vous conduisez, pour dédier la carte graphique au moteur de jeu. Il se rétablit dès la fin de la partie."
   zh-tw: "駕駛時啟動器會暫停，讓遊戲獨佔顯示卡；遊戲結束後啟動器會立即恢復。"
-
   pt: "O launcher fica em repouso enquanto você dirige, para deixar a placa de vídeo só para o jogo. Ele volta assim que o jogo termina."
   pt-pt: "O launcher fica em repouso enquanto conduz, para deixar a placa gráfica só para o jogo. Volta assim que o jogo termina."
 "A right click ends the mouse steering (as in OMSI)":
   ca: "Un clic dret desactiva la direcció amb ratolí (com a OMSI)"
   fr: "Un clic droit arrête la direction à la souris (comme sur OMSI)"
   zh-tw: "按一下滑鼠右鍵即可停止滑鼠轉向（與 OMSI 相同）"
-
   pt: "Um clique com o botão direito encerra a direção pelo mouse (como no OMSI)"
   pt-pt: "Um clique com o botão direito termina a direção pelo rato (como no OMSI)"
 "Applies a graphics profile saved in the launcher":
   ca: "Aplica un perfil gràfic desat al launcher"
+  de: "Gespeichertes Grafikprofil aus Launcher anweden"
   zh-tw: "應用啟動器中儲存的圖形設定文件"
   fr: "Applique un profil graphique enregistré dans le lanceur"
 
@@ -24713,6 +24729,7 @@ _version: 2
   pt-pt: "Aplica um perfil gráfico guardado no launcher"
 "As in OMSI; off: the right button only looks round":
   ca: "Com a OMSI; desactivat: el botó dret només gira la vista"
+  de: "Wie in OMSI; aus: nur rechte Maustaste zum Umschauen"
   zh-tw: "與 OMSI 相同；關閉時右鍵僅用於環視"
   fr: "Comme sur OMSI ; désactivé : le bouton droit ne fait que tourner la vue"
 
@@ -24720,6 +24737,7 @@ _version: 2
   pt-pt: "Como no OMSI; desativado: o botão direito apenas olha em redor"
 "Automated manual gearbox":
   ca: "Canvi manual automatitzat"
+  de: "Automatisiertes manuelles Getriebe"
   zh-tw: "自動手排變速箱"
   fr: "Boîte de vitesses manuelle automatisée"
 
@@ -24727,6 +24745,7 @@ _version: 2
   pt-pt: "Caixa de velocidades manual automatizada"
 "Borderless across three equal monitors in one horizontal row; restart required":
   ca: "Sense vores en tres monitors iguals alineats horitzontalment; cal reiniciar"
+  de: "Randlos über drei horizontal nebeneinander angeordnete gleiche Bildschirme; erfordert Neustart"
   zh-tw: "在水平排中的三個相等的顯示器上無邊框；需要重新啟動"
   fr: "Sans bordures sur trois moniteurs identiques alignés horizontalement ; redémarrage requis"
 
@@ -24748,12 +24767,14 @@ _version: 2
   pt-pt: "As duas molduras em cada junção"
 "Bottom left":
   ca: "Inferior esquerra"
+  de: "Unten links"
   zh-tw: "左下角"
   fr: "En bas à gauche"
   pt: "Inferior esquerdo"
   pt-pt: "Inferior esquerdo"
 "Bottom right":
   ca: "Inferior dreta"
+  de: "Unten rechts"
   zh-tw: "右下角"
   fr: "En bas à droite"
   pt: "Inferior direito"
@@ -24767,26 +24788,28 @@ _version: 2
   pt-pt: "Cabina e exterior, uma tecla"
 "Custom controls":
   ca: "Controls personalitzats"
+  de: "Benutzerdefinierte Steuerung"
   fr: "Commandes personnalisées"
   zh-tw: "自訂控制"
-
   pt: "Controles personalizados"
   pt-pt: "Controlos personalizados"
 "Discord Rich Presence":
   ca: "Presència enriquida a Discord"
+  de: "Discord Status (Rich Presence)"
   fr: "Statut Discord (Rich Presence)"
   zh-tw: "Discord 狀態顯示"
-
   pt: "Discord Rich Presence"
   pt-pt: "Discord Rich Presence"
 "Display and driver":
   ca: "Pantalla i controlador"
+  de: "Anzeige und Treiber"
   zh-tw: "顯示與駕駛"
   fr: "Affichage et pilotes"
   pt: "Exibição e motorista"
   pt-pt: "Ecrã e condutor"
 "Display and memory":
   ca: "Pantalla i memòria"
+  de: "Anzeige und Speicher"
   zh-tw: "顯示與記憶體"
   fr: "Affichage"
 
@@ -24794,12 +24817,14 @@ _version: 2
   pt-pt: "Ecrã e memória"
 "Edit current":
   ca: "Edita l'actual"
+  de: "Aktuelles bearbeiten"
   zh-tw: "編輯目前天氣"
   fr: "Modifier l'actuel"
   pt: "Editar atual"
   pt-pt: "Editar atual"
 "Enter any 4-letter ICAO station.":
   ca: "Introdueix qualsevol estació ICAO de 4 lletres."
+  de: "Beliebige 4 zeichen lange ICAO Station eintragen"
   zh-tw: "輸入任 4 個字母的 ICAO 電台。"
   fr: "Entrez n'importe quelle station ICAO à 4 lettres."
   pt: "Digite qualquer estação ICAO de 4 letras."
@@ -24879,6 +24904,7 @@ _version: 2
   pt-pt: "Consultar novamente a estação selecionada sem esperar pela próxima atualização automática."
 "Few clouds":
   ca: "Pocs núvols"
+  de: "Wenig Wolken"
   zh-tw: "少雲"
   fr: "Peu de nuages"
   pt: "Poucas nuvens"
@@ -24897,54 +24923,56 @@ _version: 2
   pt-pt: "Máximo de fotogramas por segundo"
 "Freeze the weather currently in force and edit it as a custom weather.":
   ca: "Fixa el temps actual i edita'l com a temps personalitzat."
+  de: "Aktuelles Wetter einfrieren und als benutzerdefiniertes Wetter bearbeiten"
   zh-tw: "凍結當前有效的天氣並將其編輯為自訂天氣。"
   fr: "Geler la météo actuellement en vigueur et la modifier en tant que météo personnalisée."
   pt: "Congelar o clima atual e editá-lo como clima personalizado."
   pt-pt: "Congelar a meteorologia atual e editá-la como meteorologia personalizada."
 "Gear 1 (H-pattern)":
   ca: "Marxa 1 (canvi en H)"
+  de: "Gang R (H-Schaltung)"
   fr: "Rapport 1 (grille en H)"
   zh-tw: "1 檔（H 型）"
-
   pt: "Marcha 1 (padrão H)"
   pt-pt: "1.ª velocidade (padrão H)"
 "Gear R (H-pattern)":
   ca: "Marxa R (canvi en H)"
+  de: "Gang R (H-Schaltung)"
   fr: "Marche arrière (grille en H)"
   zh-tw: "R 檔（H 型）"
-
   pt: "Ré (padrão H)"
   pt-pt: "Marcha-atrás (padrão H)"
 "Gear down (manual gearbox)":
   ca: "Baixa una marxa (canvi manual)"
+  de: "Gang runterschalten (manuelles Getriebe)"
   fr: "Rétrograder (boîte manuelle)"
   zh-tw: "降檔（手排變速箱）"
-
   pt: "Reduzir marcha (câmbio manual)"
   pt-pt: "Reduzir mudança (caixa manual)"
 "Gear up (manual gearbox)":
   ca: "Puja una marxa (canvi manual)"
+  de: "Gang hochschalten (manuelles Getriebe)"
   fr: "Monter un rapport (boîte manuelle)"
   zh-tw: "升檔（手排變速箱）"
-
   pt: "Aumentar marcha (câmbio manual)"
   pt-pt: "Subir mudança (caixa manual)"
 "HUD on centre screen":
   ca: "HUD a la pantalla central"
+  de: "HUD auf mittlerem Bildschirm"
   fr: "HUD sur l'écran central"
   zh-tw: "中央螢幕上的 HUD"
-
   pt: "HUD na tela central"
   pt-pt: "HUD no ecrã central"
 "Indicators cancel themselves (as the bus's script does)":
   ca: "Els intermitents s'apaguen automàticament (segons l'script de l'autobús)"
+  de: "Blinker schalten sich selbst aus (entprechend dem Bus-Skript)"
   fr: "Les clignotants s'arrêtent seuls (comme le fait le script du bus)"
   zh-tw: "指示器自行取消（就像總線的腳本一樣）"
-
   pt: "As setas desligam automaticamente (como o script do ônibus faz)"
   pt-pt: "Os piscas desligam-se automaticamente (como o script do autocarro faz)"
 "Interface":
   ca: "Interfície"
+  de: "Benutzeroberfläche"
   zh-tw: "介面"
   fr: "Interface"
   pt: "Interface"
@@ -24957,6 +24985,7 @@ _version: 2
   pt-pt: "Ângulo para dentro em relação a uma fila plana"
 "Keep the navigator, menus and information on the centre screen":
   ca: "Mantén el navegador, els menús i la informació a la pantalla central"
+  de: "Minikarte, Menüs und Informationen auf dem mittleren Bildschirm behalten"
   zh-tw: "將導航器、選單和資訊保留在中央螢幕上"
   fr: "Maintenir le navigateur, les menus et les informations sur l'écran central"
   pt: "Manter o navegador, os menus e as informações na tela central"
@@ -24977,43 +25006,49 @@ _version: 2
   pt-pt: "Ângulo do ecrã esquerdo para dentro"
 "Load graphics profile":
   ca: "Carrega un perfil gràfic"
+  de: "Grafikprofil laden"
   zh-tw: "載入圖形設定檔"
   fr: "Charger un profil graphique"
   pt: "Carregar perfil gráfico"
   pt-pt: "Carregar perfil gráfico"
 "Load once":
   ca: "Carrega un cop"
+  de: "Einmal laden"
   zh-tw: "載入一次"
   fr: "Charger une fois"
   pt: "Carregar uma vez"
   pt-pt: "Carregar uma vez"
 "Load the selected station once without enabling continuous METAR sync.":
   ca: "Consulta l'estació seleccionada un cop sense activar la sincronització METAR contínua."
+  de: "Ausgewählte Station einmal laden ohne kontinuierliche METAR Aktualisierung zu aktivieren"
   zh-tw: "載入所選電台一次，無需啟用連續 METAR 同步。"
   fr: "Charger la station sélectionnée une fois sans activer la synchronisation METAR continue."
   pt: "Carregar a estação selecionada uma vez sem ativar a sincronização METAR contínua."
   pt-pt: "Carregar a estação selecionada uma vez sem ativar a sincronização METAR contínua."
 "METAR report":
   ca: "Informe METAR"
+  de: "METAR Bericht"
   zh-tw: "METAR 報告"
   fr: "Rapport METAR"
   pt: "Relatório METAR"
   pt-pt: "Relatório METAR"
 "Morning":
   ca: "Matí"
+  de: "Morgen"
   zh-tw: "早上"
   fr: "Matin"
   pt: "Manhã"
   pt-pt: "Manhã"
 "Mouse look sensitivity":
   ca: "Sensibilitat de la vista amb ratolí"
+  de: "Empfindlichkeit des Umsehens mit der Maus"
   fr: "Sensibilité de la vue à la souris"
   zh-tw: "滑鼠環視靈敏度"
-
   pt: "Sensibilidade da visão com o mouse"
   pt-pt: "Sensibilidade da visão com o rato"
 "Night":
   ca: "Nit"
+  de: "Nacht"
   zh-tw: "夜間"
   fr: "Nuit"
   pt: "Noite"
@@ -25031,6 +25066,7 @@ _version: 2
   ca: "Multijugador: ràdio del bus (mantenir)"
 "Multiplayer: write in the chat":
   ca: "Multijugador: escriu al xat"
+  de: "Mehrspieler: Schreibe im Chat"
   fr: "Multijoueur : écrire dans le chat"
   zh-tw: "多人遊戲：在聊天中輸入文字"
 
@@ -25038,51 +25074,56 @@ _version: 2
   pt-pt: "Multijogador: escrever no chat"
 "No saved profiles":
   ca: "Sense perfils desats"
+  de: "Keine gespeicherten Profile"
   fr: "Aucun profil enregistré"
   zh-tw: "沒有儲存的設定檔"
-
   pt: "Nenhum perfil salvo"
   pt-pt: "Nenhum perfil guardado"
 "Noon":
   ca: "Migdia"
+  de: "Mittag"
   zh-tw: "中午"
   fr: "Midi"
   pt: "Meio-dia"
   pt-pt: "Meio-dia"
 "None":
   ca: "Cap"
+  de: "Keine"
   fr: "Aucun"
   zh-tw: "無"
-
   pt: "Nenhum"
   pt-pt: "Nenhum"
 "Profiles":
   ca: "Perfils"
+  de: "Profile"
   fr: "Profils"
   zh-tw: "設定檔"
-
   pt: "Perfis"
   pt-pt: "Perfis"
 "Put another vehicle in this one's place and drive it":
   ca: "Posa un altre vehicle en lloc d'aquest i condueix-lo"
+  de: "Neues Fahrzeug anstelle von aktuellem nutzen und fahren"
   zh-tw: "將另一輛車放在這輛車的位置並駕駛它"
   fr: "Mettre un autre véhicule à la place de celui-ci et le conduire"
   pt: "Colocar outro veículo no lugar deste e dirigi-lo"
   pt-pt: "Colocar outro veículo no lugar deste e conduzi-lo"
 "Rain":
   ca: "Pluja"
+  de: "Regen"
   zh-tw: "雨天"
   fr: "Pluie"
   pt: "Chuva"
   pt-pt: "Chuva"
 "Read the vehicle's files again (.bus, model and sound configuration, scripts) and drive it from here":
   ca: "Torna a llegir els fitxers del vehicle (.bus, configuració del model i del so, scripts) i condueix-lo des d'aquí"
+  de: "Fahrzeugdateien erneut lesen (.bus, Modell- und Geräusch-Konfiguration, Skripte) und von hier aus fahren"
   zh-tw: "再次讀取車輛的檔案（.bus、模型和聲音配置、腳本）並從這裡駕駛它"
   fr: "Relire les fichiers du véhicule (.bus, configuration du modèle et du son, scripts) et le conduire à partir d'ici"
   pt: "Ler novamente os arquivos do veículo (.bus, configuração de modelo e som, scripts) e dirigi-lo daqui"
   pt-pt: "Ler novamente os ficheiros do veículo (.bus, configuração de modelo e som, scripts) e conduzi-lo a partir daqui"
 "Refresh now":
   ca: "Actualitza ara"
+  de: "Jetzt aktualisieren"
   zh-tw: "立即重新整理"
   fr: "Actualiser maintenant"
   pt: "Atualizar agora"
@@ -25095,6 +25136,7 @@ _version: 2
   pt-pt: "Humidade relativa do ar."
 "Reload":
   ca: "Recarrega"
+  de: "Neu laden"
   zh-tw: "重新載入"
   fr: "Recharger"
   pt: "Recarregar"
@@ -25120,6 +25162,7 @@ _version: 2
   pt-pt: "Ângulo do ecrã direito para dentro"
 "Scattered":
   ca: "Núvols dispersos"
+  de: "Vereinzelnt"
   zh-tw: "散佈雲層"
   fr: "Épars"
   pt: "Nuvens dispersas"
@@ -25132,18 +25175,21 @@ _version: 2
   pt-pt: "Serviço"
 "Sets most of the graphics options at once":
   ca: "Estableix la majoria d'opcions gràfiques alhora"
+  de: "Setzt die meisten Grafikeinstellungen auf einmal"
   zh-tw: "一次設定大部分圖形選項"
   fr: "Définit la plupart des options graphiques d'un coup"
   pt: "Define a maioria das opções gráficas de uma vez"
   pt-pt: "Define a maioria das opções gráficas de uma só vez"
 "Shift a manual gearbox's gears for you by the engine speed":
   ca: "Canvia automàticament les marxes d'un canvi manual segons el règim del motor"
+  de: "Schaltet bei manuellen Getrieben automatisch die Gänge anhand der Motordrehzal"
   zh-tw: "根據引擎轉速為您換檔手排變速箱"
   fr: "Change les vitesses d'une boîte manuelle pour vous en fonction de la vitesse du moteur"
   pt: "Troca as marchas de um câmbio manual por você conforme a rotação do motor"
   pt-pt: "Muda as velocidades de uma caixa manual por si conforme a rotação do motor"
 "Shows the launcher or your map, bus, line and multiplayer status in Discord.":
   ca: "Mostra el launcher o el mapa, l'autobús, la línia i l'estat multijugador a Discord."
+  de: "Zeigt den Launcher oder Karten-, Bus-, Linien- und Mehrspieler-Status auf Discord."
   fr: "Affiche dans Discord le lanceur ou votre carte, votre bus, votre ligne et votre statut multijoueur."
   zh-tw: "在 Discord 中顯示啟動器或您的地圖、巴士、線路和多人遊戲狀態。"
 
@@ -25151,12 +25197,14 @@ _version: 2
   pt-pt: "Mostra no Discord o launcher ou o estado do seu mapa, autocarro, linha e multijogador."
 "Snow":
   ca: "Neu"
+  de: "Schnee"
   zh-tw: "雪天"
   fr: "Neige"
   pt: "Neve"
   pt-pt: "Neve"
 "Span three monitors at startup":
   ca: "Ocupa tres monitors en iniciar"
+  de: "Über drei Monitore beim Start strecken"
   fr: "Couvrir les trois écrans au démarrage"
   zh-tw: "啟動時跨三個顯示器"
 
@@ -25164,18 +25212,21 @@ _version: 2
   pt-pt: "Usar três monitores no arranque"
 "Swap":
   ca: "Substitueix"
+  de: Tauschen
   zh-tw: "交換"
   fr: "Échanger"
   pt: "Trocar"
   pt-pt: "Trocar"
 "Swap for another vehicle":
   ca: "Substitueix per un altre vehicle"
+  de: "Mit anderem Fahrzug tauschen"
   zh-tw: "換成另一輛車"
   fr: "Échanger contre un autre véhicule"
   pt: "Trocar por outro veículo"
   pt-pt: "Trocar por outro veículo"
 "Takes effect when the game starts the next time":
   ca: "S'aplica la propera vegada que s'inicia el joc"
+  de: "Gilt ab dem nächsten Spielstart"
   zh-tw: "下次遊戲開始時生效"
   fr: "Prend effet lors du prochain démarrage du jeu"
   pt: "Entra em vigor na próxima vez que o jogo iniciar"
