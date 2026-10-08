@@ -38,10 +38,14 @@ Players reach it two ways:
   once the game has joined. With an `admin_password` it also takes `POST /admin`
   from the machine itself: one admin command a line (`clock 30600`, `weather set
   Weather/#CAVOK.owt`, `say …`, `kick 3`, as the Administration menu sends them), the
-  password in `X-Admin-Password`; five wrong ones in two minutes close it for a while. A
-  tool beside the server (a dispatch page, a script) administers it that way without
-  joining. A reverse proxy on the same machine connects from 127.0.0.1 as well: do not let
-  it pass `/admin` on. With `share_positions = 1` it also answers
+  password in `X-Admin-Password`; five wrong ones in two minutes close it for a while. The
+  same door serves `GET /dispatch`: open `http://127.0.0.1:<web_port>/dispatch` on the
+  server machine for a small local admin page (live status, say / kick / clock / weather /
+  traffic / speed, and a live player list when `share_positions = 1`). A script that posts
+  to `/admin` works the same way. Neither `/dispatch` nor `/admin` answers through a
+  tunnel or reverse proxy - only from the machine itself. A reverse proxy on the same
+  machine connects from 127.0.0.1 as well: do not let it pass `/admin` or `/dispatch` on.
+  With `share_positions = 1` it also answers
   `GET /players`: a JSON array of the players (`id`, `name`, `bus`, `line`, `destination`,
   `tour`, `x`/`y` in world metres east/north, `heading` in degrees clockwise from north,
   `speed_kmh`, `on_foot` and `aboard` - a player on foot is where it walks (even with its
@@ -167,4 +171,5 @@ check) and the same mods as the players: the server lists its content in `WELCOM
    `host:port` and codes as today.
 4. Lobby: servers post `name/map/players/code` to the relay's lobby topic; the launcher
    shows the list.
-5. Admin commands and a small status page (players, tick time, bandwidth).
+5. Tick time and bandwidth on the status / dispatch page (admin commands and a local
+   dispatch page are already there).

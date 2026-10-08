@@ -1,0 +1,215 @@
+<!doctype html>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>openOMSI dispatch</title>
+<style>
+:root{--bg:#16181c;--panel:#1e2228;--text:#eee;--muted:#9aa3ad;--line:#2c323a;--ok:#6cbf6c;--bad:#e07070;--accent:#5b9fd4}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--text)}
+main{max-width:920px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:1.35rem;margin:0 0 .25rem}
+h2{font-size:1rem;margin:1.25rem 0 .5rem;color:var(--muted);font-weight:600}
+.muted{color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:.4rem 0}
+label{display:flex;flex-direction:column;gap:4px;font-size:.85rem;color:var(--muted)}
+input,select,button,textarea{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:.45rem .6rem}
+input,select,textarea{min-width:10rem}
+button{cursor:pointer;background:#2a3340;border-color:#3a4656}
+button:hover{border-color:var(--accent)}
+button.primary{background:#2d4a66;border-color:var(--accent)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:.6rem 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+.stat b{display:block;font-size:1.1rem;color:var(--text)}
+.stat span{font-size:.8rem;color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:.9rem}
+th,td{text-align:left;padding:.35rem .4rem;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600}
+#log{white-space:pre-wrap;font:13px/1.4 ui-monospace,monospace;min-height:3rem;max-height:10rem;overflow:auto}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+#pw{min-width:14rem}
+</style>
+<main>
+  <h1 id=name>openOMSI dispatch</h1>
+  <p id=motd class=muted>Local admin page — only from this machine. Set <code>admin_password</code> in server.cfg, then send commands below.</p>
+  <div class=card>
+    <div class=grid id=stats></div>
+    <p id=meta class=muted style="margin:.75rem 0 0"></p>
+  </div>
+  <h2>Password</h2>
+  <div class=row>
+    <label>Admin password <input id=pw type=password autocomplete=current-password></label>
+    <button type=button id=savePw>Remember on this browser</button>
+  </div>
+  <h2>Say</h2>
+  <div class=row>
+    <input id=sayText style="flex:1;min-width:16rem" placeholder="Message to every player">
+    <button type=button class=primary id=sayBtn>Say</button>
+  </div>
+  <h2>Players</h2>
+  <div class=card>
+    <div class=row>
+      <label>Player id <input id=kickId type=number min=1 step=1 placeholder="id"></label>
+      <button type=button id=kickBtn>Kick</button>
+      <button type=button id=banBtn>Ban (session)</button>
+    </div>
+    <p id=playersHint class=muted>Join the game or enable <code>share_positions = 1</code> for a live list.</p>
+    <table id=playersTable hidden><thead><tr><th>Id</th><th>Name</th><th>Bus / line</th><th>Speed</th><th></th></tr></thead><tbody></tbody></table>
+  </div>
+  <h2>Clock &amp; time</h2>
+  <div class=row>
+    <button type=button data-cmd="clock 21600">06:00</button>
+    <button type=button data-cmd="clock 43200">12:00</button>
+    <button type=button data-cmd="clock 64800">18:00</button>
+    <button type=button data-cmd="clock 82800">23:00</button>
+    <button type=button data-cmd="time 3600">+1 hour</button>
+    <button type=button data-cmd="time -3600">−1 hour</button>
+  </div>
+  <div class=row>
+    <label>Time speed
+      <select id=speed>
+        <option value="1">×1</option>
+        <option value="2">×2</option>
+        <option value="5">×5</option>
+        <option value="10">×10</option>
+        <option value="20">×20</option>
+      </select>
+    </label>
+    <button type=button id=speedBtn>Set speed</button>
+  </div>
+  <h2>Weather &amp; traffic</h2>
+  <div class=row>
+    <button type=button data-cmd="weather next">Next weather</button>
+    <button type=button data-cmd="weather cycle">Toggle weather cycle</button>
+    <button type=button data-cmd="traffic next">Traffic more / less</button>
+    <button type=button data-cmd="traffic clear">Clear AI traffic</button>
+  </div>
+  <div class=row>
+    <label>Weather file <input id=weatherFile style="min-width:18rem" placeholder="Weather/#CAVOK.owt"></label>
+    <button type=button id=weatherSet>Set weather</button>
+  </div>
+  <h2>Raw command</h2>
+  <div class=row>
+    <input id=raw style="flex:1;min-width:16rem" placeholder="e.g. say hello / kick 3 / clock 30600">
+    <button type=button id=rawBtn>Send</button>
+  </div>
+  <h2>Log</h2>
+  <div class=card><div id=log></div></div>
+</main>
+<script>
+const pwEl = document.getElementById('pw');
+pwEl.value = sessionStorage.getItem('openomsi-admin-pw') || '';
+document.getElementById('savePw').onclick = () => {
+  sessionStorage.setItem('openomsi-admin-pw', pwEl.value);
+  log('Password remembered for this tab.', true);
+};
+function password() { return pwEl.value; }
+function log(msg, ok) {
+  const el = document.getElementById('log');
+  const line = document.createElement('div');
+  line.className = ok === false ? 'bad' : (ok ? 'ok' : '');
+  line.textContent = new Date().toLocaleTimeString() + '  ' + msg;
+  el.prepend(line);
+}
+async function send(cmd) {
+  const body = String(cmd || '').trim();
+  if (!body) return;
+  try {
+    const r = await fetch('/admin', {
+      method: 'POST',
+      headers: { 'X-Admin-Password': password(), 'Content-Type': 'text/plain' },
+      body
+    });
+    const t = await r.text();
+    log(r.status + ' ' + r.statusText + (t ? ': ' + t : '') + ' ← ' + body, r.ok);
+  } catch (e) {
+    log(String(e), false);
+  }
+}
+document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = () => send(b.getAttribute('data-cmd')));
+document.getElementById('sayBtn').onclick = () => {
+  const t = document.getElementById('sayText').value.trim();
+  if (t) send('say ' + t);
+};
+document.getElementById('kickBtn').onclick = () => {
+  const id = document.getElementById('kickId').value.trim();
+  if (id) send('kick ' + id);
+};
+document.getElementById('banBtn').onclick = () => {
+  const id = document.getElementById('kickId').value.trim();
+  if (id) send('ban ' + id);
+};
+document.getElementById('speedBtn').onclick = () => send('speed ' + document.getElementById('speed').value);
+document.getElementById('weatherSet').onclick = () => {
+  const f = document.getElementById('weatherFile').value.trim();
+  if (f) send('weather set ' + f);
+};
+document.getElementById('rawBtn').onclick = () => send(document.getElementById('raw').value);
+document.getElementById('raw').addEventListener('keydown', e => { if (e.key === 'Enter') send(e.target.value); });
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function setStats(s) {
+  document.getElementById('name').textContent = s.name || 'openOMSI dispatch';
+  document.title = (s.name || 'openOMSI') + ' — dispatch';
+  document.getElementById('motd').textContent = s.motd || '';
+  const world = s.world || {};
+  const cells = [
+    ['Players', (s.players ?? '?') + ' / ' + (s.max_players ?? '?')],
+    ['Map', s.map || '—'],
+    ['Time', s.time || '—'],
+    ['Weather', s.weather || '—'],
+    ['AI cars', world.cars ?? '—'],
+    ['Buses', world.buses ?? '—'],
+    ['People', [world.walking, world.waiting, world.aboard].every(x => x == null) ? '—' : ((world.walking|0) + ' walk / ' + (world.waiting|0) + ' wait / ' + (world.aboard|0) + ' aboard')],
+    ['Traffic dens.', world.traffic ?? '—'],
+  ];
+  document.getElementById('stats').innerHTML = cells.map(([k,v]) =>
+    '<div class="stat"><b>' + esc(v) + '</b><span>' + esc(k) + '</span></div>').join('');
+  document.getElementById('meta').textContent =
+    'Version ' + (s.version || '?') + (s.protocol != null ? ' · protocol ' + s.protocol : '');
+}
+async function refreshStatus() {
+  try {
+    const r = await fetch('/status');
+    if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+    setStats(await r.json());
+  } catch (e) {
+    document.getElementById('meta').textContent = 'Status: ' + e;
+  }
+}
+async function refreshPlayers() {
+  const hint = document.getElementById('playersHint');
+  const table = document.getElementById('playersTable');
+  const tb = table.querySelector('tbody');
+  try {
+    const r = await fetch('/players');
+    if (r.status === 404) {
+      hint.hidden = false;
+      table.hidden = true;
+      return;
+    }
+    if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+    const list = await r.json();
+    hint.hidden = true;
+    table.hidden = false;
+    tb.innerHTML = list.map(p => {
+      const bus = p.bus ? (p.bus.split('/').pop() || p.bus) : (p.on_foot ? 'on foot' : '—');
+      const line = [p.line, p.destination].filter(Boolean).join(' → ') || '—';
+      const spd = p.speed_kmh != null && !Number.isNaN(p.speed_kmh) ? Math.round(p.speed_kmh) + ' km/h' : '—';
+      return '<tr><td>' + esc(p.id) + '</td><td>' + esc(p.name) + '</td><td>' + esc(bus) + '<br><span class=muted>' + esc(line) +
+        '</span></td><td>' + esc(spd) + '</td><td><button type=button data-id="' + esc(p.id) + '">Use id</button></td></tr>';
+    }).join('') || '<tr><td colspan=5 class=muted>No players</td></tr>';
+    tb.querySelectorAll('button[data-id]').forEach(b => b.onclick = () => {
+      document.getElementById('kickId').value = b.getAttribute('data-id');
+    });
+  } catch (e) {
+    hint.hidden = false;
+    hint.textContent = 'Players: ' + e;
+    table.hidden = true;
+  }
+}
+function tick() { refreshStatus(); refreshPlayers(); }
+tick();
+setInterval(tick, 2000);
+</script>
