@@ -2,6 +2,59 @@
 # language of a text under it. `pt` is Brazilian Portuguese; `pt-pt` is European Portuguese.
 _version: 2
 
+"CAVOK":
+  zh-tw: "晴空"
+"Clear Winter Day":
+  zh-tw: "晴朗冬日"
+"Eiseskälte":
+  zh-tw: "冰冷寒氣"
+"Heavy Snowfall":
+  zh-tw: "大雪"
+"Starker Schneefall":
+  zh-tw: "大雪"
+"Überfrierende Nässe":
+  zh-tw: "結冰濕氣"
+"Ueberfrierende Naesse":
+  zh-tw: "結冰濕氣"
+"Summer Day Before Storm":
+  zh-tw: "暴風雨前的夏日"
+"Summer Day Before Rain":
+  zh-tw: "降雨前的夏日"
+"Summer Day Before":
+  zh-tw: "暴風雨前的夏日"
+"Überfrierende Nässe -6/-6":
+  zh-tw: "結冰濕氣 -6/-6"
+"snow":
+  zh-tw: "降雪"
+"Schnee":
+  zh-tw: "降雪"
+"Regen":
+  zh-tw: "降雨"
+"Bodennebel":
+  zh-tw: "地面霧"
+"Breezy Spring Day":
+  zh-tw: "微風春日"
+"Calm May":
+  zh-tw: "寧靜五月"
+"Cloudy Day":
+  zh-tw: "多雲天"
+"Daemmerungsnebel":
+  zh-tw: "暮霧"
+"Heavy Rain":
+  zh-tw: "大雨"
+"Schmuddelwetter":
+  zh-tw: "陰濕天氣"
+"Sommerlich":
+  zh-tw: "夏日天氣"
+"Sturm":
+  zh-tw: "暴風雨"
+"clear":
+  zh-tw: "晴朗"
+"dry":
+  zh-tw: "乾燥"
+"rain":
+  zh-tw: "降雨"
+
 "Current time":
   de: "Aktuelle Uhrzeit"
   fr: "Heure actuelle"
