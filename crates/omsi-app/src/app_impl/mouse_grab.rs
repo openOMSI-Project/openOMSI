@@ -128,6 +128,17 @@ impl App {
             && !self.plugin_focus() && self.menus.game_menu.is_none()
     }
 
+    /// Where the interface draws the steering cross while the cursor is hidden and held
+    /// (the system's own crosshair cursor showed it before the cursor was held): the
+    /// steering point, kept in the window. None while the cursor shows itself.
+    pub(crate) fn steer_cross_point(&self) -> Option<(f32, f32)> {
+        let hidden = matches!(self.input.mouse_grab.mode, Some(GrabMode::Locked | GrabMode::Warp));
+        if !hidden || !self.mouse_steering_now() {
+            return None;
+        }
+        self.input.mouse_grab.window_point(self.window_size()?)
+    }
+
     fn window_size(&self) -> Option<(f32, f32)> {
         self.gfx.surface.as_ref().map(|s| (s.config.width as f32, s.config.height as f32))
     }

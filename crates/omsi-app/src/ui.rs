@@ -417,6 +417,9 @@ pub struct Frame<'a> {
     pub width: f32,
     pub height: f32,
     pub cursor: (f32, f32),
+    /// The mouse steering's cross, while the system cursor is hidden and held (where the
+    /// crosshair cursor stood before): drawn here instead.
+    pub steer_cross: Option<(f32, f32)>,
     /// An OpenXR headset is drawing this frame.
     pub vr: bool,
     /// The name of what the cursor points at (a switch, a part), shown next to it.
@@ -949,6 +952,12 @@ impl Ui {
             }
             scene.overlays.push((l.tex, [x, y, x + l.w as f32, y + l.h as f32]));
         }
+        if let (Some((x, y)), false) = (f.steer_cross, f.vr) {
+            // (the size of the system's crosshair cursor: 17 logical pixels)
+            let tex = self.text.steer_cross(r, scene);
+            let half = 8.5 * f.scale;
+            scene.overlays.push((tex, [x - half, y - half, x + half, y + half]));
+        }
         if f.vr {
             let pointer = self.text.vr_pointer(r, scene);
             self.vr_cursor_overlay = Some(scene.overlays.len());
@@ -960,7 +969,49 @@ impl Ui {
     }
 }
 
+/// The pixels (RGBA, `n`×`n`) of the steering cross: arms two pixels wide across the whole
+/// picture, white, with a one-pixel dark edge so it shows on a bright sky and a dark road
+/// alike, and a small gap in the middle that leaves the point itself visible.
+fn steer_cross_pixels(n: usize) -> Vec<u8> {
+    let mut rgba = vec![0u8; n * n * 4];
+    let c = n as f32 * 0.5;
+    for y in 0..n {
+        for x in 0..n {
+            let (dx, dy) = ((x as f32 + 0.5 - c).abs(), (y as f32 + 0.5 - c).abs());
+            let (along, across) = if dx <= dy { (dy, dx) } else { (dx, dy) };
+            let gap = along < 3.0;
+            let px = if gap || along > c - 1.0 {
+                [0, 0, 0, 0]
+            } else if across <= 1.0 {
+                [255, 255, 255, 255]
+            } else if across <= 2.0 {
+                [0, 0, 0, 200]
+            } else {
+                [0, 0, 0, 0]
+            };
+            rgba[(y * n + x) * 4..(y * n + x + 1) * 4].copy_from_slice(&px);
+        }
+    }
+    rgba
+}
+
 impl TextCache {
+    /// The mouse steering's cross: thin white arms with a dark edge, as a crosshair cursor,
+    /// centred on the point that steers and receives a click.
+    fn steer_cross(&mut self, r: &Renderer, scene: &mut Scene) -> TextureId {
+        let key = ("\u{0}steer_cross".to_string(), 0, [0, 0, 0, 0]);
+        if let Some(label) = self.labels.get_mut(&key) {
+            label.used = self.frame;
+            return label.tex;
+        }
+        const N: usize = 34;
+        let rgba = steer_cross_pixels(N);
+        let image = omsi_texture::Image { width: N as u32, height: N as u32, rgba, has_alpha: true };
+        let tex = r.add_texture(scene, &image, false);
+        self.labels.insert(key, Label { tex, w: N as u32, h: N as u32, used: self.frame });
+        tex
+    }
+
     /// A small white circle, centred on the point that receives the click.
     fn vr_pointer(&mut self, r: &Renderer, scene: &mut Scene) -> TextureId {
         let key = ("\u{0}vr_pointer_dot".to_string(), 0, [0, 0, 0, 0]);
@@ -2424,6 +2475,22 @@ fn vr_settings_sidebar_step(available: f32, pages: usize, scale: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    /// The steering cross: white arms with a dark edge, open in the middle, nothing in the
+    /// corners - the same in all four directions.
+    #[test]
+    fn the_steering_cross_is_a_white_cross_with_a_dark_edge() {
+        let n = 34;
+        let px = super::steer_cross_pixels(n);
+        let at = |x: usize, y: usize| &px[(y * n + x) * 4..(y * n + x) * 4 + 4];
+        let c = n / 2;
+        assert_eq!(at(c, c)[3], 0, "the middle is open");
+        assert_eq!(at(0, 0)[3], 0, "the corners are empty");
+        for (x, y) in [(c, 6), (c, n - 7), (6, c), (n - 7, c)] {
+            assert_eq!(at(x, y), [255, 255, 255, 255], "arm at {x},{y}");
+        }
+        assert_eq!(at(c + 2, 6)[..3], [0, 0, 0], "the arm's edge is dark");
+    }
+
     use super::*;
 
     /// The information bar is broken between its parts into rows that fit the room it has,

@@ -290,6 +290,8 @@ impl App {
         menu_lines: Vec<(&'static str, &'static str)>,
         menu_tabs: Option<(Vec<String>, usize)>,
     ) {
+        // (the steering cross: before the renderer and the scene are borrowed)
+        let steer_cross = self.steer_cross_point();
         let (Some(r), Some(scene)) = (self.renderer.as_ref(), self.scene.as_mut()) else { return };
         if let (Some(ui), Some(s)) = (self.ui.as_mut(), self.gfx.surface.as_ref()) {
             let scale = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
@@ -372,6 +374,7 @@ impl App {
                 width: w,
                 height: h,
                 cursor: (self.input.cursor.0 - hud[0], self.input.cursor.1),
+                steer_cross: steer_cross.map(|(x, y)| (x - hud[0], y)),
                 vr: {
                     #[cfg(windows)] { self.xr.vr.is_some() }
                     #[cfg(not(windows))] { false }

@@ -4,6 +4,11 @@ Every push to `main` is released as `MAJOR.MINOR.COMMIT` (see
 [docs/VERSIONING.md](docs/VERSIONING.md)); the downloads are on the
 [Releases](https://github.com/openOMSI-Project/openOMSI/releases) page.
 
+## 0.2.19 - 2026-10-08
+
+### Fixes
+- Mouse steering shows its "+" again: since 0.2.17 the cursor is held while the mouse steers (so the wheel reaches its full lock past the screen's edge), and the crosshair went with it. The cross is now drawn at the point that steers and takes your clicks.
+
 ## 0.2.18 - 2026-10-08
 
 ### New
