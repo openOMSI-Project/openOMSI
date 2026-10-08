@@ -134,14 +134,15 @@ struct GlyphBmp {
 /// every frame rasterises each glyph once.
 const SUB: f32 = 4.0;
 
-type GlyphKey = (u16, u32, bool, u8, u8);
+/// (glyph, size, bold, face (0 Roboto, 1 the fallback), sub-pixel x, y)
+type GlyphKey = (u16, u32, bool, u8, u8, u8);
 
 thread_local! {
     static GLYPHS: std::cell::RefCell<HashMap<GlyphKey, Option<Arc<GlyphBmp>>>> = std::cell::RefCell::new(HashMap::new());
 }
 
-fn glyph_bmp(font: &FontRef<'static>, bold: bool, id: ab_glyph::GlyphId, px: f32, sx: u8, sy: u8) -> Option<Arc<GlyphBmp>> {
-    let key = (id.0, px.to_bits(), bold, sx, sy);
+fn glyph_bmp(font: &FontRef<'static>, bold: bool, face: u8, id: ab_glyph::GlyphId, px: f32, sx: u8, sy: u8) -> Option<Arc<GlyphBmp>> {
+    let key = (id.0, px.to_bits(), bold, face, sx, sy);
     GLYPHS.with(|g| {
         let mut g = g.borrow_mut();
         if let Some(e) = g.get(&key) {
@@ -179,13 +180,16 @@ pub(crate) fn draw_text(cv: &mut Canvas, font: &FontRef<'static>, bold: bool, px
         if ch == '\n' {
             continue;
         }
-        let id = font.glyph_id(ch);
-        if let Some(p) = prev {
-            cx += sf.kern(p, id);
+        face_for(font, bold, ch, |face, id, fi| {
+        let sf = if fi == 0 { sf } else { face.as_scaled(sc) };
+        if let Some((p, pf)) = prev {
+            if pf == fi {
+                cx += sf.kern(p, id);
+            }
         }
         let fx = cx.floor();
         let sx = (((cx - fx) * SUB) as u8).min(SUB as u8 - 1);
-        if let Some(g) = glyph_bmp(font, bold, id, px, sx, sy) {
+        if let Some(g) = glyph_bmp(face, bold, fi, id, px, sx, sy) {
             let (bx, by) = (fx as i32 + g.ox, fy as i32 + g.oy);
             for gy in 0..g.h {
                 let y = by + gy as i32;
@@ -201,7 +205,8 @@ pub(crate) fn draw_text(cv: &mut Canvas, font: &FontRef<'static>, bold: bool, px
             }
         }
         cx += sf.h_advance(id);
-        prev = Some(id);
+        prev = Some((id, fi));
+        });
     }
 }
 

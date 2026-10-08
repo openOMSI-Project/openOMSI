@@ -103,6 +103,51 @@ pub(crate) fn with_fonts<R>(f: impl FnOnce(&FontRef<'static>, &FontRef<'static>)
     FONTS.with(|p| p.as_ref().map(|(reg, bold)| f(reg, bold)))
 }
 
+/// The bytes of the face for the characters Roboto lacks (Hangul, CJK ...): the file in
+/// `OPENOMSI_HTML_FALLBACK_FONT` (and `..._BOLD`), else Malgun Gothic from the Windows fonts.
+/// Read once per process; `None` when there is none.
+fn fallback_bytes() -> Option<&'static (Vec<u8>, Vec<u8>)> {
+    static BYTES: std::sync::OnceLock<Option<(Vec<u8>, Vec<u8>)>> = std::sync::OnceLock::new();
+    BYTES
+        .get_or_init(|| {
+            let read = |p: &std::path::Path| std::fs::read(p).ok();
+            if let Some(reg) = std::env::var_os("OPENOMSI_HTML_FALLBACK_FONT").and_then(|p| read(p.as_ref())) {
+                let bold = std::env::var_os("OPENOMSI_HTML_FALLBACK_FONT_BOLD")
+                    .and_then(|p| read(p.as_ref()))
+                    .unwrap_or_else(|| reg.clone());
+                return Some((reg, bold));
+            }
+            let dir = std::path::PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into())).join("Fonts");
+            let reg = read(&dir.join("malgun.ttf"))?;
+            let bold = read(&dir.join("malgunbd.ttf")).unwrap_or_else(|| reg.clone());
+            Some((reg, bold))
+        })
+        .as_ref()
+}
+
+thread_local! {
+    static FALLBACK: Option<(FontRef<'static>, FontRef<'static>)> = fallback_bytes().and_then(|(reg, bold)| {
+        Some((FontRef::try_from_slice(reg).ok()?, FontRef::try_from_slice(bold).ok()?))
+    });
+}
+
+/// The face that draws `ch`, its glyph and which face it is (0 = `font`, 1 = the fallback):
+/// `font` itself, or the fallback face when `font` has no glyph for it.
+pub(crate) fn face_for<R>(font: &FontRef<'static>, bold: bool, ch: char, f: impl FnOnce(&FontRef<'static>, ab_glyph::GlyphId, u8) -> R) -> R {
+    let id = font.glyph_id(ch);
+    if id.0 != 0 || ch.is_ascii() {
+        return f(font, id, 0);
+    }
+    FALLBACK.with(|fb| match fb {
+        Some((reg, b)) => {
+            let face = if bold { b } else { reg };
+            let fid = face.glyph_id(ch);
+            if fid.0 != 0 { f(face, fid, 1) } else { f(font, id, 0) }
+        }
+        None => f(font, id, 0),
+    })
+}
+
 pub(crate) const STEP_LIMIT: u32 = 400_000;
 pub(crate) const DEPTH_LIMIT: u32 = 48;
 

@@ -937,3 +937,20 @@ fn departures_are_asked_by_stop_and_handed_back() {
     r.set_vars(&[], &[]);
     assert_eq!(r.text_of("o").as_deref(), Some("1:5|Hbf|1000"));
 }
+#[test]
+fn hangul_is_drawn_with_the_fallback_face() {
+    // (no fallback font on this machine: nothing to check)
+    if fallback_bytes().is_none() {
+        return;
+    }
+    let ink = |text: &str| {
+        let html = format!("<body style='margin:0;background:#000;color:#fff;font-size:20px'>{text}</body>");
+        let mut r = EngineRenderer::new(120, 30, &html);
+        let f = r.poll_frame().unwrap();
+        f.chunks(4).filter(|p| p[0] > 128).count()
+    };
+    assert!(ink("가나다라") > 40);
+    assert!(ink("<b>정류장</b>") > 40);
+    with_fonts(|reg, _| face_for(reg, false, '가', |_, id, fi| assert!(id.0 != 0 && fi == 1)));
+    with_fonts(|reg, _| face_for(reg, false, 'A', |_, _, fi| assert_eq!(fi, 0)));
+}
