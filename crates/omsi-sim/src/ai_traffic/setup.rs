@@ -127,6 +127,7 @@ impl TrafficSim {
             other_blinkers: HashMap::new(),
             tick_split: [0.0; 3],
             others_still: HashMap::new(),
+            others_signal: HashMap::new(),
             geo_prev: Vec::new(),
             index_of: HashMap::new(),
             pull_out_rooms: HashMap::new(),

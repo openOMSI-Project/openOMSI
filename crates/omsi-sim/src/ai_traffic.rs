@@ -211,6 +211,9 @@ pub struct TrafficSim {
     pub tick_split: [f64; 3],
     /// Seconds each of them has stood still.
     pub others_still: HashMap<u32, f32>,
+    /// `player_signal_age` and `player_signalling` of each LAN player's bus by id: one
+    /// indicating out of its stop is let out as the player's is (`letting_out`).
+    pub others_signal: HashMap<u32, (f32, f32)>,
     /// Per car: `AiCar::geo_block` of the frame before (who waits for whom by geometry).
     pub geo_prev: Vec<Option<u64>>,
     /// Car index by id (as of the start of the tick).

@@ -48,6 +48,14 @@ pub struct TickScene {
     pub walkers: HashMap<usize, Vec<f32>>,
 }
 
+/// A bus's indicator towards the traffic over one tick: (seconds since it last showed,
+/// seconds it has been indicating) after `dt` with the indicator `on` or not. One second of
+/// memory bridges the dark half of the lamps' cycle.
+fn signal_step((age, signalling): (f32, f32), on: bool, dt: f32) -> (f32, f32) {
+    let age = if on { 0.0 } else { age + dt };
+    (age, if age < 1.0 { signalling + dt } else { 0.0 })
+}
+
 impl TrafficSim {
     /// Advance all cars.
     /// `player`: (centre, heading in degrees, half length, half width, speed) of the
@@ -351,8 +359,25 @@ impl TrafficSim {
         // the indicator towards the traffic (left, or right on a left-hand-traffic map),
         // remembered across the dark half of the lamps' cycle
         let out_side = if self.net.left_hand { 2 } else { 1 };
-        self.player_signal_age = if self.player_blinker == out_side { 0.0 } else { self.player_signal_age + dt };
-        self.player_signalling = if self.player_signal_age < 1.0 { self.player_signalling + dt } else { 0.0 };
+        (self.player_signal_age, self.player_signalling) = signal_step(
+            (self.player_signal_age, self.player_signalling),
+            self.player_blinker == out_side,
+            dt,
+        );
+        // ... and the LAN players' (their buses' front sections), for letting them out of
+        // their stops as the player's: on a dedicated server every bus is a LAN player's,
+        // and with the player's indicator alone the cars let none of them out
+        let mut others_signal: HashMap<u32, (f32, f32)> = HashMap::new();
+        for (id, _) in others.iter().filter(|(id, _)| *id < 0xFFF0_0000) {
+            let before = self
+                .others_signal
+                .get(id)
+                .copied()
+                .unwrap_or((f32::MAX, 0.0));
+            let on = self.other_blinkers.get(id).copied() == Some(out_side);
+            others_signal.insert(*id, signal_step(before, on, dt));
+        }
+        self.others_signal = others_signal;
         // the player's vehicle and the LAN players' on the lanes, for the right of way (the
         // rear sections and the vehicles placed by hand stand, they do not come)
         let mut users: Vec<WayUser> = Vec::new();
@@ -864,8 +889,20 @@ impl TrafficSim {
         // a car that has just left its parking space waits a moment before pulling out
         let parked_wait = (self.cars[i].pull_out > 0.0).then(|| self.cars[i].state.front + 0.1);
         self.cars[i].pull_out = (self.cars[i].pull_out - dt).max(0.0);
-        // the player's bus indicating out of its stop
-        let let_out = self.player.and_then(|p| self.letting_out(i, &p)).map(|g| self.cars[i].state.front + (g - 1.0).max(0.0));
+        // the player's bus or a LAN player's indicating out of its stop (only the LAN
+        // players' front sections have an `others_signal`: a rear section does not pull out)
+        let player_signal = (self.player_signal_age, self.player_signalling);
+        let let_out = self
+            .player
+            .and_then(|p| self.letting_out(i, &p, player_signal))
+            .into_iter()
+            .chain(
+                ts.others
+                    .iter()
+                    .filter_map(|(id, b)| self.letting_out(i, b, *self.others_signal.get(id)?)),
+            )
+            .reduce(f32::min)
+            .map(|g| self.cars[i].state.front + (g - 1.0).max(0.0));
         let stop_at = [light, yield_at, merge_wait, keep_back, people, parked_wait, let_out]
             .into_iter()
             .flatten()
