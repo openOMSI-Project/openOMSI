@@ -81,6 +81,7 @@ mod app_events;
 mod bus_service;
 mod camera_util;
 mod controllers;
+mod gamepad_profile;
 mod hpattern;
 mod ffb_calibration;
 #[cfg(windows)]

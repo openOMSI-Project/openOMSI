@@ -1,6 +1,7 @@
 //! In-game controller configuration. Edits are saved before installing mappings on the
 //! existing controller; opening this UI never creates another hardware connection.
 use crate::controllers::{DeviceCfg, Func};
+use crate::gamepad_profile::{self, PadKind};
 use crate::game_lists::{ListKind, Move, HEADING};
 use crate::App;
 
@@ -44,9 +45,53 @@ fn row(name: &str, value: &str, desc: &str, action: String) -> (String, String) 
 }
 
 const DEVICE_TABS: [&str; 4] = ["Device", "Axes and pedals", "Buttons", "Force feedback"];
-const COMMON_TABS: [&str; 3] = ["Devices", "Driving", "Force feedback"];
+const COMMON_TABS: [&str; 4] = ["Devices", "Driving", "Gamepad", "Force feedback"];
 const AXES: [&str; 8] = ["X axis", "Y axis", "Z axis", "X rotation", "Y rotation", "Z rotation", "Slider 1", "Slider 2"];
+const PAD_TYPES: [&str; 4] = ["auto", "xbox", "ps4", "ps5"];
 type Rows = Vec<(String, String)>;
+
+/// The family the gamepad's buttons are named for: the setting, else the first pad found,
+/// else Xbox (what most players hold).
+fn pad_kind(app: &App, connected: &[crate::controllers::Connected]) -> PadKind {
+    PadKind::from_setting(&app.settings.pad_type)
+        .or_else(|| connected.iter().find_map(|c| PadKind::detect(&c.name, c.hardware_id)))
+        .unwrap_or(PadKind::Xbox)
+}
+
+/// The Gamepad page: which pad it is, how its stick steers and what its buttons do.
+fn gamepad_rows(app: &App, connected: &[crate::controllers::Connected]) -> Rows {
+    let mut out: Rows = Vec::new();
+    out.push(("Controller".into(), HEADING.into()));
+    let found: Vec<_> = connected.iter().filter_map(|c| PadKind::detect(&c.name, c.hardware_id).map(|k| (c, k))).collect();
+    for (c, k) in &found {
+        out.push((crate::game_lists::row(&c.name, 'i', k.title(), "Found by its name and USB ids", None), "noop".into()));
+    }
+    if found.is_empty() {
+        out.push((crate::game_lists::row("No Xbox or PlayStation pad found", 'i', "", "Connect a pad, or choose its type below to see the button names", None), "noop".into()));
+    }
+    let shown = match PadKind::from_setting(&app.settings.pad_type) {
+        Some(k) => k.title().to_string(),
+        None => format!("Automatic ({})", pad_kind(app, connected).title()),
+    };
+    out.push((crate::game_lists::row("Controller type", 'o', &shown, "Names the buttons below for the pad you hold: Automatic, Xbox, PlayStation 4 or PlayStation 5", None), "pad_type".into()));
+    out.push(("Steering and view".into(), HEADING.into()));
+    out.extend([
+        crate::game_lists::slider_row(app, "pad_steer_speed", "Steering speed", "Seconds the stick takes to turn the wheel from the middle to the full lock - more is smoother; the wheel is slower still at speed", &|v| format!("{v:.1} s")),
+        crate::game_lists::slider_row(app, "pad_steer_smooth", "Stick smoothing", "Evens out the small shakes of the stick (off: the stick as it reads)", &|v| if v <= 0.0 { "Off".to_string() } else { format!("{v:.0} ms") }),
+        crate::game_lists::slider_row(app, "pad_deadzone", "Stick dead zone", "Ignore movement round the stick's centre (raise it if the bus steers by itself)", &|v| format!("{:.0} %", v * 100.0)),
+        crate::game_lists::switch_row(app, "pad_steer_linear", "Stick steers like a wheel", "The wheel where the stick points, as far at any speed: for a wheel the system calls an Xbox controller"),
+        crate::game_lists::switch_row(app, "right_stick_look", "Right stick turns the view", "Switch off to keep the camera still while you steer"),
+    ].into_iter().flatten());
+    out.push(("Buttons".into(), HEADING.into()));
+    out.extend(crate::game_lists::switch_row(app, "pad_buttons", "Default buttons", "A gamepad with no buttons set up drives the cabin with these; set up its buttons under Devices to use your own"));
+    out.push((crate::game_lists::row("Left stick / triggers", 'i', "Steer / brake, throttle", "Left stick steers, left trigger brakes, right trigger is the throttle", None), "noop".into()));
+    let kind = pad_kind(app, connected);
+    for b in gamepad_profile::PRESET_BUTTONS {
+        let Some(action) = gamepad_profile::default_action(b) else { continue };
+        out.push((crate::game_lists::row(kind.label(b), 'i', gamepad_profile::action_text(action), "", None), "noop".into()));
+    }
+    out
+}
 
 /// The sidebar uses the same pages and indices as keyboard/mouse tab navigation.
 pub(crate) fn pages(app: &App, kind: &ListKind) -> Option<(Vec<(&'static str, Rows)>, usize)> {
@@ -155,6 +200,7 @@ pub(crate) fn items(app: &App, kind: &ListKind) -> Rows {
                     crate::game_lists::slider_row(app, "pedal_b", "Brake pedal strength", "Pedal response", &|v| format!("x{v}")),
                 ].into_iter().flatten());
             }
+            2 => out = gamepad_rows(app, &connected),
             _ => {
                 out.extend([
                     crate::game_lists::switch_row(app, "ff", "Force feedback and vibration", "Enable steering forces and gamepad rumble"),
@@ -273,6 +319,12 @@ pub(crate) fn run(app: &mut App, kind: &ListKind, action: &str, mv: Move) -> Opt
     let (verb, arg) = action.split_once(' ').unwrap_or((action, ""));
     if action == "back" { return parent(kind); }
     if let ListKind::ControllerDevices(_) = kind {
+        if verb == "pad_type" {
+            let to = step(PAD_TYPES.iter().position(|t| *t == app.settings.pad_type).unwrap_or(0), PAD_TYPES.len(), mv);
+            app.settings.pad_type = PAD_TYPES[to].into();
+            crate::game_lists::remember_setting("pad_type", PAD_TYPES[to]);
+            return Some(kind.clone());
+        }
         if crate::game_lists::option_do(app, verb, arg, mv) { return Some(kind.clone()); }
         if !matches!(mv, Move::Next) { return Some(kind.clone()); }
         return Some(match verb {

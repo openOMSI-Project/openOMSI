@@ -15,6 +15,7 @@
 //! and whatever a script shakes the wheel with - every vibration that comes to an end eased
 //! away rather than cut off.
 
+use crate::gamepad_profile::{self, PadKind};
 use gilrs::{Axis, EventType, Gilrs};
 use std::path::Path;
 
@@ -279,9 +280,15 @@ fn mapped_device_is_gamepad(mapped: bool, force_feedback_wheel: bool) -> bool {
 
 /// A gamepad stick's dead zone: nothing round its centre, then the rest of the way from
 /// nothing - it used to cut off below 0.08 and jump straight to 0.08 past it.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn stick_deadzone(x: f32) -> f32 {
-    const DEAD: f32 = 0.08;
-    if x.abs() <= DEAD { 0.0 } else { x.signum() * ((x.abs() - DEAD) / (1.0 - DEAD)).min(1.0) }
+    stick_deadzone_with(x, 0.08)
+}
+
+/// `stick_deadzone` with the dead zone of the settings (`pad_deadzone`).
+pub(crate) fn stick_deadzone_with(x: f32, dead: f32) -> f32 {
+    let dead = dead.clamp(0.0, 0.4);
+    if x.abs() <= dead { 0.0 } else { x.signum() * ((x.abs() - dead) / (1.0 - dead)).min(1.0) }
 }
 
 /// `current` eased towards `target` over a time constant `tau` (s), the same whatever the
@@ -351,6 +358,9 @@ pub(crate) struct Devices {
     hid_axes: Vec<crate::mac_hid::HidAxes>,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     hats: Vec<(String, [i8; 8])>,
+    /// The buttons of the pads gilrs knows a layout of, by what they are (south, D-pad left)
+    /// and not by number: what `gamepad_profile` binds, whatever the system numbers them.
+    pad_buttons: Vec<(String, gilrs::Button, bool)>,
 }
 
 impl Devices {
@@ -391,6 +401,7 @@ impl Devices {
             hid_axes: Vec::new(),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             hats: Vec::new(),
+            pad_buttons: Vec::new(),
         }
     }
 
@@ -470,6 +481,7 @@ impl Devices {
     /// (device, button number from 0, as DirectInput and `gamectrler.cfg` count them).
     pub fn poll(&mut self) -> Vec<(String, usize, bool)> {
         let mut out = Vec::new();
+        self.pad_buttons.clear();
         let di = self.direct_input();
         #[cfg(windows)]
         let xinput_pads = self.gilrs.as_ref().is_some_and(|g| g.gamepads().any(|(_, p)| xinput_name(p.name())));
@@ -493,6 +505,11 @@ impl Devices {
                 let Some(pad) = g.connected_gamepad(ev.id) else {
                     continue;
                 };
+                if let EventType::ButtonPressed(b, _) | EventType::ButtonReleased(b, _) = ev.event {
+                    if pad.mapping_source() != gilrs::MappingSource::None {
+                        self.pad_buttons.push((pad.name().to_string(), b, matches!(ev.event, EventType::ButtonPressed(..))));
+                    }
+                }
                 match ev.event {
                     EventType::Connected => log::info!("game controller connected: {} (layout {:?}, DirectInput {})", pad.name(), pad.mapping_source(), di),
                     // DirectInput handles wheels on Windows; system-mapped gamepads
@@ -578,7 +595,8 @@ impl Devices {
                         name: d.name.clone(),
                         hardware_id: d.hardware_id,
                         axes: d.axes(),
-                        gamepad: false,
+                        // (a DualShock or DualSense: a gamepad, not a joystick nobody set up)
+                        gamepad: sony_pad(&d.name, d.hardware_id),
                         ff: d.has_ff(),
                         ff_capable: d.ff_capable(),
                         buttons: d.buttons.min(128),
@@ -723,6 +741,12 @@ fn hat_axis(code: u32, value: f32, mapped_y: bool) -> Option<(usize, f32)> {
 #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 fn mac_axis_code(code: u32) -> bool {
     matches!((code >> 16, code & 0xFFFF), (1, 0x30..=0x3A) | (2, 0xBA | 0xBB | 0xC4 | 0xC5 | 0xC6 | 0xC8))
+}
+
+/// A PlayStation pad (the Xbox ones are the system's own gamepads, see `xinput_name`).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn sony_pad(name: &str, id: Option<(u16, u16)>) -> bool {
+    matches!(PadKind::detect(name, id), Some(PadKind::Ps4 | PadKind::Ps5))
 }
 
 fn use_gilrs_buttons(direct_input: bool, system_gamepad: bool) -> bool {
@@ -1078,6 +1102,11 @@ pub struct Controllers {
     pub deadzone: f32,
     /// Automatic right-stick camera movement (Settings: `right_stick_look`).
     pub right_stick_look: bool,
+    /// The dead zone round a gamepad stick's centre (Settings: `pad_deadzone`).
+    pub pad_deadzone: f32,
+    /// A gamepad with no buttons set up drives with its default ones (Settings:
+    /// `pad_buttons`, see `gamepad_profile`).
+    pub pad_presets: bool,
     /// The pedals' response curves (Settings → pedal strength; 1 = as the pedal reads).
     pub pedal_throttle: f32,
     pub pedal_brake: f32,
@@ -1178,13 +1207,42 @@ impl Controllers {
     }
 
     fn with_devices(devices: Devices, cfg: Vec<DeviceCfg>) -> Controllers {
-        Controllers { settled: Vec::new(), devices, focused: true, cfg, held: HeldButtons::default(), editing: false, raw_buttons: Vec::new(), deadzone: 0.0, right_stick_look: true, pedal_throttle: 1.0, pedal_brake: 1.0, disabled: Vec::new(), ff_invert: false, ff_enabled: true, ff_road: 1.0, ff_engine: 1.0, ff_fade: FF_FADE, steer_gain: 1.0, enabled: true, actions: Vec::new(), announced: Vec::new(), moved: Vec::new(), notice: None, steer: None, ff_t: 0.0, ff_lateral: 0.0, ff_bump: 0.0, ff_bump_age: 0.0, ff_micro: Micro::default(), ff_vib: ScriptVib::default(), ff_rumble: 0.0, ff_source_logged: None, rumble: Vec::new(), #[cfg(all(target_os = "linux", target_pointer_width = "64"))] wheel: None, #[cfg(all(target_os = "linux", target_pointer_width = "64"))] wheel_tried: None }
+        Controllers { settled: Vec::new(), devices, focused: true, cfg, held: HeldButtons::default(), editing: false, raw_buttons: Vec::new(), deadzone: 0.0, right_stick_look: true, pad_deadzone: 0.08, pad_presets: true, pedal_throttle: 1.0, pedal_brake: 1.0, disabled: Vec::new(), ff_invert: false, ff_enabled: true, ff_road: 1.0, ff_engine: 1.0, ff_fade: FF_FADE, steer_gain: 1.0, enabled: true, actions: Vec::new(), announced: Vec::new(), moved: Vec::new(), notice: None, steer: None, ff_t: 0.0, ff_lateral: 0.0, ff_bump: 0.0, ff_bump_age: 0.0, ff_micro: Micro::default(), ff_vib: ScriptVib::default(), ff_rumble: 0.0, ff_source_logged: None, rumble: Vec::new(), #[cfg(all(target_os = "linux", target_pointer_width = "64"))] wheel: None, #[cfg(all(target_os = "linux", target_pointer_width = "64"))] wheel_tried: None }
     }
 
     /// A wheel or joystick steers the bus (then the arrow keys look around, as in OMSI:
     /// a G29's buttons set to the arrow keys turned the view there).
     pub fn wheel_steering(&self) -> bool {
         self.enabled && self.steer.is_some()
+    }
+
+    /// The default buttons of a gamepad nobody set up buttons for (`gamepad_profile`): the
+    /// buttons of the pads gilrs knows a layout of, and on Windows those of a DualShock or a
+    /// DualSense, which DirectInput numbers.
+    fn preset_buttons(&mut self) {
+        #[allow(unused_mut)]
+        let mut events = std::mem::take(&mut self.devices.pad_buttons);
+        if !self.pad_presets || self.editing || !self.enabled {
+            return;
+        }
+        let connected = self.devices.connected();
+        #[cfg(windows)]
+        for (name, n, down) in &self.raw_buttons {
+            let sony = find_connected(&connected, name).is_some_and(|c| sony_pad(&c.name, c.hardware_id));
+            if let Some(b) = sony.then(|| gamepad_profile::sony_direct_input_button(*n, HAT_BUTTONS)).flatten() {
+                events.push((name.clone(), b, *down));
+            }
+        }
+        for (name, button, down) in events {
+            let Some(action) = gamepad_profile::default_action(button) else { continue };
+            if self.off(&name) || !find_connected(&connected, &name).is_some_and(|c| c.gamepad) {
+                continue;
+            }
+            if find_device_cfg(&self.cfg, &name).is_some_and(|d| d.buttons.iter().any(|b| !b.0.is_empty())) {
+                continue;
+            }
+            self.actions.push((action.to_string(), down));
+        }
     }
 
     /// Read the devices: the analog controls, and the button actions into `actions`.
@@ -1197,6 +1255,7 @@ impl Controllers {
             }
             self.held.event(&self.cfg, name, *n, *down, &mut self.actions);
         }
+        self.preset_buttons();
         if !self.enabled {
             return out;
         }
@@ -1206,6 +1265,9 @@ impl Controllers {
         let off = self.disabled.clone();
         let mut pads: Vec<(Option<&DeviceCfg>, Connected)> = self.devices.connected().into_iter().filter(|c| !off.iter().any(|d| names_match(d, &c.name))).map(|c| (find_device_cfg(&self.cfg, &c.name), c)).collect();
         pads.sort_by_key(|(cfg, _)| cfg.is_none());
+        // (the PlayStation pads nobody set up: read below, with the gamepads)
+        #[cfg(windows)]
+        let sony: Vec<Connected> = pads.iter().filter(|(cfg, c)| cfg.is_none() && sony_pad(&c.name, c.hardware_id)).map(|(_, c)| c.clone()).collect();
         let mut steer: Option<(String, f32, bool)> = None;
         // (a device set up to steer has the wheel; one nobody set up only lends its X axis)
         let mut steering_set_up = false;
@@ -1310,7 +1372,7 @@ impl Controllers {
                     continue;
                 }
                 let x = pad.value(Axis::LeftStickX);
-                let steers = stick_steers(out.steering, steering_set_up, stick_deadzone(x));
+                let steers = stick_steers(out.steering, steering_set_up, stick_deadzone_with(x, self.pad_deadzone));
                 // (said once per pad: the stick moved, and whether it steers - a report of
                 // "the sticks do nothing" then says which way the pad came in)
                 if x.abs() > 0.5 && !self.announced.iter().any(|n| n == &format!("stick:{}", pad.name())) {
@@ -1320,7 +1382,7 @@ impl Controllers {
                 let rt = pad.button_data(gilrs::Button::RightTrigger2).map(|d| d.value()).unwrap_or(0.0);
                 let lt = pad.button_data(gilrs::Button::LeftTrigger2).map(|d| d.value()).unwrap_or(0.0);
                 if steers {
-                    out.steering = Some(stick_deadzone(x));
+                    out.steering = Some(stick_deadzone_with(x, self.pad_deadzone));
                     out.stick = true;
                 }
                 out.throttle.get_or_insert(crate::settings::pedal_curve(rt, self.pedal_throttle));
@@ -1328,6 +1390,23 @@ impl Controllers {
                 // the right stick looks round, as the truck games have it (#454)
                 out.apply_default_gamepad_look(self.right_stick_look, pad.value(Axis::RightStickX), pad.value(Axis::RightStickY));
             }
+        }
+        // Windows: a DualShock 4 or a DualSense is a DirectInput device (gilrs reads XInput
+        // only there), laid out as the HID descriptor has it: X and Y the left stick, Z and
+        // Rz the right one, Rx and Ry the triggers (at rest at -1) - the same default layout
+        // as the Xbox pad's all the same
+        #[cfg(windows)]
+        for c in &sony {
+            let axis = |k: usize| c.axes.iter().find(|(s, _)| *s == k).map_or(0.0, |(_, v)| *v);
+            let x = axis(0);
+            let steers = stick_steers(out.steering, steering_set_up, stick_deadzone_with(x, self.pad_deadzone));
+            if steers {
+                out.steering = Some(stick_deadzone_with(x, self.pad_deadzone));
+                out.stick = true;
+            }
+            out.throttle.get_or_insert(crate::settings::pedal_curve((axis(4) + 1.0) / 2.0, self.pedal_throttle));
+            out.brake.get_or_insert(crate::settings::pedal_curve((axis(3) + 1.0) / 2.0, self.pedal_brake));
+            out.apply_default_gamepad_look(self.right_stick_look, axis(2), -axis(5));
         }
         // macOS: Xbox-type controllers, read through the GameController framework and so
         // never gilrs's pads above - the same default layout all the same
@@ -1338,13 +1417,13 @@ impl Controllers {
             }
             let axis = |k: usize| axes.iter().find(|(c, _)| *c == k).map_or(0.0, |(_, v)| *v);
             let x = axis(0);
-            let steers = stick_steers(out.steering, steering_set_up, stick_deadzone(x));
+            let steers = stick_steers(out.steering, steering_set_up, stick_deadzone_with(x, self.pad_deadzone));
             if x.abs() > 0.5 && !self.announced.iter().any(|n| n == &format!("stick:{name}")) {
                 self.announced.push(format!("stick:{name}"));
                 log::info!("game controller {name}: left stick {x:.2}, steers: {steers}");
             }
             if steers {
-                out.steering = Some(stick_deadzone(x));
+                out.steering = Some(stick_deadzone_with(x, self.pad_deadzone));
                 out.stick = true;
             }
             out.throttle.get_or_insert(crate::settings::pedal_curve((axis(4) + 1.0) / 2.0, self.pedal_throttle));
@@ -2787,6 +2866,19 @@ mod device_kind_tests {
 }
 
 #[cfg(test)]
+mod stick_deadzone_tests {
+    use super::stick_deadzone_with;
+
+    #[test]
+    fn the_dead_zone_is_the_settings_and_the_rest_of_the_stick_still_reaches_one() {
+        assert_eq!(stick_deadzone_with(0.14, 0.15), 0.0);
+        assert!(stick_deadzone_with(0.3, 0.15) > 0.0);
+        assert!((stick_deadzone_with(-1.0, 0.15) + 1.0).abs() < 1e-6);
+        assert_eq!(stick_deadzone_with(0.05, 0.0), 0.05);
+    }
+}
+
+#[cfg(test)]
 mod stick_steering_tests {
     #[test]
     fn an_idle_device_nobody_set_up_does_not_hold_the_sticks_steering() {
@@ -2862,6 +2954,7 @@ mod hot_reload_tests {
             hid_axes: Vec::new(),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             hats: Vec::new(),
+            pad_buttons: Vec::new(),
         }
     }
 

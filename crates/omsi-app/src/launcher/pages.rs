@@ -703,7 +703,22 @@ fn driving_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
         s["pad_steer_smooth"] = json!(pad_smooth.round());
         *dirty = 0.3;
     }
+    // how fast the stick turns the wheel (middle to full lock), and its dead zone
+    let mut pad_speed = get(s, "pad_steer_speed").as_f64().unwrap_or(2.0) as f32;
+    if ui.slider("s-pad-steer-speed", c.row(), &mut pad_speed, 0.8, 5.0, 0.1, "Stick steering speed (middle to full lock)", &|v| format!("{v:.1} s")) {
+        s["pad_steer_speed"] = json!((pad_speed * 10.0).round() / 10.0);
+        *dirty = 0.3;
+    }
+    let mut pad_dead = get(s, "pad_deadzone").as_f64().unwrap_or(0.08) as f32;
+    if ui.slider("s-pad-deadzone", c.row(), &mut pad_dead, 0.0, 0.4, 0.01, "Stick dead zone", &|v| format!("{:.0} %", v * 100.0)) {
+        s["pad_deadzone"] = json!((pad_dead * 100.0).round() / 100.0);
+        *dirty = 0.3;
+    }
     toggle_setting(ui, s, dirty, c.row(), "Stick steers like a wheel (a wheel seen as a gamepad)", "pad_steer_linear");
+    // Xbox, PlayStation 4 or 5: how the buttons are named, and the default buttons of a
+    // gamepad nobody set up
+    sel_setting(ui, s, dirty, "s-pad-type", c.row(), "Gamepad type", "pad_type", &[("auto", "Automatic"), ("xbox", "Xbox"), ("ps4", "PlayStation 4"), ("ps5", "PlayStation 5")]);
+    toggle_setting(ui, s, dirty, c.row(), "Default gamepad buttons (indicators, doors, views, gears, pause)", "pad_buttons");
     toggle_setting(ui, s, dirty, c.row(), "Arrow keys switch the cameras with a wheel too (no glance)", "arrows_switch_cams");
     // the pedals' response: softer (below 1) or stronger (above 1) than the pedal reads
     for (key, label, id) in [("pedal_throttle", "Throttle pedal strength", "s-pedt"), ("pedal_brake", "Brake pedal strength", "s-pedb")] {
@@ -2796,7 +2811,7 @@ mod settings_tests {
         }
         let driving = vec![
             "s-keys", "set-steering_linear", "set-old_steering", "set-red_steer_spd", "s-mouse", "s-mouse-pedal", "set-mouse_smooth", "set-mouse_right_off", "set-blinker_cancel", "set-brake_hold", "set-auto_clutch", "set-auto_shift", "set-momentary_gears", "s-go-keys",
-            "s-wrange", "s-wlock", "s-pad-steer-smooth", "set-pad_steer_linear", "set-arrows_switch_cams", "s-pedt", "s-pedb", "set-ff_enabled", "set-ff_invert", "s-ffroad", "s-ffeng", "s-fffade", "s-wreset", "s-go-pads",
+            "s-wrange", "s-wlock", "s-pad-steer-smooth", "s-pad-steer-speed", "s-pad-deadzone", "set-pad_steer_linear", "s-pad-type", "set-pad_buttons", "set-arrows_switch_cams", "s-pedt", "s-pedb", "set-ff_enabled", "set-ff_invert", "s-ffroad", "s-ffeng", "s-fffade", "s-wreset", "s-go-pads",
         ];
         let mut camera = vec![
             "s-seaty",

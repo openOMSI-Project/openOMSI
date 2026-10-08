@@ -19,6 +19,8 @@ impl App {
         ctl.set_focus(self.input.window_focused);
         ctl.deadzone = self.settings.ctrl_deadzone;
         ctl.right_stick_look = self.settings.right_stick_look;
+        ctl.pad_deadzone = self.settings.pad_deadzone;
+        ctl.pad_presets = self.settings.pad_buttons;
         ctl.pedal_throttle = self.settings.pedal_throttle;
         ctl.pedal_brake = self.settings.pedal_brake;
         ctl.ff_invert = self.settings.ff_invert;
@@ -118,7 +120,11 @@ impl App {
             self.input.pad_kmh = crate::controllers::smooth_toward(self.input.pad_kmh, kmh, dt, 0.4);
             let target = crate::controllers::gamepad_steering(x, self.input.pad_kmh);
             self.input.pad_steer_target = crate::controllers::smooth_toward(self.input.pad_steer_target, target, dt, self.settings.pad_steer_smooth / 1000.0);
-            let step = dt / 1.2;
+            // the wheel turns lock to lock in `pad_steer_speed` seconds, and slower the faster
+            // the bus goes - at 50 km/h by half again - so that a flick of the thumb never
+            // throws a heavy bus sideways (it went from lock to lock in 1.2 s at any speed)
+            let lock_time = (self.settings.pad_steer_speed * (1.0 + self.input.pad_kmh.abs().min(100.0) / 100.0)).max(0.3);
+            let step = dt / lock_time;
             analog.steering = Some(now + (self.input.pad_steer_target - now).clamp(-step, step));
         } else if let Some(p) = self.player.as_ref() {
             // (the stick picks up from where the wheel is, at the bus's speed)
