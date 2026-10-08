@@ -851,7 +851,7 @@ original way: string `SetLineTo` + `AI_target_index` (terminus index) and the
 the group names no depot file at all (`AI_target_index` stays as it was). Depot callbacks with
 index -1 (what the lookups answer for an unknown code) return "" / -1, never entry 0. A depot
 file belongs to a map: when the bus folder has none of the name the map's `ailists.cfg` wants
-(a mod bus brings only its own map's), the openOMSI takes it from another vehicle folder
+(a mod bus brings only its own map's), openOMSI takes it from another vehicle folder
 (`omsi_vehicle::hof::depot_anywhere`); a bus of a plain `[aigroup_2]` pool, whose group names
 no depot, takes the map's depot of its folder where it has one, else the folder's first
 (`schedule::pool_depot`, Omsi.exe's selected-hof index 0). The FloFix
