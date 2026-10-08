@@ -54,6 +54,7 @@ impl Offscreen<'_> {
             ref mut lan_off,
             ref remotes_off,
             ref mut traffic,
+            ref mut schedule,
             ref world,
             ref renderer,
             ref mut scene,
@@ -62,7 +63,9 @@ impl Offscreen<'_> {
             ref mut real_time,
             ..
         } = *self;
-        *srv_clock += dt as f64 * lan_off.as_ref().map(|l| l.clock_speed).unwrap_or(1.0);
+        let speed = lan_off.as_ref().map(|l| l.clock_speed).unwrap_or(1.0);
+        *srv_clock += dt as f64 * speed;
+        let shift_was = srv_admin.shift;
         // a server on the real time (server.cfg): its clock reads this machine's
         if i.is_multiple_of(30) && crate::real_time::server_real() {
             if let Some(n) = crate::real_time::now() {
@@ -170,6 +173,19 @@ impl Offscreen<'_> {
                     let k = files.iter().position(|f| f.to_ascii_lowercase() == cur).map(|k| (k + 1) % files.len()).unwrap_or(0);
                     log::info!("server: weather now {}", files[k]);
                     l.set_weather(&files[k]);
+                }
+            }
+        }
+        // the timetable's buses go with the server's clock as with the window's: at its speed,
+        // and moved with it - by two minutes or more, put out again for the new time
+        // (`App::timetable_after_clock_jump`)
+        if let Some(t) = traffic.as_mut() {
+            let jump = srv_admin.shift - shift_was;
+            super::traffic_on_server_clock(t, speed, jump);
+            if jump.abs() >= crate::schedule::RESTART_JUMP {
+                if let Some(s) = schedule.as_mut() {
+                    let day_time = t.day_time;
+                    s.restart(world, t, &mut sim_view.traffic, renderer, scene, day_time);
                 }
             }
         }

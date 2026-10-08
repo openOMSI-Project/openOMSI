@@ -80,7 +80,7 @@ impl App {
     /// for the new time (`Schedule::restart`).
     pub(crate) fn timetable_after_clock_jump(&mut self) {
         let jump = std::mem::take(&mut self.session.clock_jump);
-        if jump.abs() < 120.0 {
+        if jump.abs() < crate::schedule::RESTART_JUMP {
             return;
         }
         if let (Some(s), Some(w), Some(t), Some(r), Some(scene)) = (self.session.schedule.as_mut(), self.world.as_ref(), self.session.traffic.as_mut(), self.renderer.as_ref(), self.scene.as_mut()) {

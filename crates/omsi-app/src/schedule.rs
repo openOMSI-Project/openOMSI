@@ -34,6 +34,10 @@ pub(crate) use omsi_sim::timetable_run::{
     shown_destination, turn_roller_blind, BlindPick,
 };
 
+/// A clock set on by this much or more (s), or back, puts the timetable's buses out again for
+/// the new time (`Schedule::restart`); through a smaller step they drive on.
+pub(crate) const RESTART_JUMP: f64 = 120.0;
+
 /// The timetable (`ScheduleSim`, which everything of the timetable reads through `Deref`)
 /// with the vehicle sets it reads and uploads ahead for the GPU.
 pub struct Schedule {
