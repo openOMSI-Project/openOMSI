@@ -631,6 +631,7 @@ pub(crate) fn run_offscreen(
             }
             t.others = lan_outlines(&remotes_off);
             t.others.extend(own_outlines(player.as_ref(), &[]));
+            t.other_blinkers = outline_indicators(&remotes_off, player.as_ref(), &[]);
             t.player_priority = player.as_ref().and_then(|p| p.vehicle.var("TrafficPriority")).is_some_and(|v| v > 0.5);
             t.player_blinker = player.as_ref().map(|p| lan::indicator(&p.vehicle)).unwrap_or(0);
             t.tick(dt, player.as_ref().map(|p| player_outline(p)));

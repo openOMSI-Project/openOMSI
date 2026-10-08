@@ -1864,14 +1864,22 @@ fn line_and_destination(p: &Player, duty: Option<(&str, &str)>) -> (String, Stri
     (line, dest.trim().to_string())
 }
 
-/// What a vehicle's indicators show: 0 off, 1 left, 2 right, 3 hazard - the indicator
-/// switch where the script has one, else the lamps (as they are lit just now).
+/// What a vehicle's indicators show: 0 off, 1 left, 2 right, 3 hazard. OMSI vehicle
+/// scripts publish their continuous state in `AI_Blinker_L/R`; switches and lamps
+/// remain fallbacks for scripts that do not publish it.
 pub(crate) fn indicator(v: &omsi_sim::VehicleInstance) -> u8 {
-    let on = |n: &str| v.var(n).unwrap_or(0.0) > 0.5;
-    if on("lights_sw_warnblinker") {
+    indicator_from_vars(|name| v.var(name))
+}
+
+fn indicator_from_vars(var: impl Fn(&str) -> Option<f32>) -> u8 {
+    let on = |name: &str| var(name).unwrap_or(0.0) > 0.5;
+    let continuous = on("AI_Blinker_L") as u8 | ((on("AI_Blinker_R") as u8) << 1);
+    if continuous != 0 {
+        continuous
+    } else if on("lights_sw_warnblinker") {
         3
     } else {
-        match v.var("lights_sw_blinker") {
+        match var("lights_sw_blinker") {
             Some(s) if (0.5..2.5).contains(&s) => s.round() as u8,
             _ => match (on("lights_blinker_l"), on("lights_blinker_r")) {
                 (true, true) => 3,
@@ -3750,6 +3758,42 @@ thread_local! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn continuous_indicator_state_survives_the_dark_half_of_a_blink() {
+        let state = |left, right, lamp| {
+            indicator_from_vars(|name| match name {
+                "AI_Blinker_L" => Some(left),
+                "AI_Blinker_R" => Some(right),
+                "lights_blinker_r" => Some(lamp),
+                _ => None,
+            })
+        };
+        assert_eq!(state(0.0, 1.0, 1.0), 2);
+        assert_eq!(state(0.0, 1.0, 0.0), 2);
+        assert_eq!(state(1.0, 0.0, 0.0), 1);
+        assert_eq!(state(1.0, 1.0, 0.0), 3);
+        assert_eq!(state(0.0, 0.0, 0.0), 0);
+    }
+
+    #[test]
+    fn indicators_fall_back_to_custom_scripts_switches_and_lamps() {
+        for direction in [1, 2] {
+            assert_eq!(
+                indicator_from_vars(|name| (name == "lights_sw_blinker").then_some(direction as f32)),
+                direction,
+            );
+        }
+        assert_eq!(
+            indicator_from_vars(|name| (name == "lights_sw_warnblinker").then_some(1.0)),
+            3,
+        );
+        assert_eq!(
+            indicator_from_vars(|name| (name == "lights_blinker_r").then_some(1.0)),
+            2,
+        );
+        assert_eq!(indicator_from_vars(|_| None), 0);
+    }
 
     /// The natural weather and the cycle need no file: a client takes them from any host.
     #[test]

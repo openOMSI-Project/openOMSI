@@ -370,6 +370,356 @@ impl Footprint {
 /// width, speed along the heading (m/s, negative when reversing).
 pub type PlayerBox = (DVec3, f64, f32, f32, f32);
 
+/// A directional object path is also a detector for the corresponding indicator.
+/// Straight/unmarked paths work for vehicles with any indicator state; hazards do not
+/// choose a left or right path.
+fn light_path_accepts_indicator(lane: &omsi_sim::traffic::Lane, blinker: u8) -> bool {
+    lane.turn == 0 || lane.turn == blinker as i32
+}
+
+/// Project without clamping at the endpoints. A clamped nearest point alone keeps
+/// detecting a vehicle after it has left a short object path.
+fn position_on_path(lane: &omsi_sim::traffic::Lane, pos: DVec3, heading: f64) -> Option<(f32, f64)> {
+    let (s, _) = lane.nearest_point(pos)?;
+    let (point, path_heading) = lane.at(s);
+    let turn = (path_heading as f64 - heading + 540.0).rem_euclid(360.0) - 180.0;
+    if turn.abs() > 45.0 || (point.z - pos.z).abs() > 2.0 {
+        return None;
+    }
+    let h = (path_heading as f64).to_radians();
+    let forward = DVec2::new(h.sin(), h.cos());
+    let delta = (pos - point).truncate();
+    Some((
+        s + delta.dot(forward) as f32,
+        delta.perp_dot(forward).abs(),
+    ))
+}
+
+/// All controlled paths occupied by a vehicle, including detector paths laid over a
+/// spline. Choosing only `lane_along` loses such a path whenever the spline is nearer.
+fn occupied_light_paths(net: &Network, b: &PlayerBox, blinker: u8) -> Vec<(usize, f32)> {
+    let (pos, heading, half_len, half_width, _) = *b;
+    let (cx, cy) = Network::grid_cell(pos);
+    let radius = ((half_len + half_width).max(0.0) as f64 / omsi_sim::traffic::GRID_CELL) as i32 + 1;
+    let mut candidates = Vec::new();
+    if net.grid.is_empty() {
+        candidates.extend(0..net.lanes.len());
+    } else {
+        for x in cx - radius..=cx + radius {
+            for y in cy - radius..=cy + radius {
+                if let Some(lanes) = net.grid.get(&(x, y)) {
+                    candidates.extend_from_slice(lanes);
+                }
+            }
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+    }
+    candidates
+        .into_iter()
+        .filter_map(|i| {
+            let lane = &net.lanes[i];
+            if lane.kind != LaneKind::Street
+                || lane.traffic_light.is_none()
+                || !light_path_accepts_indicator(lane, blinker)
+            {
+                return None;
+            }
+            let (s, across) = position_on_path(lane, pos, heading)?;
+            // Use the path's width, rather than a fixed six metre search that also detects
+            // the neighbouring bus bay. Keep the request until the vehicle's rear is out.
+            (across <= lane.width.max(0.0) as f64 * 0.5 + 0.25
+                && s + half_len >= 0.0
+                && s - half_len <= lane.length())
+                .then_some((i, -s - half_len))
+        })
+        .collect()
+}
+
+/// Requests ahead on the connected road, plus a gate just ahead in an off-road yard.
+fn vehicle_light_paths(net: &Network, b: &PlayerBox, blinker: u8, reach: f32) -> Vec<(usize, f32)> {
+    let (pos, heading, half_len, _, _) = *b;
+    let mut out = occupied_light_paths(net, b, blinker);
+    let on_road = net
+        .lane_along(pos, heading, LaneKind::Street, 2.5, 45.0)
+        .and_then(|(i, _, _)| {
+            let path = &net.lanes[i];
+            let (s, across) = position_on_path(path, pos, heading)?;
+            (across <= path.width.max(0.0) as f64 * 0.5 + 0.25
+                && s - half_len <= path.length()
+                && s + half_len >= 0.0)
+                .then_some((i, s))
+        });
+    let Some((lane, s)) = on_road else {
+        let h = heading.to_radians();
+        let forward = DVec2::new(h.sin(), h.cos());
+        for i in net.lanes_starting_near(pos, 25.0 + half_len as f64) {
+            let lane = &net.lanes[i];
+            if lane.kind != LaneKind::Street
+                || lane.traffic_light.is_none()
+                || !light_path_accepts_indicator(lane, blinker)
+            {
+                continue;
+            }
+            let (point, h0) = lane.at(0.0);
+            let delta = (point - pos).truncate();
+            let along = delta.dot(forward);
+            let across = delta.perp_dot(forward).abs();
+            let turn = ((h0 as f64 - heading + 540.0).rem_euclid(360.0) - 180.0).abs();
+            if along >= -half_len as f64
+                && along <= 25.0 + half_len as f64
+                && across <= lane.width.max(0.0) as f64 * 0.5 + 0.25
+                && turn < 60.0
+                && (point.z - pos.z).abs() <= 2.0
+            {
+                out.push((i, along as f32 - half_len));
+            }
+        }
+        return out;
+    };
+    let mut visited = vec![lane];
+    let mut open = vec![(lane, -s)];
+    while let Some((l, to_start)) = open.pop() {
+        let path = &net.lanes[l];
+        if light_path_accepts_indicator(path, blinker) {
+            out.push((l, to_start - half_len));
+        }
+        let to_end = to_start + path.length();
+        if to_end - half_len > reach || visited.len() > 256 {
+            continue;
+        }
+        let end_heading = path.headings.last().copied().unwrap_or(0.0);
+        for &n in &path.next {
+            let next = &net.lanes[n];
+            if next.kind != LaneKind::Street
+                || visited.contains(&n)
+                || !light_path_accepts_indicator(next, blinker)
+            {
+                continue;
+            }
+            let start_heading = next.headings.first().copied().unwrap_or(end_heading);
+            let turn = ((start_heading - end_heading) as f64 + 540.0).rem_euclid(360.0) - 180.0;
+            if turn.abs() <= 60.0 {
+                visited.push(n);
+                open.push((n, to_end));
+            }
+        }
+    }
+    out
+}
+
+fn request_path_lights(
+    net: &Network,
+    lights: &mut [TrafficLightController],
+    paths: Vec<(usize, f32)>,
+) {
+    for (lane, gap) in paths {
+        if let Some((ci, li)) = net.lanes[lane].traffic_light {
+            if let Some(ctl) = lights.get_mut(ci) {
+                if gap <= ctl.approach_dist(li) {
+                    if let Some(request) = ctl.request.get_mut(li) {
+                        *request = true;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod light_path_tests {
+    use super::*;
+    use omsi_sim::traffic::{Lane, LaneBuilder};
+
+    fn path(x: f64, y: f64, length: f64, width: f32, turn: i32) -> Lane {
+        let mut lane = LaneBuilder::arc(
+            DVec3::new(x, y, 0.0),
+            0.0,
+            length,
+            0.0,
+            0.0,
+            LaneKind::Street,
+            width,
+        );
+        lane.turn = turn;
+        lane.traffic_light = Some((0, 0));
+        lane
+    }
+
+    fn network(lanes: Vec<Lane>) -> Network {
+        let mut net = Network {
+            lanes,
+            ..Default::default()
+        };
+        net.build_grid();
+        net
+    }
+
+    fn overlapping(road_x: f64) -> Network {
+        let mut road = path(road_x, -100.0, 300.0, 3.5, 0);
+        road.traffic_light = None;
+        let mut detector = path(0.15, 10.0, 6.0, 2.8, 2);
+        detector.source = 2;
+        // The path detects traffic even when its rules forbid AI route selection.
+        detector.density = 0.0;
+        network(vec![road, detector])
+    }
+
+    fn bus(x: f64, y: f64) -> PlayerBox {
+        (DVec3::new(x, y, 0.0), 0.0, 6.0, 1.25, 0.0)
+    }
+
+    fn asks(net: &Network, vehicles: &[(PlayerBox, u8)], approach: f32) -> bool {
+        let mut lights = [TrafficLightController::from_program(
+            vec![(vec![(0, 1.0)], Some(approach))],
+            None,
+            &[],
+            &[],
+        )];
+        for (b, blinker) in vehicles {
+            request_path_lights(
+                net,
+                &mut lights,
+                vehicle_light_paths(net, b, *blinker, 160.0),
+            );
+        }
+        lights[0].request[0]
+    }
+
+    #[test]
+    fn an_overlapping_detector_reads_the_indicator_independently_of_the_nearest_road() {
+        for road_x in [0.0, 0.4] {
+            let net = overlapping(road_x);
+            let nearest = net.lane_along(bus(0.0, 13.0).0, 0.0, LaneKind::Street, 2.5, 45.0);
+            assert_eq!(nearest.unwrap().0, if road_x == 0.0 { 0 } else { 1 });
+            for blinker in [0, 1, 3] {
+                assert!(!asks(&net, &[(bus(0.0, 13.0), blinker)], 50.0));
+            }
+            assert!(asks(&net, &[(bus(0.0, 13.0), 2)], 50.0));
+        }
+    }
+
+    #[test]
+    fn a_request_lasts_from_front_entry_until_rear_exit() {
+        let net = overlapping(0.0);
+        assert!(!asks(&net, &[(bus(0.0, 3.9), 2)], 50.0));
+        assert!(asks(&net, &[(bus(0.0, 4.1), 2)], 50.0));
+        assert!(asks(&net, &[(bus(0.0, 21.9), 2)], 50.0));
+        assert!(!asks(&net, &[(bus(0.0, 22.1), 2)], 50.0));
+        assert!(!asks(&net, &[(bus(0.0, 13.0), 0)], 50.0));
+        assert!(asks(&net, &[(bus(0.0, 22.1), 2), (bus(0.0, 13.0), 2)], 50.0));
+    }
+
+    #[test]
+    fn an_articulated_vehicles_rear_section_keeps_the_request_after_its_front_leaves() {
+        let net = overlapping(0.0);
+        let front = bus(0.0, 28.0);
+        assert!(!asks(&net, &[(front, 2)], 50.0));
+        assert!(asks(&net, &[(front, 2), (bus(0.0, 17.0), 2)], 50.0));
+        assert!(!asks(&net, &[(front, 2), (bus(0.0, 22.1), 2)], 50.0));
+    }
+
+    #[test]
+    fn rotated_detector_paths_are_found_across_a_grid_cell_boundary() {
+        let mut detector = LaneBuilder::arc(
+            DVec3::new(49.0, 0.0, 0.0),
+            90.0,
+            6.0,
+            0.0,
+            0.0,
+            LaneKind::Street,
+            3.0,
+        );
+        detector.turn = 2;
+        detector.traffic_light = Some((0, 0));
+        let net = network(vec![detector]);
+        let vehicle = (DVec3::new(52.0, 0.0, 0.0), 90.0, 6.0, 1.25, 0.0);
+        assert!(asks(&net, &[(vehicle, 2)], 50.0));
+        assert!(!asks(&net, &[(vehicle, 0)], 50.0));
+    }
+
+    #[test]
+    fn adjacent_opposite_and_overhead_vehicles_do_not_trigger_a_detector() {
+        // Also check a detector with no competing spline: lane_along's search
+        // distance must not turn a narrow path into a detector for the next lane.
+        for net in [
+            overlapping(0.0),
+            network(vec![path(0.15, 10.0, 6.0, 2.8, 2)]),
+        ] {
+            assert!(!asks(&net, &[(bus(2.0, 13.0), 2)], 50.0));
+            let mut opposite = bus(0.0, 13.0);
+            opposite.1 = 180.0;
+            assert!(!asks(&net, &[(opposite, 2)], 50.0));
+            let mut overhead = bus(0.0, 13.0);
+            overhead.0.z = 5.0;
+            assert!(!asks(&net, &[(overhead, 2)], 50.0));
+            assert!(!asks(&net, &[(bus(0.0, 22.1), 2)], 50.0));
+        }
+    }
+
+    #[test]
+    fn connected_signals_and_offroad_gates_keep_their_approach_distance() {
+        let mut road = path(0.0, 0.0, 20.0, 3.5, 0);
+        road.traffic_light = None;
+        road.next = vec![1];
+        let net = network(vec![road, path(0.0, 20.0, 10.0, 3.5, 2)]);
+        assert!(!asks(&net, &[(bus(0.0, 5.0), 2)], 8.0));
+        assert!(asks(&net, &[(bus(0.0, 5.0), 2)], 10.0));
+        assert!(!asks(&net, &[(bus(0.0, 5.0), 0)], 10.0));
+
+        let gate = network(vec![path(0.0, 15.0, 10.0, 3.5, 0)]);
+        for blinker in [0, 1, 2, 3] {
+            assert!(!asks(&gate, &[(bus(0.0, 0.0), blinker)], 8.0));
+            assert!(asks(&gate, &[(bus(0.0, 0.0), blinker)], 10.0));
+        }
+        assert!(!asks(&gate, &[(bus(4.0, 0.0), 0)], 50.0));
+    }
+
+    #[test]
+    fn left_paths_test_the_left_indicator_and_unmarked_paths_accept_all_states() {
+        let left = network(vec![path(0.0, 10.0, 6.0, 3.0, 1)]);
+        assert!(asks(&left, &[(bus(0.0, 13.0), 1)], 50.0));
+        for blinker in [0, 2, 3] {
+            assert!(!asks(&left, &[(bus(0.0, 13.0), blinker)], 50.0));
+        }
+        let straight = network(vec![path(0.0, 10.0, 6.0, 3.0, 0)]);
+        for blinker in [0, 1, 2, 3] {
+            assert!(asks(&straight, &[(bus(0.0, 13.0), blinker)], 50.0));
+        }
+    }
+
+    #[test]
+    fn detector_requests_drive_a_scripted_open_hold_and_close_cycle() {
+        let net = overlapping(0.0);
+        // Synthetic program: loop in red without a request, hold in green with
+        // a request, then complete the cycle after the last vehicle leaves.
+        let mut lights = [TrafficLightController::from_program(
+            vec![(vec![(0, 1.0), (6, 2.0), (0, 1.0)], None)],
+            Some(4.0),
+            &[[0.0, 2.0, 0.0]],
+            &[[0.0, 0.75, 1.0, 0.25]],
+        )];
+        let mut run = |b: PlayerBox, blinker: u8, frames: usize| {
+            for _ in 0..frames {
+                lights[0].request.fill(false);
+                request_path_lights(
+                    &net,
+                    &mut lights,
+                    vehicle_light_paths(&net, &b, blinker, 160.0),
+                );
+                lights[0].advance(0.1);
+            }
+            lights[0].state(0)
+        };
+        assert_eq!(run(bus(0.0, 13.0), 0, 40), 0);
+        assert_eq!(run(bus(0.0, 13.0), 2, 40), 6);
+        assert_eq!(run(bus(0.0, 21.9), 2, 40), 6);
+        assert_eq!(run(bus(0.0, 22.1), 2, 40), 0);
+        assert_eq!(run(bus(0.0, 13.0), 2, 40), 6);
+        assert_eq!(run(bus(0.0, 13.0), 0, 40), 0);
+    }
+}
+
 /// Where the player looks from, for putting cars on the road and taking them off only
 /// where nobody sees it happen.
 #[derive(Debug, Clone, Copy)]
@@ -663,6 +1013,8 @@ pub struct Traffic {
     /// before each `tick`: the cars stop behind them and go round them as round the
     /// player's bus.
     pub others: Vec<(u32, PlayerBox)>,
+    /// Indicator state for each outline, including articulated rear sections.
+    pub other_blinkers: HashMap<u32, u8>,
     /// The drivers at the wheel of the timetable buses near the camera, by car id (see
     /// `driver.rs`; made within `DRIVER_NEAR` m of the camera, let go beyond twice that).
     drivers: HashMap<u64, crate::driver::DriverFigure>,
@@ -1494,6 +1846,7 @@ impl Traffic {
             player_signalling: 0.0,
             way_users: Vec::new(),
             others: Vec::new(),
+            other_blinkers: HashMap::new(),
             drivers: HashMap::new(),
             driver_pool: Vec::new(),
             tick_split: [0.0; 3],
@@ -5334,11 +5687,32 @@ impl Traffic {
             .fold(160.0f32, f32::max)
             .min(1200.0);
         for c in &self.cars {
+            // A detector object can overlap the driven lane without belonging to the
+            // AI's route. Its direction still tests the vehicle's own indicator state.
+            let b = crate::traffic_link::vehicle_outline(&c.vehicle, c.state.speed);
+            request_path_lights(
+                &self.net,
+                &mut self.lights,
+                occupied_light_paths(&self.net, &b, c.state.blinker as u8),
+            );
+            for t in &c.vehicle.trailers {
+                if let Some(rear) = crate::traffic_link::trailer_outline(t, c.state.speed) {
+                    request_path_lights(
+                        &self.net,
+                        &mut self.lights,
+                        occupied_light_paths(&self.net, &rear, c.state.blinker as u8),
+                    );
+                }
+            }
+            // An AI's planned route already identifies the requested turn, including
+            // lights with an approach distance beyond where its indicator comes on.
             for (l, d) in self.way_lanes(&c.state, reach) {
                 if let Some((ci, li)) = self.net.lanes[l].traffic_light {
                     if let Some(ctl) = self.lights.get_mut(ci) {
                         let gap = d - c.state.front;
-                        if gap <= ctl.approach_dist(li) && d > -self.net.lanes[l].length() {
+                        if gap <= ctl.approach_dist(li)
+                            && d + self.net.lanes[l].length() + c.state.rear >= 0.0
+                        {
                             if let Some(r) = ctl.request.get_mut(li) {
                                 *r = true;
                             }
@@ -5350,49 +5724,21 @@ impl Traffic {
         // the player's bus and the other players' vehicles ask too: a depot gate (Spandau's
         // `Omnibushof_S_1`, the exit arm on light 1) opens only for whoever asks, and the
         // player driving out of the depot at the start of a duty found it shut
-        let askers: Vec<(DVec3, f64)> = player
+        let askers: Vec<(PlayerBox, u8)> = player
             .iter()
-            .map(|p| (p.0, p.1))
-            .chain(self.others.iter().map(|(_, b)| (b.0, b.1)))
+            .map(|p| (*p, self.player_blinker))
+            .chain(
+                self.others
+                    .iter()
+                    .map(|(id, b)| (*b, self.other_blinkers.get(id).copied().unwrap_or(0))),
+            )
             .collect();
-        for &(pos, heading) in &askers {
-            // (off the lanes - a depot yard, a car park - a gate's lane that starts just
-            // ahead, the way the bus is facing, is asked all the same: standing a few metres
-            // beside every lane there, the bus never opened the barrier in front of it.
-            // Only off the lanes: on the road it asked the lights of every lane up to 6 m
-            // beside it - Winsenburg's bus light jumped for a bus driving past on the road
-            // next to the bus bays, #1790; on a lane, the lanes ahead below ask)
-            if self.net.lane_along(pos, heading, LaneKind::Street, 2.5, 45.0).is_some() {
-                continue;
-            }
-            let h = heading.to_radians();
-            let fwd = glam::DVec2::new(h.sin(), h.cos());
-            for l in 0..self.net.lanes.len() {
-                let lane = &self.net.lanes[l];
-                let Some((ci, li)) = lane.traffic_light else { continue };
-                let (p0, h0) = lane.at(0.0);
-                let d = (p0 - pos).truncate();
-                let (along, across) = (d.dot(fwd), d.perp_dot(fwd).abs());
-                let turn = ((h0 as f64 - heading + 540.0).rem_euclid(360.0) - 180.0).abs();
-                if (-2.0..25.0).contains(&along) && across < 6.0 && turn < 60.0 && (p0.z - pos.z).abs() < 4.0 {
-                    if let Some(r) = self.lights.get_mut(ci).and_then(|c| c.request.get_mut(li)) {
-                        *r = true;
-                    }
-                }
-            }
-        }
-        for (pos, heading) in askers {
-            for (l, d) in self.lanes_ahead_of(pos, heading, reach) {
-                if let Some((ci, li)) = self.net.lanes[l].traffic_light {
-                    if let Some(ctl) = self.lights.get_mut(ci) {
-                        if d <= ctl.approach_dist(li) {
-                            if let Some(r) = ctl.request.get_mut(li) {
-                                *r = true;
-                            }
-                        }
-                    }
-                }
-            }
+        for (b, blinker) in askers {
+            request_path_lights(
+                &self.net,
+                &mut self.lights,
+                vehicle_light_paths(&self.net, &b, blinker, reach),
+            );
         }
         let mut walkers: HashMap<usize, Vec<f32>> = HashMap::new();
         for &(l, s) in &self.walkers {
@@ -6945,39 +7291,6 @@ impl Traffic {
             }
         }
     }
-
-    /// The street lanes a vehicle standing at `pos` facing `heading` is on and will drive
-    /// onto within `reach` metres, each with the distance from the vehicle to its start
-    /// (0 for the lane it is on): the way straight on and the gentle turns (within 60° of
-    /// the lane before), not every branch of a junction.
-    fn lanes_ahead_of(&self, pos: DVec3, heading: f64, reach: f32) -> Vec<(usize, f32)> {
-        let Some((lane, s, _)) = self.net.lane_along(pos, heading, LaneKind::Street, 4.0, 45.0) else {
-            return Vec::new();
-        };
-        let mut out = vec![(lane, 0.0f32)];
-        let mut open = vec![(lane, self.net.lanes[lane].length() - s)];
-        while let Some((l, to_end)) = open.pop() {
-            if to_end > reach || out.len() > 256 {
-                continue;
-            }
-            let end_heading = self.net.lanes[l].headings.last().copied().unwrap_or(0.0);
-            for &n in &self.net.lanes[l].next {
-                let nl = &self.net.lanes[n];
-                if nl.kind != LaneKind::Street || out.iter().any(|o| o.0 == n) {
-                    continue;
-                }
-                let start = nl.headings.first().copied().unwrap_or(end_heading);
-                let turn = ((start - end_heading) as f64 + 540.0).rem_euclid(360.0) - 180.0;
-                if turn.abs() > 60.0 {
-                    continue;
-                }
-                out.push((n, to_end));
-                open.push((n, to_end + nl.length()));
-            }
-        }
-        out
-    }
-
 
     /// The drivers of the timetable buses near the camera: made when a bus comes within
     /// `DRIVER_NEAR`, posed every sync, let go when it is twice that far or gone.
