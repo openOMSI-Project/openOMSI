@@ -162,7 +162,7 @@ pub fn profile(l: &mut Launcher, area: Rect) {
     let prev = ((p.level - 1) * (p.level - 1) * 250) as f64;
     let frac = ((p.xp as f64 - prev) / (p.next_level_xp as f64 - prev).max(1.0)).clamp(0.0, 1.0) as f32;
     let shown = l.ui.anim(id_of("xp-ring"), frac, 0.6);
-    l.ui.p().circle(c, 50.0, Color::rgba(28, 31, 37, 1.0));
+    l.ui.p().circle(c, 50.0, FIELD);
     l.ui.p().arc(c, 44.0, 52.0, 0.0, std::f32::consts::TAU, Color::WHITE.alpha(0.08));
     let a0 = -std::f32::consts::FRAC_PI_2;
     l.ui.p().arc(c, 44.0, 52.0, a0, a0 + std::f32::consts::TAU * shown.max(0.01), ACCENT);
@@ -376,7 +376,7 @@ pub fn reset_dialog(l: &mut Launcher) {
     let size = l.ui.size;
     let full = Rect::new(0.0, 0.0, size.x, size.y);
     l.ui.solid(full);
-    l.ui.p().rect(full, omsi_ui::Color::rgba(0, 0, 0, 0.62));
+    l.ui.p().rect(full, SHADE);
     let w = (size.x - 48.0).min(520.0);
     let h = 190.0;
     let r = Rect::new((size.x - w) * 0.5, (size.y - h) * 0.5, w, h);
@@ -1383,8 +1383,8 @@ pub fn controls(l: &mut Launcher, area: Rect) {
         let tw = body.w - bw - 70.0;
         let th = l.ui.paragraph_height(&text, tw, 12.5, Weight::Medium);
         let bar = Rect::new(body.x, body.y, body.w, (th + 22.0).max(54.0));
-        l.ui.p().rounded(bar, 8.0, ACCENT.alpha(0.1));
-        l.ui.p().rounded_border(bar, 8.0, 1.0, ACCENT.alpha(0.45));
+        l.ui.p().rounded(bar, 8.0, HOVER);
+        l.ui.p().rounded_border(bar, 8.0, 1.0, ACCENT.alpha(0.7));
         l.ui.icon("info", Vec2::new(bar.x + 22.0, bar.center().y), 20.0, ACCENT);
         l.ui.paragraph(&text, Vec2::new(bar.x + 42.0, bar.center().y - th * 0.5), tw, 12.5, Weight::Medium, TEXT_SOFT);
         if l.ui.button("kb-use-custom", Rect::new(bar.right() - bw - 10.0, bar.center().y - 18.0, bw, 36.0), "Use these keys", Some("keyboard"), ButtonKind::Primary) {
@@ -1509,7 +1509,7 @@ pub fn controls(l: &mut Launcher, area: Rect) {
                 if c {
                     clicked = Some((*i, false));
                 }
-                let base = if waiting { ACCENT.alpha(0.25 + 0.15 * (time * 6.0).sin().abs()) } else if *clash { DANGER.alpha(0.22) } else { Color::WHITE.alpha(if h { 0.12 } else { 0.07 }) };
+                let base = if waiting { SELECTED.lighten(0.05 + 0.15 * (time * 6.0).sin().abs()) } else if *clash { DANGER.alpha(0.22) } else { Color::WHITE.alpha(if h { 0.12 } else { 0.07 }) };
                 ui.p().rounded(kr, 6.0, base);
                 ui.p().rounded_border(kr, 6.0, 1.0, if waiting { ACCENT } else if *clash { DANGER } else { Color::WHITE.alpha(0.1) });
                 ui.text_in(if waiting { "press a key…" } else { keyn }, kr, 12.0, Weight::Bold, if *clash { DANGER.lighten(0.3) } else { TEXT }, Align::Center);
@@ -1834,7 +1834,7 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
                 None => format!("Button {}", b + 1),
             };
             if lit == Some(b) {
-                ui.p().rounded(Rect::new(r.x - 4.0, r.y - 2.0, r.w + 8.0, r.h + 4.0), 6.0, ACCENT.alpha(0.28));
+                ui.p().rounded(Rect::new(r.x - 4.0, r.y - 2.0, r.w + 8.0, r.h + 4.0), 6.0, SELECTED);
             }
             ui.label(Rect::new(r.x, r.y, 90.0, r.h), &label);
             // (a latching switch - a turn signal lever, a lit hazard button - also switches
@@ -2270,8 +2270,8 @@ pub fn sessions(l: &mut Launcher, area: Rect) {
         if role == "host" {
             let code = lan.get("code").and_then(|x| x.as_str()).unwrap_or("").to_string();
             let box_r = Rect::new(r.x + 20.0, yy, r.w - 40.0, 84.0);
-            l.ui.p().rounded(box_r, 10.0, ACCENT.alpha(0.10));
-            l.ui.p().rounded_border(box_r, 10.0, 1.0, ACCENT.alpha(0.5));
+            l.ui.p().rounded(box_r, 10.0, HOVER);
+            l.ui.p().rounded_border(box_r, 10.0, 1.0, ACCENT.alpha(0.7));
             l.ui.text_in("SESSION CODE", Rect::new(box_r.x + 16.0, box_r.y + 8.0, 200.0, 16.0), 10.5, Weight::Black, ACCENT, Align::Left);
             l.ui.text_in(&code, Rect::new(box_r.x + 16.0, box_r.y + 26.0, box_r.w - 170.0, 30.0), 20.0, Weight::Condensed, TEXT, Align::Left);
             l.ui.text_in("Your friends paste it into Multiplayer → Connect by Code.", Rect::new(box_r.x + 16.0, box_r.y + 58.0, box_r.w - 170.0, 18.0), 11.5, Weight::Regular, TEXT_DIM, Align::Left);
@@ -2317,7 +2317,7 @@ pub fn sessions(l: &mut Launcher, area: Rect) {
         }
         if log_open {
             let lr = Rect::new(r.x + 20.0, yy + 6.0, r.w - 40.0, 204.0);
-            l.ui.p().rounded(lr, 8.0, Color::rgba(6, 8, 10, 0.9));
+            l.ui.p().rounded(lr, 8.0, RAIL.alpha(0.9));
             let text: Vec<String> = log_lines.iter().rev().take(11).rev().cloned().collect();
             for (k, line) in text.iter().enumerate() {
                 l.ui.text_in(line, Rect::new(lr.x + 10.0, lr.y + 6.0 + k as f32 * 18.0, lr.w - 20.0, 18.0), 11.0, Weight::Regular, if line.contains("ERROR") { DANGER } else if line.contains("WARN") { WARN } else { TEXT_DIM }, Align::Left);
@@ -2391,7 +2391,7 @@ pub fn mods(l: &mut Launcher, area: Rect) {
     let drop = Rect::new(inner.x, y, inner.w, 110.0);
     let hot = l.pages.drop_hover;
     let t = l.ui.anim(id_of("drop"), if hot { 1.0 } else { 0.0 }, 0.1);
-    l.ui.p().rounded(drop, 12.0, ACCENT.alpha(0.05 + 0.12 * t));
+    l.ui.p().rounded(drop, 12.0, FIELD.mix(SELECTED, t));
     // a dashed edge
     let per = 2.0 * (drop.w + drop.h);
     let n = (per / 14.0) as usize;

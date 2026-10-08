@@ -533,7 +533,7 @@ impl Ui {
 
     // --- surfaces ------------------------------------------------------------------------
 
-    /// A panel: flat, dark, a hairline edge.
+    /// A panel: flat, a hairline edge.
     pub fn panel(&mut self, r: Rect) {
         self.solid(r);
         let p = self.p();
@@ -541,10 +541,10 @@ impl Ui {
         p.rounded_border(r, RADIUS, 1.0, EDGE);
     }
 
-    /// A section heading inside a panel: an accent tick and the title in capitals.
+    /// A section heading inside a panel.
     pub fn heading(&mut self, r: Rect, title: &str, icon: Option<&str>) -> Rect {
         let _ = icon;
-        self.text(&omsi_ui::tr(title).to_uppercase(), Vec2::new(r.x, r.y + 14.0), 11.0, Weight::Bold, TEXT_DIM, Align::Left);
+        self.text(&omsi_ui::tr(title), Vec2::new(r.x, r.y + 15.0), 13.5, Weight::Bold, TEXT, Align::Left);
         Rect::new(r.x, r.y + 26.0, r.w, (r.h - 26.0).max(0.0))
     }
 
@@ -561,12 +561,12 @@ impl Ui {
         let t = self.anim(id, if h { 1.0 } else { 0.0 }, 0.06);
         let rr = if held { r.inset(0.5) } else { r };
         let (fill, text_c, edge) = match kind {
-            ButtonKind::Primary => (ACCENT.lighten(0.08 * t), Color::rgba(18, 14, 8, 1.0), Color::CLEAR),
+            ButtonKind::Primary => (ACCENT.lighten(0.25 * t), ON_ACCENT, Color::CLEAR),
             ButtonKind::Danger => (FIELD.mix(HOVER, t), DANGER, DANGER.alpha(0.35 + 0.3 * t)),
             ButtonKind::Normal => (FIELD.mix(HOVER, t), TEXT, EDGE),
-            ButtonKind::Ghost => (Color::WHITE.alpha(0.05 * t), if h { TEXT } else { TEXT_DIM }, Color::CLEAR),
+            ButtonKind::Ghost => (Color::WHITE.alpha(0.07 * t), if h { TEXT } else { TEXT_DIM }, Color::CLEAR),
         };
-        let rad = 6.0;
+        let rad = CTRL;
         self.p().rounded(rr, rad, fill);
         if edge.0[3] > 0.0 {
             self.p().rounded_border(rr, rad, 1.0, edge);
@@ -590,7 +590,7 @@ impl Ui {
         let rect = Rect::new(c.x - r, c.y - r, 2.0 * r, 2.0 * r);
         let (h, _, clicked) = self.interact(id, rect);
         let t = self.anim(id, if h { 1.0 } else { 0.0 }, 0.08);
-        self.p().circle(c, r, Color::WHITE.alpha(0.06 * t));
+        self.p().circle(c, r, Color::WHITE.alpha(0.09 * t));
         self.icon(icon, c, r * 1.1, if h { TEXT } else { TEXT_DIM });
         if !tip.is_empty() {
             self.tooltip(rect, tip);
@@ -609,9 +609,9 @@ impl Ui {
         let tw = 34.0;
         let th = 18.0;
         let track = Rect::new(r.right() - tw, r.y + (r.h - th) * 0.5, tw, th);
-        self.p().rounded(track, th * 0.5, Color::rgba(62, 62, 62, 1.0).mix(ACCENT, on));
+        self.p().rounded(track, th * 0.5, TRACK.mix(ACCENT, on));
         let kx = track.x + th * 0.5 + (tw - th) * on;
-        self.p().circle(Vec2::new(kx, track.center().y), th * 0.5 - 3.0, Color::rgba(240, 240, 240, 1.0));
+        self.p().circle(Vec2::new(kx, track.center().y), th * 0.5 - 3.0, KNOB.mix(ON_ACCENT, on));
         self.text_in(label, Rect::new(r.x, r.y, r.w - tw - 10.0, r.h), 13.0, Weight::Regular, if h { TEXT } else { TEXT_SOFT }, Align::Left);
         clicked
     }
@@ -646,10 +646,11 @@ impl Ui {
         let cy = track_r.center().y;
         let th = 4.0;
         let track = Rect::new(track_r.x, cy - th * 0.5, track_r.w, th);
-        self.p().rounded(track, th * 0.5, Color::rgba(58, 58, 58, 1.0));
+        self.p().rounded(track, th * 0.5, TRACK);
         self.p().rounded(Rect::new(track.x, track.y, track.w * shown, th), th * 0.5, ACCENT);
         let kc = Vec2::new(track.x + track.w * shown, cy);
-        self.p().circle(kc, if h || held { 7.5 } else { 6.5 }, Color::rgba(240, 240, 240, 1.0));
+        self.p().circle(kc, if h || held { 8.5 } else { 7.5 }, ACCENT);
+        self.p().circle(kc, if held { 2.5 } else { 3.5 }, ON_ACCENT);
         let txt = fmt(*value);
         self.text_in(&txt, Rect::new(r.right() - val_w + 8.0, r.y, val_w - 8.0, r.h), 12.5, Weight::Medium, TEXT, Align::Right);
         *value != before
@@ -659,11 +660,13 @@ impl Ui {
     pub fn segmented(&mut self, name: &str, r: Rect, selected: &mut usize, labels: &[&str]) -> bool {
         let n = labels.len().max(1);
         let id = id_of(name);
-        self.p().rounded(r, 6.0, FIELD);
+        self.p().rounded(r, CTRL, FIELD);
+        self.p().rounded_border(r, CTRL, 1.0, EDGE);
         let w = r.w / n as f32;
         let at = self.anim(id, *selected as f32, 0.07);
         let knob = Rect::new(r.x + 3.0 + w * at, r.y + 3.0, w - 6.0, r.h - 6.0);
-        self.p().rounded(knob, 4.0, Color::rgba(62, 62, 62, 1.0));
+        self.p().rounded(knob, CTRL - 2.0, TRACK);
+        self.p().rounded(Rect::new(knob.x + 10.0, knob.bottom() - 2.0, knob.w - 20.0, 2.0), 1.0, ACCENT);
         let mut changed = false;
         for (k, l) in labels.iter().enumerate() {
             let cell = Rect::new(r.x + w * k as f32, r.y, w, r.h);
@@ -912,7 +915,7 @@ impl Ui {
 
                     self.p().rect(
                         Rect::new(inner.x + sx, r.y + 5.0, sw, r.h - 10.0),
-                        ACCENT.alpha(0.35),
+                        ACCENT_2.alpha(0.35),
                     );
                 }
             }
@@ -1004,7 +1007,7 @@ impl Ui {
 
     /// A progress bar (0..1), animated stripes while `busy`.
     pub fn progress(&mut self, r: Rect, frac: f32, busy: bool) {
-        self.p().rounded(r, r.h * 0.5, Color::rgba(50, 50, 50, 1.0));
+        self.p().rounded(r, r.h * 0.5, TRACK);
         let w = (r.w * frac.clamp(0.0, 1.0)).max(r.h);
         self.p().rounded(Rect::new(r.x, r.y, w, r.h), r.h * 0.5, ACCENT);
         if busy {
@@ -1079,8 +1082,8 @@ impl Ui {
         let t = self.anim(id, if h { 1.0 } else { 0.0 }, 0.08);
         let s = self.anim(id ^ 4, if selected { 1.0 } else { 0.0 }, 0.1);
         if s > 0.01 {
-            self.p().rounded(r, 6.0, SELECTED.alpha(s));
-            self.p().rounded(Rect::new(r.x, r.y + 8.0, 2.0, r.h - 16.0), 1.0, ACCENT.alpha(s));
+            self.p().rounded(r, CTRL, SELECTED.alpha(s));
+            self.p().rounded(Rect::new(r.x + 1.0, r.y + 7.0, 3.0, r.h - 14.0), 1.5, ACCENT.alpha(s));
         } else if t > 0.01 {
             self.p().rounded(r, 6.0, HOVER.alpha(t));
         }
@@ -1091,7 +1094,7 @@ impl Ui {
     pub fn badge(&mut self, at: Vec2, text: &str, c: Color) -> f32 {
         let w = self.width(text, 10.0, Weight::Bold) + 10.0;
         let r = Rect::new(at.x, at.y, w, 16.0);
-        self.p().rounded(r, 4.0, c.alpha(0.14));
+        self.p().rounded(r, 8.0, c.alpha(0.18));
         self.text_in(text, r, 10.0, Weight::Bold, c, Align::Center);
         w
     }
@@ -1114,8 +1117,9 @@ impl Ui {
             if r.bottom() > self.size.y - 8.0 {
                 r.y = at.y - 12.0 - r.h;
             }
-            self.p().rounded(r, 6.0, Color::rgba(34, 34, 34, 1.0));
-            self.p().rounded_border(r, 7.0, 1.0, Color::WHITE.alpha(0.1));
+            self.p().shadow(Rect::new(r.x, r.y + 3.0, r.w, r.h), CTRL, 14.0, SHADOW);
+            self.p().rounded(r, CTRL, POPUP);
+            self.p().rounded_border(r, CTRL, 1.0, EDGE);
             self.paragraph(&t, Vec2::new(r.x + 10.0, r.y + 4.0), w - 20.0, 12.5, Weight::Medium, TEXT_SOFT);
         }
         let mut layers = Vec::new();
@@ -1168,8 +1172,9 @@ impl Ui {
         p.opened = (p.opened + self.dt / 0.3).min(1.0);
         let e = 1.0 - (1.0 - p.opened).powi(3);
         let rr = Rect::new(r.x, r.y - 6.0 * (1.0 - e), r.w, r.h);
-        self.p().rounded(rr, 8.0, Color::rgba(28, 28, 28, e));
-        self.p().rounded_border(rr, 8.0, 1.0, Color::WHITE.alpha(0.1 * e));
+        self.p().shadow(Rect::new(rr.x, rr.y + 6.0, rr.w, rr.h), 8.0, 24.0, SHADOW.alpha(e));
+        self.p().rounded(rr, 8.0, POPUP.alpha(e));
+        self.p().rounded_border(rr, 8.0, 1.0, EDGE.alpha(e));
         let row = 34.0;
         let shown = p.shown();
         // (what was typed, over the options it leaves)
@@ -1247,8 +1252,9 @@ impl Ui {
         let r = date_rect(&p, self.size);
         p.opened = (p.opened + self.dt / 0.12).min(1.0);
         let e = 1.0 - (1.0 - p.opened).powi(3);
-        self.p().rounded(r, 8.0, Color::rgba(28, 28, 28, e));
-        self.p().rounded_border(r, 8.0, 1.0, Color::WHITE.alpha(0.1 * e));
+        self.p().shadow(Rect::new(r.x, r.y + 6.0, r.w, r.h), 8.0, 24.0, SHADOW.alpha(e));
+        self.p().rounded(r, 8.0, POPUP.alpha(e));
+        self.p().rounded_border(r, 8.0, 1.0, EDGE.alpha(e));
         let m = self.input.mouse;
         let click = self.input.released;
         // month header with arrows
@@ -1306,7 +1312,7 @@ impl Ui {
             } else if h {
                 self.p().rounded(cell, 7.0, Color::WHITE.alpha(0.09));
             }
-            self.text_in(&d.to_string(), cell, 12.5, Weight::Medium, if is_chosen { Color::rgba(20, 16, 8, 1.0) } else { TEXT }, Align::Center);
+            self.text_in(&d.to_string(), cell, 12.5, Weight::Medium, if is_chosen { ON_ACCENT } else { TEXT }, Align::Center);
             if h {
                 self.cursor = winit::window::CursorIcon::Pointer;
                 if click {

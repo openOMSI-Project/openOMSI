@@ -251,7 +251,7 @@ impl Launcher {
         let size = self.ui.size;
         let full = Rect::new(0.0, 0.0, size.x, size.y);
         self.ui.solid(full);
-        self.ui.p().rect(full, omsi_ui::Color::rgba(0, 0, 0, 0.72));
+        self.ui.p().rect(full, SHADE);
         let r = Rect::new(24.0, 14.0, size.x - 48.0, size.y - 28.0);
         self.ui.panel(r);
         let inner = Rect::new(r.x + 16.0, r.y + 12.0, r.w - 32.0, r.h - 24.0);

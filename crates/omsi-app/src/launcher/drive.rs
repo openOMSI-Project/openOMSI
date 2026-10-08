@@ -221,8 +221,8 @@ fn steps(l: &mut Launcher, r: Rect) {
         let on = l.drive.tab == k;
         let c = if on { TEXT } else if h { TEXT_SOFT } else { TEXT_DIM };
         let dot = Vec2::new(cell.x + 14.0, cell.center().y);
-        l.ui.p().circle(dot, 10.0, if on { ACCENT } else { Color::rgba(52, 52, 52, 1.0) });
-        l.ui.text_in(&format!("{}", k + 1), Rect::new(dot.x - 10.0, dot.y - 10.0, 20.0, 20.0), 11.5, Weight::Bold, if on { Color::rgba(18, 14, 8, 1.0) } else { TEXT_SOFT }, Align::Center);
+        l.ui.p().circle(dot, 10.0, if on { ACCENT } else { TRACK });
+        l.ui.text_in(&format!("{}", k + 1), Rect::new(dot.x - 10.0, dot.y - 10.0, 20.0, 20.0), 11.5, Weight::Bold, if on { ON_ACCENT } else { TEXT_SOFT }, Align::Center);
         l.ui.text_in(name, Rect::new(cell.x + 30.0, cell.y, (cell.w - 34.0).max(20.0), cell.h), 12.5, if on { Weight::Bold } else { Weight::Medium }, c, Align::Left);
     }
 }
@@ -319,8 +319,8 @@ fn duty_panel(l: &mut Launcher, body: Rect) {
             let cw = ui.width(&count, 11.5, Weight::Bold) + 8.0;
             let bw = (ui.width(name, 12.5, Weight::Bold) + 14.0).clamp(34.0, (rr.w - cw - 40.0).max(34.0));
             let badge = Rect::new(rr.x + 10.0, rr.y + 6.0, bw, 20.0);
-            ui.p().rounded(badge, 4.0, if on { ACCENT } else { Color::rgba(56, 56, 56, 1.0) });
-            ui.text_in(name, badge.pad(6.0, 0.0), 12.0, Weight::Bold, if on { Color::rgba(18, 14, 8, 1.0) } else { TEXT }, Align::Center);
+            ui.p().rounded(badge, 4.0, if on { ACCENT } else { TRACK });
+            ui.text_in(name, badge.pad(6.0, 0.0), 12.0, Weight::Bold, if on { ON_ACCENT } else { TEXT }, Align::Center);
             ui.icon("event", Vec2::new(rr.right() - cw - 10.0, badge.center().y), 13.0, TEXT_FAINT);
             ui.text_in(&count, Rect::new(rr.right() - cw - 2.0, badge.y, cw, badge.h), 11.5, Weight::Bold, TEXT_DIM, Align::Right);
             ui.tooltip(Rect::new(rr.right() - cw - 18.0, badge.y, cw + 18.0, badge.h), "Tours of this line on the chosen day");
@@ -677,7 +677,7 @@ fn legend(l: &mut Launcher, map: Rect) -> Option<Rect> {
     let w = (l.ui.width(&t, 11.0, Weight::Regular) + 20.0).min(map.w - 24.0);
     let bar = Rect::new(map.x + 12.0, map.bottom() - 32.0, w, 22.0);
     l.ui.solid(bar);
-    l.ui.p().rounded(bar, 5.0, Color::rgba(0, 0, 0, 0.6));
+    l.ui.p().rounded(bar, 5.0, SHADE.alpha(0.85));
     l.ui.text_in(&t, bar.pad(10.0, 0.0), 11.0, Weight::Regular, TEXT_SOFT, Align::Left);
     Some(bar)
 }
@@ -700,7 +700,7 @@ fn map_labels(l: &mut Launcher, map: Rect, avoid: &[Rect]) {
                 let rr = if inside(&right) { right } else { Rect::new(at.x - 12.0 - w, at.y - 28.0, w, 20.0) };
                 if inside(&rr) {
                     l.ui.p().rounded(rr, 4.0, ACCENT);
-                    l.ui.text_in(&name, rr.pad(7.0, 0.0), 11.5, Weight::Bold, Color::rgba(18, 14, 8, 1.0), Align::Left);
+                    l.ui.text_in(&name, rr.pad(7.0, 0.0), 11.5, Weight::Bold, ON_ACCENT, Align::Left);
                     taken.push(rr);
                 }
             }
@@ -722,7 +722,7 @@ fn map_labels(l: &mut Launcher, map: Rect, avoid: &[Rect]) {
         let right = Rect::new(at.x + 9.0, at.y - 9.0, w, 18.0);
         let left = Rect::new(at.x - 9.0 - w, at.y - 9.0, w, 18.0);
         let Some(rr) = [right, left].into_iter().find(|r| inside(r) && !taken.iter().any(|t| hits(t, r))) else { continue };
-        l.ui.p().rounded(rr, 4.0, Color::rgba(10, 10, 10, 0.84));
+        l.ui.p().rounded(rr, 4.0, RAIL.alpha(0.88));
         let tw = l.ui.width(&time, 11.0, Weight::Bold);
         l.ui.text_in(&time, Rect::new(rr.x + 6.0, rr.y, tw + 2.0, rr.h), 11.0, Weight::Bold, ACCENT, Align::Left);
         l.ui.text_in(&st.name, Rect::new(rr.x + 12.0 + tw, rr.y, rr.w - tw - 16.0, rr.h), 11.0, Weight::Medium, TEXT_SOFT, Align::Left);

@@ -120,7 +120,7 @@ fn tab_bar(l: &mut Launcher, r: Rect) {
         }
         let c = if on { ACCENT } else { TEXT_DIM };
         if on {
-            l.ui.p().rounded(Rect::new(cell.center().x - 28.0, cell.y + 7.0, 56.0, 28.0), 14.0, ACCENT.alpha(0.16));
+            l.ui.p().rounded(Rect::new(cell.center().x - 28.0, cell.y + 7.0, 56.0, 28.0), 14.0, SELECTED);
         }
         l.ui.icon(icon, Vec2::new(cell.center().x, cell.y + 21.0), 22.0, c);
         l.ui.text_in(name, Rect::new(cell.x, cell.y + 36.0, cell.w, 16.0), 11.5, if on { Weight::Bold } else { Weight::Medium }, c, Align::Center);
@@ -143,7 +143,7 @@ fn toast(l: &mut Launcher, body: Rect) {
     let first = text.lines().next().unwrap_or("").to_string();
     let w = (l.ui.width(&first, 13.0, Weight::Medium) + 44.0).min(body.w - 32.0);
     let r = Rect::new(body.center().x - w * 0.5, body.bottom() - 46.0, w, 36.0);
-    l.ui.p().rounded(r, 18.0, Color::rgba(40, 40, 40, 0.96 * fade));
+    l.ui.p().rounded(r, 18.0, POPUP.alpha(0.96 * fade));
     l.ui.icon(if err { "error" } else { "info" }, Vec2::new(r.x + 18.0, r.center().y), 16.0, (if err { DANGER } else { TEXT_DIM }).alpha(fade));
     l.ui.text_in(&first, Rect::new(r.x + 32.0, r.y, r.w - 42.0, r.h), 13.0, Weight::Medium, TEXT.alpha(fade), Align::Left);
 }
@@ -224,7 +224,7 @@ fn play(l: &mut Launcher, body: Rect) {
     }
     // the bus's name over the foot of its picture, the livery as a chip beside it
     let shade = Rect::new(pr.x, pr.bottom() - 58.0, pr.w, 58.0);
-    l.ui.p().rounded(shade, RADIUS, Color::rgba(0, 0, 0, 0.55));
+    l.ui.p().rounded(shade, RADIUS, SHADE.alpha(0.8));
     let (name, maker) = l.state.bus().map(|b| (b.name.clone(), b.manufacturer.clone())).unwrap_or_else(|| ("Choose a bus".into(), String::new()));
     l.ui.text_in(&maker, Rect::new(shade.x + 14.0, shade.y + 7.0, shade.w - 150.0, 15.0), 11.0, Weight::Medium, TEXT_DIM, Align::Left);
     l.ui.text_in(&name, Rect::new(shade.x + 14.0, shade.y + 22.0, shade.w - 150.0, 26.0), 17.0, Weight::Bold, TEXT, Align::Left);
@@ -245,7 +245,7 @@ fn play(l: &mut Launcher, body: Rect) {
     if let Some(sn) = l.state.joined_server.clone() {
         let title = l.state.server_info.get(&sn).and_then(|x| x.1.as_ref().ok()).map(|i| i.name.clone()).unwrap_or(sn);
         let b = Rect::new(pr.x + 10.0, pr.y + 10.0, (l.ui.width(&title, 12.5, Weight::Bold) + 70.0).min(pr.w - 20.0), 34.0);
-        l.ui.p().rounded(b, 17.0, Color::rgba(0, 0, 0, 0.6));
+        l.ui.p().rounded(b, 17.0, SHADE.alpha(0.85));
         l.ui.icon("dns", Vec2::new(b.x + 18.0, b.center().y), 15.0, OK);
         l.ui.text_in(&title, Rect::new(b.x + 32.0, b.y, b.w - 64.0, b.h), 12.5, Weight::Bold, OK, Align::Left);
         let x = Rect::new(b.right() - 32.0, b.y, 32.0, b.h);

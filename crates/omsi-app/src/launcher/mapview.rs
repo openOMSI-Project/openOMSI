@@ -30,15 +30,18 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::time::Instant;
 
-// The map is drawn with the game's own city map palette and order (see `navigator`): every
-// road's dark casing first, then every road's surface over every casing, then the chosen
-// line's route in the map's own red - so the two maps are the same picture.
-use crate::navigator::{ROAD, ROAD_CASING, ROAD_MAIN, ROUTE};
-const STOP: Color = Color::rgba(240, 240, 240, 1.0);
-/// Entry points wear the launcher's own amber; the one under the mouse a grey ring, the
+// The map is drawn in the game's own city map order (see `navigator`): every road's dark
+// casing first, then every road's surface over every casing, then the chosen line's route
+// in the map's own red.
+use crate::navigator::ROUTE;
+const ROAD_CASING: Color = Color::rgba(7, 20, 37, 0.9);
+const ROAD: Color = Color::rgba(74, 108, 146, 1.0);
+const ROAD_MAIN: Color = Color::rgba(112, 146, 184, 1.0);
+const STOP: Color = Color::rgba(244, 247, 251, 1.0);
+/// Entry points wear the launcher's own yellow; the one under the mouse a pale ring, the
 /// chosen one a white (a click on the map takes the place of a name in a list of seventy).
-const ENTRY: Color = Color::rgba(232, 160, 48, 1.0);
-const ENTRY_HOVER: Color = Color::rgba(160, 160, 160, 1.0);
+const ENTRY: Color = super::theme::ACCENT;
+const ENTRY_HOVER: Color = Color::rgba(146, 168, 194, 1.0);
 const ENTRY_HERE: Color = Color::rgba(255, 255, 255, 1.0);
 /// A road is at least this wide on the screen when the map is far out, its own metres when
 /// it is near (the toolkit takes both: `Painter::ribbon`); the route, the dots and the rings
@@ -48,9 +51,6 @@ const ROAD_PX: f32 = 1.4;
 const ROUTE_PX: f32 = 5.0;
 const STOP_PX: f32 = 2.8;
 const ENTRY_PX: f32 = 3.4;
-/// The map's own background: the dark the window is cleared to, so the rail, the panels and
-/// the map meet without a seam.
-const BACKDROP: wgpu::Color = wgpu::Color { r: 0.0056, g: 0.0056, b: 0.0056, a: 1.0 };
 /// The closest the map goes in, in metres a pixel.
 const MPP_MIN: f64 = 0.15;
 /// A press that travelled less than this many pixels is a click on what stands under it.
@@ -609,7 +609,7 @@ impl MapView {
             Draw { buffer: 1, range: 0..marks_len, layer: 0, texture: 0 },
         ];
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("launcher map") });
-        gpu.render(device, queue, &mut enc, &target, (w, h), Some(BACKDROP), &[layer], &draws);
+        gpu.render(device, queue, &mut enc, &target, (w, h), Some(super::theme::backdrop()), &[layer], &draws);
         queue.submit([enc.finish()]);
         Some(target)
     }
