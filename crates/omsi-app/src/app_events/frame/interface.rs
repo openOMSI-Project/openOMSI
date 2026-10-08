@@ -32,6 +32,7 @@ impl App {
         // pictures' only)
         if let Some(scene) = self.scene.as_mut() {
             scene.overlays.clear();
+            scene.subpixel_overlays.clear();
         }
         let hud = self
             .gfx.surface
@@ -290,6 +291,19 @@ impl App {
         menu_lines: Vec<(&'static str, &'static str)>,
         menu_tabs: Option<(Vec<String>, usize)>,
     ) {
+        let mouse_steering = self.mouse_steering_now();
+        let target_cursor = (self.input.cursor.0 - hud[0], self.input.cursor.1);
+        let cursor_draw = if mouse_steering {
+            let current = self.input.cursor_display.unwrap_or(target_cursor);
+            // Keep the visual cursor responsive while smoothing frame-sized input steps.
+            let amount = 1.0 - (-dt * 60.0).exp();
+            let next = (current.0 + (target_cursor.0 - current.0) * amount, current.1 + (target_cursor.1 - current.1) * amount);
+            self.input.cursor_display = Some(next);
+            next
+        } else {
+            self.input.cursor_display = None;
+            target_cursor
+        };
         let (Some(r), Some(scene)) = (self.renderer.as_ref(), self.scene.as_mut()) else { return };
         if let (Some(ui), Some(s)) = (self.ui.as_mut(), self.gfx.surface.as_ref()) {
             let scale = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
@@ -371,7 +385,9 @@ impl App {
                 opacity: ui::backdrop(self.settings.ui_opacity),
                 width: w,
                 height: h,
-                cursor: (self.input.cursor.0 - hud[0], self.input.cursor.1),
+                cursor: target_cursor,
+                cursor_draw,
+                mouse_steering,
                 vr: {
                     #[cfg(windows)] { self.xr.vr.is_some() }
                     #[cfg(not(windows))] { false }

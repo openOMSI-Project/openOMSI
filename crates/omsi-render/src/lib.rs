@@ -1296,6 +1296,8 @@ pub struct Scene {
     sky_bind_group: Option<wgpu::BindGroup>,
     /// HUD images drawn after the scene: (texture, rect in pixels x0,y0,x1,y1).
     pub overlays: Vec<(TextureId, [f32; 4])>,
+    /// Overlay indices whose positions must retain subpixel precision (for example the mouse cursor).
+    pub subpixel_overlays: std::collections::HashSet<usize>,
     /// Overlay textures that hold premultiplied alpha (drawn by `omsi-ui`, e.g. the
     /// navigator) rather than straight alpha.
     pub premultiplied: std::collections::HashSet<TextureId>,
@@ -3225,6 +3227,7 @@ impl Renderer {
             shadow_bind_group: None,
             sky_bind_group: None,
             overlays: Vec::new(),
+            subpixel_overlays: std::collections::HashSet::new(),
             premultiplied: Default::default(),
             transposed: Default::default(),
             overlay_res: Vec::new(),
@@ -6898,7 +6901,7 @@ impl Renderer {
         // anew for every overlay of every frame was a steady stream of GPU allocations
         scene.overlay_res.truncate(overlays.len());
         for (k, (tex, r)) in overlays.iter().copied().enumerate() {
-            let r = snap_rect(r);
+            let r = if scene.subpixel_overlays.contains(&k) { r } else { snap_rect(r) };
             let ndc = [
                 r[0] / full_w as f32 * 2.0 - 1.0,
                 1.0 - r[1] / full_h as f32 * 2.0,

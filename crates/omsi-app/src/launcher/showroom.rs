@@ -390,6 +390,7 @@ impl Showroom {
         let look_yaw = yaw - side.atan().to_degrees();
         let cam = Camera { position: pos, yaw: look_yaw, pitch: -pitch, roll: 0.0, fov_deg: fov, near: 0.2, far: 6000.0 };
         s.scene.overlays.clear();
+        s.scene.subpixel_overlays.clear();
         let _ = &s.weather;
         renderer.render(&mut s.scene, target, w, h, &cam, &s.lighting);
     }

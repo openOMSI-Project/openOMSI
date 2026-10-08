@@ -417,6 +417,9 @@ pub struct Frame<'a> {
     pub width: f32,
     pub height: f32,
     pub cursor: (f32, f32),
+    pub cursor_draw: (f32, f32),
+    /// Draw the mouse steering point in the game picture while the native cursor is held.
+    pub mouse_steering: bool,
     /// An OpenXR headset is drawing this frame.
     pub vr: bool,
     /// The name of what the cursor points at (a switch, a part), shown next to it.
@@ -955,6 +958,29 @@ impl Ui {
             scene.overlays.push((pointer, [0.0, 0.0, 7.0 * s, 7.0 * s]));
         } else {
             self.vr_cursor_overlay = None;
+        }
+        if f.mouse_steering && !f.vr {
+            let (x, y) = f.cursor_draw;
+            let arm = (9.0 * s).max(6.0);
+            let width = (2.0 * s).max(1.0);
+            let shadow = self.text.solid(r, scene, [0, 0, 0, 220]);
+            let cross = self.text.solid(r, scene, [255, 255, 255, 240]);
+            for rect in [
+                [x - arm - width, y - width, x + arm + width, y + width],
+                [x - width, y - arm - width, x + width, y + arm + width],
+            ] {
+                let index = scene.overlays.len();
+                scene.overlays.push((shadow, rect));
+                scene.subpixel_overlays.insert(index);
+            }
+            for rect in [
+                [x - arm, y - width * 0.5, x + arm, y + width * 0.5],
+                [x - width * 0.5, y - arm, x + width * 0.5, y + arm],
+            ] {
+                let index = scene.overlays.len();
+                scene.overlays.push((cross, rect));
+                scene.subpixel_overlays.insert(index);
+            }
         }
         self.text.end_frame(r, scene);
     }

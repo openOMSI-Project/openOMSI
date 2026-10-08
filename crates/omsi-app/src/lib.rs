@@ -651,6 +651,7 @@ fn assemble_app(args: Args, settings: settings::Settings) -> App {
         view,
         input: InputState {
             cursor: (0.0, 0.0),
+            cursor_display: None,
             window_focused: false,
             input_away: false,
             keys: Default::default(),

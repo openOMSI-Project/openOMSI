@@ -185,6 +185,8 @@ pub(crate) struct ViewState {
 /// dragged.
 pub(crate) struct InputState {
     pub(crate) cursor: (f32, f32),
+    /// Render-only cursor position; input and hit testing use `cursor` directly.
+    pub(crate) cursor_display: Option<(f32, f32)>,
     pub(crate) window_focused: bool,
     /// The window lost the focus or was minimised or hidden: the keyboard and the mouse
     /// work nothing until it has the focus again (`App::input_lost` / `input_back`).

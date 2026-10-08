@@ -27,6 +27,7 @@ impl Hud {
         if lines.is_empty() {
             // nothing to say: the frame's overlays start empty (the interface adds its own)
             scene.overlays.clear();
+            scene.subpixel_overlays.clear();
             return;
         }
         let Some(font) = self.font.clone() else { return };
@@ -50,6 +51,7 @@ impl Hud {
         if let Some(t) = self.texture {
             let (w, h) = (self.width as f32 * self.scale, self.height as f32 * self.scale);
             scene.overlays.clear();
+            scene.subpixel_overlays.clear();
             scene.overlays.push((t, [12.0, 12.0, 12.0 + w, 12.0 + h]));
         }
     }

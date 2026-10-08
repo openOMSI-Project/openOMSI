@@ -601,6 +601,7 @@ impl App {
             self.window.as_ref(),
         ) {
             scene.overlays.clear();
+            scene.subpixel_overlays.clear();
             let dpi = win.scale_factor() as f32;
             let scale = dpi * crate::ui::size_factor(s.config.height as f32, dpi, self.settings.ui_scale, self.settings.ui_scale_window);
             ui.loading(

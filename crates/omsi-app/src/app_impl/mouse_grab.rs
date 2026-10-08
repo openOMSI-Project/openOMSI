@@ -1,7 +1,7 @@
 //! Mouse steering with the cursor caught: the wheel and the pedals go by the mouse's own
 //! movement, which goes on where the cursor would stop at the edge of the window or of the
 //! screen - the wheel reaches its full lock at any speed. While the mouse steers the cursor
-//! is hidden and held: locked where it stands (macOS, Wayland: the raw movement steers), or
+//! is held and hidden: locked where it stands (macOS, Wayland: the raw movement steers), or
 //! kept in the window and put back in its middle before it reaches an edge (Windows, X11:
 //! the cursor's own movement steers, with the system's pointer speed). It is let go, where
 //! the mouse steers, whenever the cursor is wanted: looking round, a menu, the plugins'
@@ -12,9 +12,9 @@ use super::*;
 /// How the window holds the cursor while the mouse steers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GrabMode {
-    /// The cursor stands still and hidden; the mouse's raw movement steers.
+    /// The cursor stands still and hidden while the mouse's raw movement steers.
     Locked,
-    /// The cursor is hidden, kept in the window and put back in its middle before an edge.
+    /// The hidden cursor is kept in the window and put back in its middle before an edge.
     Warp,
     /// The system lets the window neither hold nor move the cursor: it stays visible and
     /// free, and its movement steers.
