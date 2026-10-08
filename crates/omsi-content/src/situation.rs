@@ -11,7 +11,9 @@ pub struct SituationVehicle {
     /// w; Direct3D frame, y up) and three more (0 for a standing vehicle). Nine slots.
     pub orientation: [f64; 9],
     pub tile: (i32, i32),
-    pub id: f64,
+    /// Total odometer kilometres, after the tile coordinates: Omsi.exe 0x64207E writes
+    /// the starting reading plus the distance driven, and 0x643DF3 restores it.
+    pub odometer_km: f64,
     pub paint: String,
     pub coupled_with: Option<i32>,
     pub is_my_vehicle: bool,
@@ -75,7 +77,7 @@ impl Situation {
             for k in 0..7 {
                 t.push_str(&format!("{:.3}\r\n", v.orientation[k]));
             }
-            t.push_str(&format!("{}\r\n{}\r\n{:.3}\r\n{}\r\n", v.tile.0, v.tile.1, v.id, v.paint));
+            t.push_str(&format!("{}\r\n{}\r\n{:.3}\r\n{}\r\n", v.tile.0, v.tile.1, v.odometer_km, v.paint));
             if let Some(c) = v.coupled_with {
                 t.push_str(&format!("\r\n[coupledWith]\r\n{c}\r\n"));
             }
@@ -132,9 +134,9 @@ impl Situation {
                         *v = r.f64();
                     }
                     let tile = (r.i32(), r.i32());
-                    let id = r.f64();
+                    let odometer_km = r.f64();
                     let paint = r.str().to_string();
-                    s.vehicles.push(SituationVehicle { file, pos, orientation, tile, id, paint, ..Default::default() });
+                    s.vehicles.push(SituationVehicle { file, pos, orientation, tile, odometer_km, paint, ..Default::default() });
                 }
                 "coupledwith" => {
                     let v = r.i32();
@@ -195,6 +197,7 @@ mod tests {
         let sit = Situation {
             vehicles: vec![SituationVehicle {
                 file: "Vehicles/Test.bus".into(),
+                odometer_km: 75556.639,
                 vars: vec![("power".into(), 1.0)],
                 string_vars: vec![
                     ("line".into(), " 109  ".into()),

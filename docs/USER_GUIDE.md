@@ -446,7 +446,10 @@ Under **Seat position**, **Head pitch** adjusts the driver's neutral view angle 
 (-45° to +45°). It applies to the driver's view with any display setup, not just triple
 screens, and is included when taking offscreen screenshots. Manual looking and head tracking
 remain relative to this setting; **Reset the seat position** resets it along with the seat
-offsets.
+offsets. The seat set in the game menu is kept for each bus on its own (`seats.cfg` in the
+`.openomsi` folder): fitted to one bus, the others keep the views their `.bus` files give
+(or the seat of the launcher's settings, for a bus never fitted), and resetting it puts
+that bus's views back as its file has them.
 
 In Settings → Camera, **Right stick turns the view** switches automatic gamepad
 camera movement on or off. It is on by default. Switch it off to keep using the

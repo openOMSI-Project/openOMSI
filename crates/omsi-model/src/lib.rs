@@ -92,6 +92,37 @@ pub struct MaterialDef {
     pub allcolor: Option<[f32; 14]>,
 }
 
+impl MaterialDef {
+    /// Take what this block leaves unset from `base` (a `[matl_item]` over its slot's plain
+    /// `[matl]`).
+    pub fn inherit(&mut self, base: &MaterialDef) {
+        if !self.alpha_set && base.alpha_set {
+            self.alpha = base.alpha;
+            self.alpha_set = true;
+        }
+        self.no_z_write |= base.no_z_write;
+        self.no_z_check |= base.no_z_check;
+        if self.z_bias == 0 {
+            self.z_bias = base.z_bias;
+        }
+        macro_rules! opt {
+            ($($f:ident),*) => { $( if self.$f.is_none() { self.$f = base.$f.clone(); } )* };
+        }
+        opt!(envmap, envmap_mask, bumpmap, transmap, raindropmap, texcoord_trans_x, texcoord_trans_y, use_script_texture, use_text_texture, alphascale, freetex, nightmap, allcolor);
+        self.envmap_realtime |= base.envmap_realtime;
+        if self.tex_address == TexAddress::Wrap {
+            self.tex_address = base.tex_address;
+            if self.border_color == [0.0; 4] {
+                self.border_color = base.border_color;
+            }
+        }
+        if self.lightmaps.is_empty() && !base.lightmaps.is_empty() {
+            self.lightmaps = base.lightmaps.clone();
+            self.lightmap = base.lightmap.clone();
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct LightEnh {
     pub pos: [f32; 3],
@@ -810,8 +841,15 @@ impl Model {
                             .rev()
                             .find(|m| !m.item && m.change.is_none() && m.texture.eq_ignore_ascii_case(&change.texture) && m.index == change.index)
                             .cloned();
-                        let mut item = base.unwrap_or_else(|| MaterialDef { texture: change.texture.clone(), index: change.index, ..Default::default() });
-                        item.change = change.change.clone();
+                        // ... and what the [matl_change] (or the item before) set on top: Omsi.exe
+                        // copies the whole material record into the new item (0x5efae8 ->
+                        // 0x40a058), its free texture, scrolling and border with it. Copied from
+                        // the plain [matl] alone, the SD77's lit roller blind (`lights_stand`)
+                        // lost its destination text and scrolling with the lights on (#1419).
+                        let mut item = change.clone();
+                        if let Some(base) = base {
+                            item.inherit(&base);
+                        }
                         item.item = true;
                         mesh.materials.push(item);
                     }
@@ -1177,6 +1215,21 @@ mod tests {
         assert!(m.items[1].set_vars.is_empty());
         assert_eq!((m.items[1].name.as_str(), m.items[1].ctc.as_str(), m.items[1].texture.as_str()), ("HVL", "body", "hvl.dds"));
         assert_eq!(m.set_vars, vec![("lost".to_string(), 1.0)]);
+    }
+
+    /// A `[matl_item]` is a copy of the material before it: the SD77's lit roller blind
+    /// keeps its free texture, scrolling and border (#1419).
+    #[test]
+    fn a_material_item_copies_the_change_before_it() {
+        let text = "[mesh]\nrollo.o3d\n[matl_change]\nzielband1.bmp\n0\nlights_stand\n[matl_freetex]\nzielband1.bmp\nRollband_Tex_V\n[texcoordtransY]\nrlbnd_ziel_trans\n[matl_texadress_border]\n255\n255\n255\n0\n[matl_alpha]\n1\n[matl_item]\n[matl_lightmap]\nzielbeleuchtung.bmp\n";
+        let m = Model::parse(&CfgFile::from_str("model.cfg", text));
+        let item = m.meshes[0].materials.iter().find(|x| x.item).expect("the item");
+        assert_eq!(item.freetex.as_ref().map(|f| f.1.as_str()), Some("Rollband_Tex_V"));
+        assert_eq!(item.texcoord_trans_y.as_deref(), Some("rlbnd_ziel_trans"));
+        assert_eq!((item.alpha, item.tex_address), (1, TexAddress::Border));
+        assert_eq!(item.lightmap.as_ref().map(|l| l.0.as_str()), Some("zielbeleuchtung.bmp"));
+        let base = m.meshes[0].materials.iter().find(|x| !x.item).unwrap();
+        assert!(base.lightmap.is_none(), "the lit map is the item's only");
     }
 
     #[test]

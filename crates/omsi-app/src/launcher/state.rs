@@ -1006,7 +1006,13 @@ impl State {
                     Err(e) => core::log_to_file(&format!("poll: {e}")),
                 }
             }
-            Msg::Profile(Ok(p)) => self.profile = Some(p),
+            Msg::Profile(Ok(p)) => {
+                // A read started before another driver was selected must not put the
+                // old profile back on screen after deletion.
+                if p.name.eq_ignore_ascii_case(&self.config.profile) {
+                    self.profile = Some(p);
+                }
+            }
             Msg::Profile(Err(e)) => {
                 self.profile = None;
                 core::log_to_file(&format!("profile: {e}"));
@@ -1014,11 +1020,12 @@ impl State {
             Msg::Profiles(p) => {
                 self.profiles = p;
                 if !self.profiles.contains(&self.config.profile) {
-                    if let Some(f) = self.profiles.first() {
-                        self.config.profile = f.clone();
-                        let _ = core::save_config(&self.config);
-                        self.load_profile();
-                    }
+                    self.config.profile = self.profiles.first().cloned().unwrap_or_default();
+                    self.profile = None;
+                    let _ = core::save_config(&self.config);
+                }
+                if !self.config.profile.is_empty() {
+                    self.load_profile();
                 }
             }
             Msg::Ibis { key, info } => self.ibis = Some((key, info)),

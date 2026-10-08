@@ -444,6 +444,10 @@ pub(crate) fn command(app: &mut App, from: u32, text: &str) {
         // "end the duty"; the host hears `duty-off-ok` (there was one) or `duty-off-none`
         "duty-off" if from == 1 => {
             let had = app.duty.take().map(|d| format!("{} {}", d.line, d.tour));
+            // (the bus's own timetable with it, as "end the duty" clears it, #1317)
+            if let Some(p) = app.player.as_mut() {
+                crate::game_lists::clear_timetable(&mut p.vehicle);
+            }
             log::info!("LAN: the server took our duty back ({})", had.as_deref().unwrap_or("we had none"));
             if had.is_some() {
                 app.service_msg = Some(("The dispatch took the duty back: free drive".into(), 6.0));
@@ -496,11 +500,12 @@ pub(crate) enum TrafficOrder {
 }
 
 impl TrafficOrder {
-    /// `clear`, or a density (held to 0 .. 100).
+    /// `clear`, or a density (held to 0 .. the top of the game menu's Traffic steps, the
+    /// same limit as server.cfg's `traffic`: it was 100 here, 120 in the menu, #1327).
     pub fn parse(arg: &str) -> Option<TrafficOrder> {
         match arg.trim() {
             "clear" => Some(TrafficOrder::Clear),
-            v => v.parse::<usize>().ok().map(|n| TrafficOrder::Density(n.min(100))),
+            v => v.parse::<usize>().ok().map(|n| TrafficOrder::Density(n.min(crate::game_lists::TRAFFIC_MAX))),
         }
     }
 }
@@ -811,7 +816,8 @@ mod traffic_order_tests {
         assert_eq!(TrafficOrder::parse("clear"), Some(TrafficOrder::Clear));
         assert_eq!(TrafficOrder::parse(" 20 "), Some(TrafficOrder::Density(20)));
         assert_eq!(TrafficOrder::parse("0"), Some(TrafficOrder::Density(0)));
-        assert_eq!(TrafficOrder::parse("400"), Some(TrafficOrder::Density(100)));
+        assert_eq!(TrafficOrder::parse("400"), Some(TrafficOrder::Density(120)));
+        assert_eq!(TrafficOrder::parse("120"), Some(TrafficOrder::Density(crate::game_lists::TRAFFIC_MAX)));
         for bad in ["", "next", "-5", "2.5"] {
             assert_eq!(TrafficOrder::parse(bad), None, "{bad}");
         }

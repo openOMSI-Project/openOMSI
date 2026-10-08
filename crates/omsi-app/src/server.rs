@@ -153,7 +153,7 @@ impl ServerCfg {
             date: kv.get("date").cloned().filter(|v| !v.is_empty()),
             time: get("time", "08:00"),
             weather: kv.get("weather").cloned().filter(|v| !v.is_empty()),
-            traffic: num("traffic", 30).clamp(0, 200) as usize,
+            traffic: (num("traffic", 30).max(0) as usize).min(crate::game_lists::TRAFFIC_MAX),
             timetable: flag("timetable", true),
             passengers: flag("passengers", true),
             port: num("port", 27015).clamp(1, 65535) as u16,

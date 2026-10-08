@@ -61,6 +61,8 @@ by defining a global function `on_<event>`:
 | `crash` | energy (kJ), speed (km/h) | the player's bus crashed: every crash, also one the same as the last (the screen's "Crash: 136 kJ"); above 50 kJ it is a heavy one |
 | `pedestrian` | how many | the bus knocked people down |
 | `stops_skipped` | how many, due at, now at | the duty jumped ahead: the bus passed stops of its trip without stopping (or was moved) and is now at a later one; the stops are numbered in the trip from 1, as `next_stop_number` |
+| `ui_click` | panel id, element id (`nil`: the panel itself) | a button (or another clickable part) of one of the plugin's [panels](#on-screen-panels) was clicked |
+| `ui_focus` | `true`/`false` | the panels got the mouse or gave it back (also by Esc, or a menu of the game opening) |
 
 ```lua
 function on_frame(dt)
@@ -101,7 +103,7 @@ have, reads give `nil` and writes do nothing.
 
 | Function | What it does |
 | --- | --- |
-| `omsi.info()` | a table of what the game is doing: `map`, `clock` (seconds since midnight), `day`, `year`, `view`, `paused`, `on_foot`, `multiplayer`, `traffic` (AI vehicles), `speed` (km/h), `delay` (s, late positive), `map_path` (the map's global.cfg), `version` (of openOMSI); with a bus also `tile_x`, `tile_y` (its tile, as global.cfg's `[map]` list numbers them), `tile_pos_x`, `tile_pos_y` (metres in that tile, x east, y north), `heading` (degrees, clockwise from north), `vehicle_manufacturer`, `vehicle_model`, `destination` (the terminus the bus shows), `passengers` (aboard); `crashes`, `heavy_crashes` and `pedestrians_hit` this session (as the personnel file counts them); `situation`, the situation file the game started from (the launcher's "continue" loads `maps/<map>/laststn.osn`), `nil` for a new game; on a duty also `line`, `tour`, `trip` (its number in the duty), `trips`, `trip_name` (the timetable's name of the trip), `terminus`, `stops` (how many the trip has), `next_stop`, `next_stop_number` (from 1), `next_stop_arrival`, `next_stop_departure` |
+| `omsi.info()` | a table of what the game is doing: `map`, `clock` (seconds since midnight), `day`, `year`, `view`, `paused`, `on_foot`, `multiplayer`, `traffic` (AI vehicles), `speed` (km/h), `delay` (s, late positive), `map_path` (the map's global.cfg), `version` (of openOMSI); with a bus also `tile_x`, `tile_y` (its tile, as global.cfg's `[map]` list numbers them), `tile_pos_x`, `tile_pos_y` (metres in that tile, x east, y north), `heading` (degrees, clockwise from north), `vehicle_manufacturer`, `vehicle_model`, `destination` (the terminus the bus shows), `passengers` (aboard); `crashes`, `heavy_crashes` and `pedestrians_hit` this session (as the personnel file counts them); `situation`, the situation file the game started from (the launcher's "continue" loads `maps/<map>/laststn.osn`), `nil` for a new game; on a duty also `line`, `tour`, `trip` (its number in the duty), `trips`, `trip_name` (the timetable's name of the trip), `terminus`, `stops` (how many the trip has), `trip_done` (`true` once the bus has reached the trip's last stop, the stop was skipped, or a saved game was left there: the trip is over, though the duty moves on to the next trip only a minute before it leaves), `next_stop`, `next_stop_number` (from 1), `next_stop_arrival`, `next_stop_departure` |
 | `omsi.clock()` | the game's time of day as `"HH:MM:SS"` |
 | `omsi.speed()` | the bus's speed in km/h (0 on foot) |
 | `omsi.distance(x, y)` | metres from the bus to a map point, or `nil` on foot |
@@ -187,6 +189,107 @@ end)
 
 `nc -lu 47800` in a terminal shows what arrives.
 
+### On-screen panels
+
+`omsi.ui` puts panels of the plugin's own on the screen, in the game's look: Roboto, the
+game's icons, dark rounded cards with a shadow, as large as the rest of the interface (the
+interface size setting and the window's height scale them). A plugin describes a panel as a
+table once and sets it again when its content changes - every half second, say, not every
+frame; the same table again changes nothing. The game lays the panel out and draws it again
+only when it did change.
+
+```lua
+-- plugins/trip_panel.lua: the next stop, the speed and a button
+local function show()
+  local i = omsi.info()
+  omsi.ui.set("trip", {
+    anchor = "top_left", x = 16, y = 60, width = 300, accent = "#F47F30",
+    children = {
+      { type = "row", children = {
+        { type = "icon", name = "directions_bus", color = "#F47F30" },
+        { type = "text", text = "Line " .. (i.line or "-"), weight = "bold", grow = true },
+        { type = "badge", text = string.format("%.0f km/h", i.speed or 0) },
+      } },
+      { type = "text", text = "Next stop: " .. (i.next_stop or "-") },
+      { type = "button", id = "horn", text = "Horn", icon = "campaign" },
+    },
+  })
+end
+
+omsi.every(0.5, show)
+omsi.on("key", function(key, down)
+  if key == "F10" and down then omsi.ui.focus(not omsi.ui.focused()) end
+end)
+omsi.on("ui_click", function(panel, element)
+  if element == "horn" then omsi.trigger("horn") end
+end)
+```
+
+F10 gives the panels the mouse; a click on the button sounds the horn. The whole example is
+[`docs/examples/plugins/trip_panel.lua`](examples/plugins/trip_panel.lua).
+
+| Function | What it does |
+| --- | --- |
+| `omsi.ui.version` | `1`; test `if omsi.ui and omsi.ui.version >= 1` in a plugin that should also run in an older openOMSI (and use `omsi.message` there) |
+| `omsi.ui.set(id, panel)` | creates the panel `id` (a text) or replaces it; `true`, or `false` and the reason for a table that is not right (`"children[2].size: a number is expected"`) |
+| `omsi.ui.remove(id)` | removes it; `true` when there was one |
+| `omsi.ui.clear()` | removes every panel of the plugin |
+| `omsi.ui.toast(text, opts)` | a notification card at the top right (under the navigator when it is there), newest at the top; it slides in and goes after `opts.seconds` (1 to 60, default 5). `opts`: `title`, `icon`, `color` (its stripe, icon and title). `true`, or `false` and the reason. A plugin shows 8 at most: a ninth makes its oldest go |
+| `omsi.ui.focus(on)` | `true`: the panels get the mouse - the cursor shows, a click goes to the panel under it (`ui_click`) and none to the bus or its cab, and the mouse steering holds the wheel and the pedals as they are. `false`, Esc, or a menu of the game opening gives the mouse back. Returns the new state (`false` while the game hides the panels). The keyboard stays the bus's, and the `key` event comes as always |
+| `omsi.ui.focused()` | whether the panels have the mouse |
+| `omsi.ui.screen()` | `width, height, scale`: the screen in the panels' pixels, and how many of the screen's own pixels one of them is |
+
+The panels are the plugin's own: one plugin cannot change or remove another's, and when the
+plugin stops, or is loaded again after a change of its file, its panels go (its
+notifications run their time). They show over the picture and the navigator and under the
+game's own lines, menus and windows, and not at all while the game menu, a list of it or the
+city map is open, nor in VR.
+
+#### The panel table
+
+```lua
+omsi.ui.set("trip", {
+  anchor = "top_left",       -- top_left top top_right left center right bottom_left bottom bottom_right
+  x = 16, y = 16,             -- from the anchor towards the middle (from a middle: right and down)
+  width = 340,                -- the height follows the content
+  padding = 12,               -- default 12
+  gap = 6,                    -- between the children, default 6
+  background = "#14161ACC",   -- default: the game's card colour; "#RRGGBB" or "#RRGGBBAA"
+  radius = 12,                -- default 12
+  accent = "#F47F30",         -- a stripe along the left edge
+  visible = true,             -- false hides it and keeps it
+  clickable = false,          -- true: a click anywhere on it is ui_click(id, nil)
+  children = { ... },         -- elements, top to bottom
+})
+```
+
+Sizes are pixels of a 1080p screen at the normal interface size. A panel stays on the screen
+whatever its offset.
+
+#### Elements
+
+Every element can have an `id`, a `color` and `visible = false` (left out, no room kept).
+
+| `type` | Keys | Draws |
+| --- | --- | --- |
+| `text` | `text`, `size` (default 14), `weight` (`regular`, `medium`, `bold`), `align` (`left`, `center`, `right`), `wrap` (default `true`; `false`: one line, cut with "…") | a line or a paragraph, wrapped at the width it has; a line is 1.3 × `size` high |
+| `icon` | `name`, `size` (default 20) | one of the game's icons (Material Symbols names: `directions_bus`, `schedule`, `payments`, `warning`, `star`, `emoji_events`... - every one in [`assets/icons/material`](../assets/icons/material)); a name the game has not draws nothing |
+| `row` | `children`, `gap` (default 8), `align` (`start`, `center`, `end`, `between`) | its children side by side, centred on each other; a child with `grow = true` takes the width the others leave (several share it); when they do not fit, texts, labels and buttons give up width alike |
+| `bar` | `value` (0 to 1), `height` (default 6), `color` (the filled part, default the game's amber), `background` | a progress bar; in a row 60 wide unless it grows |
+| `badge` | `text`, `color` (its fill, default amber), `text_color` | a small rounded label, 20 high |
+| `divider` | `color` | a thin line (in a row: upright) |
+| `space` | `size` (default 8) | empty room (in a row: across) |
+| `button` | `id` (needed), `text`, `icon`, `color` | a button 34 high, across the panel (in a row as wide as its label, or what it grows to); a click on it is `ui_click(panel id, button id)` |
+
+Another element with an `id` and `clickable = true` (a whole row, say) is clicked as a
+button is. Texts are shown as they are: they are not translated into the game's language.
+
+Keys the game does not know are left alone and an element of an unknown `type` is left out,
+so a plugin written for a later openOMSI still shows its panels here. A key of the wrong
+kind makes `set` return `false` and the reason. Limits, each plugin: 16 panels, 200
+elements in a panel (those in rows counted), 500 characters in a text, 64 in an id, rows 8
+deep.
+
 ### A bigger example: a stop announcer
 
 ```lua
@@ -211,7 +314,8 @@ end
 
 A Lua plugin gets Lua 5.4 with the safe libraries only: `string`, `table`, `math`, `utf8`,
 `coroutine`, `require` for its own folder, and `os.clock/time/date/difftime`. There is no
-`io`, no `os.execute`, no C modules and no `dofile`, so a plugin you download cannot touch
+`io`, no `os.execute` (not through `require("os")` either), no C modules, no `dofile` and
+no binary chunks for `load`, so a plugin you download cannot touch
 your files beyond its own saved data. It cannot reach the network either: `omsi.send` talks
 only to programs on this computer, and only to ports from 1024 up.
 

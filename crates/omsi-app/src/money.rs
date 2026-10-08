@@ -218,6 +218,68 @@ impl Money {
     }
 }
 
+/// The tear-off ticket blocks of a bus without a ticket printer: the ticket pack's
+/// `Ticket_<n>_block.o3d` hung on the bus's `[new_attachment]` point n (the stock SD's
+/// "ticket block attach points"), moving with the bus. A click on block n tears off a
+/// ticket of type n - `GivenTicket` n, as a printer's script hands one over (#1413).
+pub struct TicketBlocks {
+    /// The bus type and the pack they were made for.
+    pub made_for: (PathBuf, PathBuf),
+    /// (instance, place in the bus frame, ticket type, the mesh for clicks)
+    blocks: Vec<(usize, Mat4, usize, omsi_geometry::MeshData)>,
+}
+
+impl TicketBlocks {
+    pub fn new(world: &World, renderer: &Renderer, scene: &mut Scene, bus: &VehicleInstance, pack: &Path) -> TicketBlocks {
+        let dir = pack.parent().map(Path::to_path_buf).unwrap_or_default();
+        let mut blocks = Vec::new();
+        for (n, a) in bus.ty.def.attachments.iter().enumerate() {
+            let file = dir.join(format!("Ticket_{n}_block.o3d"));
+            if !omsi_cfg::vfs::is_file(&file) {
+                continue;
+            }
+            let Ok(m) = omsi_o3d::load_mesh(&file).map_err(|e| log::warn!("{e}")) else { continue };
+            let dirs = [dir.clone(), omsi_cfg::resolve_path(&world.root, "Texture")];
+            let dirs_ref: Vec<&Path> = dirs.iter().map(|p| p.as_path()).collect();
+            let mats: Vec<MaterialId> = m
+                .materials
+                .iter()
+                .map(|mat| {
+                    let tex = omsi_texture::find_texture(&mat.texture, &dirs_ref).and_then(|p| world.textures.get_gpu_fast(&p)).map(|(img, _)| renderer.add_texture_data(scene, &img));
+                    renderer.add_material(scene, tex, AlphaMode::Test, [1.0; 4], false)
+                })
+                .collect();
+            let data = mesh_from_o3d(&m);
+            let id = renderer.add_mesh(scene, &data);
+            let inst = renderer.add_instance(scene, id, DVec3::ZERO, Mat4::IDENTITY, mats);
+            let local = crate::tiles::attachment_matrix(&omsi_scenery::sco::Attachment { ops: a.ops.clone() });
+            blocks.push((inst, local, n, data));
+        }
+        if !blocks.is_empty() {
+            log::info!("ticket blocks: {} of {} on the bus", blocks.len(), dir.display());
+        }
+        TicketBlocks { made_for: (bus.ty.def.path.clone(), pack.to_path_buf()), blocks }
+    }
+
+    pub fn sync(&self, renderer: &Renderer, scene: &mut Scene, bus: &VehicleInstance) {
+        let rot = bus.body_rotation();
+        for (inst, local, _, _) in &self.blocks {
+            renderer.set_transform(scene, *inst, bus.position, rot * *local);
+        }
+    }
+
+    /// The ticket type of the block a ray from `origin` along `dir` hits first.
+    pub fn hit(&self, origin: DVec3, dir: Vec3, bus: &VehicleInstance) -> Option<usize> {
+        let o = (origin - bus.position).as_vec3();
+        let rot = bus.body_rotation();
+        self.blocks
+            .iter()
+            .filter_map(|(_, local, n, data)| omsi_geometry::ray_mesh(o, dir, data, &(rot * *local)).map(|t| (t, *n)))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|x| x.1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

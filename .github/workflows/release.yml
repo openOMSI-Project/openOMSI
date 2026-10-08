@@ -261,6 +261,9 @@ jobs:
         run: |
           mkdir -p out
           cp "dist/android/openOMSI-$OPENOMSI_VERSION.apk" "out/openOMSI-$OPENOMSI_VERSION-android-arm64.apk"
+          # (and under a name of its own: releases/latest/download/openOMSI-android.apk is
+          # always the newest APK - for a phone whose installed build cannot update itself)
+          cp "dist/android/openOMSI-$OPENOMSI_VERSION.apk" "out/openOMSI-android.apk"
       - uses: actions/upload-artifact@v7
         with:
           # (a release keeps its files; a pull request's test builds are fetched within days)

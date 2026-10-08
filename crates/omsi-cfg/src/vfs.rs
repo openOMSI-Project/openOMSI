@@ -220,7 +220,7 @@ impl ZipArchive {
     /// top of an installation (`Vehicles`, `maps` ...), then those an add-on has inside too
     /// (`Sound`, `Texture`, `Scripts`) - then the shallowest, then the first by name.
     fn content_prefix<'a>(names: impl Iterator<Item = &'a str>) -> String {
-        const SHARED: [&str; 3] = ["Texture", "Sound", "Scripts"];
+        const SHARED: [&str; 3] = ["Texture", "Sounds", "Scripts"];
         let is_content = |c: &str| crate::CONTENT_FOLDERS.iter().any(|f| f.eq_ignore_ascii_case(c));
         // folder (lower case) -> (spelling, lower-case names of its sub-folders)
         let mut children: HashMap<String, (String, Vec<String>)> = HashMap::new();

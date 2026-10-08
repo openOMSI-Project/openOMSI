@@ -83,6 +83,11 @@ fn events_vars_timers_and_data() {
           omsi.set_var("time", omsi.sys("Time"))
           if omsi.var("Velocity") == 50 then omsi.trigger("bus_horn") end
           assert(io == nil and os.execute == nil and dofile == nil)
+          -- (#1715: the module table must not hand out the whole os library)
+          local shut = require("os").execute == nil and require("os").remove == nil and require("os").clock ~= nil
+            and package.loaded.io == nil and package.loaded.debug == nil
+            and load(string.dump(function() return 1 end)) == nil
+          omsi.set_var("sandbox", shut and 1 or 0)
         end
         "#,
     )
@@ -91,7 +96,7 @@ fn events_vars_timers_and_data() {
     assert_eq!(plugins.lua.len(), 1);
     assert_eq!(plugins.lua[0].name, "Speedo");
     let mut bus = Bus { vehicle: true, ..Default::default() };
-    for k in ["Velocity", "doubled", "ticks", "time"] {
+    for k in ["Velocity", "doubled", "ticks", "time", "sandbox"] {
         bus.vars.insert(k.into(), 0.0);
     }
     bus.strings.insert("bus_name".into(), String::new());
@@ -103,6 +108,7 @@ fn events_vars_timers_and_data() {
     assert_eq!(bus.vars["doubled"], 40.0);
     assert_eq!(bus.vars["time"], 43200.0);
     assert_eq!(bus.vars["ticks"], 2.0);
+    assert_eq!(bus.vars["sandbox"], 1.0, "require(\"os\") or a binary chunk got out of the sandbox");
     bus.vars.insert("Velocity".into(), 50.0);
     plugins.frame(&mut bus);
     assert_eq!(bus.fired, [("bus_horn".to_string(), true), ("bus_horn".to_string(), false)]);
@@ -256,4 +262,134 @@ fn send_reaches_a_program_on_this_computer_only() {
     assert_eq!(&buf[..n], b"hello");
     assert!(from.ip().is_loopback());
     assert_eq!(listener.recv(&mut buf).unwrap(), 8 * 1024, "the large message whole");
+}
+
+#[test]
+fn panels_clicks_and_focus_through_omsi_ui() {
+    let d = dir("ui");
+    let plugin = r#"
+        assert(omsi.ui.version >= 1)
+        local ok, why = omsi.ui.set("trip", { anchor = "top_right", children = {
+            { type = "text", text = "Linie 42" },
+            { type = "button", id = "pause", text = "Pause" },
+        } })
+        assert(ok and why == nil)
+        -- a mistake comes back as false and the reason, not as an error
+        local bad, reason = omsi.ui.set("bad", { width = "wide" })
+        assert(bad == false and reason == "width: a number is expected", reason)
+        assert(omsi.ui.toast("Hallo", { seconds = 2, icon = "payments" }))
+        assert(omsi.ui.toast({}) == false)
+        omsi.ui.set("gone", {})
+        assert(omsi.ui.remove("gone") and not omsi.ui.remove("gone"))
+        local w, h, scale = omsi.ui.screen()
+        assert(w > 0 and h > 0 and scale > 0)
+        omsi.on("ui_click", function(panel, element) omsi.message("click " .. panel .. " " .. tostring(element)) end)
+        function on_ui_focus(on) omsi.message("focus " .. tostring(on)) end
+        omsi.on("key", function(key, down)
+          if key == "F10" and down then omsi.message("focus asked " .. tostring(omsi.ui.focus(true))) end
+        end)
+    "#;
+    std::fs::write(d.join("career.lua"), plugin).unwrap();
+    let mut plugins = Plugins::load(std::slice::from_ref(&d), &HostConfig::default());
+    let ui = plugins.ui.clone();
+    assert_eq!(
+        ui.borrow().panels().len(),
+        1,
+        "a panel set by the top level is there before the first frame"
+    );
+    assert_eq!(ui.borrow().toasts().len(), 1);
+    let owner = ui.borrow().panels()[0].owner;
+    let mut bus = Bus {
+        vehicle: true,
+        ..Default::default()
+    };
+    let mut keys = vec![("F10".to_string(), true)];
+    struct Keyed<'a>(&'a mut Bus, &'a mut Vec<(String, bool)>);
+    impl PluginIo for Keyed<'_> {
+        fn system(&mut self, n: &str) -> Option<f32> {
+            self.0.system(n)
+        }
+        fn set_system(&mut self, _: &str, _: f32) {}
+        fn has_vehicle(&self) -> bool {
+            true
+        }
+        fn var(&mut self, n: &str) -> Option<f32> {
+            self.0.var(n)
+        }
+        fn set_var(&mut self, n: &str, v: f32) {
+            self.0.set_var(n, v)
+        }
+        fn string(&mut self, n: &str) -> Option<String> {
+            self.0.string(n)
+        }
+        fn set_string(&mut self, n: &str, s: &str) {
+            self.0.set_string(n, s)
+        }
+        fn fire(&mut self, t: &str, down: bool) {
+            self.0.fire(t, down)
+        }
+        fn message(&mut self, text: &str, s: f32) {
+            self.0.message(text, s)
+        }
+        fn keys(&self) -> Vec<(String, bool)> {
+            self.1.clone()
+        }
+    }
+    plugins.frame(&mut Keyed(&mut bus, &mut keys));
+    assert_eq!(bus.messages, ["focus asked true"]);
+    assert!(ui.borrow().focused());
+    // the game hands the plugin a click on its button; the plugin hears that it has the mouse
+    ui.borrow_mut().click(owner, "trip", Some("pause"));
+    keys.clear();
+    plugins.frame(&mut Keyed(&mut bus, &mut keys));
+    assert_eq!(bus.messages[1..], ["focus true", "click trip pause"]);
+    // Esc: the game takes the mouse back
+    ui.borrow_mut().release_focus();
+    plugins.frame(&mut Keyed(&mut bus, &mut keys));
+    assert_eq!(bus.messages.last().unwrap(), "focus false");
+    // the plugin is loaded again after a change: its old panels go, it shows its new ones
+    std::fs::write(d.join("career.lua"), "omsi.ui.set('again', {})").unwrap();
+    let ids = |ui: &omsi_plugin::ui::SharedUi| -> Vec<String> {
+        ui.borrow().panels().iter().map(|p| p.id.clone()).collect()
+    };
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while ids(&ui) == ["trip"] && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        plugins.frame(&mut Keyed(&mut bus, &mut keys));
+    }
+    assert_eq!(ids(&ui), ["again"]);
+    // and when it stops (its notifications run their time)
+    plugins.finalize();
+    assert!(ui.borrow().panels().is_empty());
+    assert_eq!(ui.borrow().toasts().len(), 1);
+}
+
+/// The example of docs/PLUGINS.md shows its panel.
+#[test]
+fn the_trip_panel_example_shows_its_panel() {
+    let d = dir("trip-panel");
+    let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/examples/plugins/trip_panel.lua");
+    std::fs::copy(example, d.join("trip_panel.lua")).unwrap();
+    let mut plugins = Plugins::load(std::slice::from_ref(&d), &HostConfig::default());
+    let mut bus = Bus {
+        vehicle: true,
+        ..Default::default()
+    };
+    bus.info = vec![
+        ("line", InfoValue::Text("42".into())),
+        ("delay", InfoValue::Num(95.0)),
+        ("next_stop", InfoValue::Text("Zoo".into())),
+        ("next_stop_number", InfoValue::Num(3.0)),
+        ("stops", InfoValue::Num(9.0)),
+        ("speed", InfoValue::Num(38.0)),
+    ];
+    plugins.frame(&mut bus);
+    assert!(bus.messages.is_empty(), "{:?}", bus.messages);
+    let ui = plugins.ui.borrow();
+    let [trip] = ui.panels() else {
+        panic!("{:?}", ui.panels())
+    };
+    assert_eq!((trip.id.as_str(), trip.panel.children.len()), ("trip", 5));
+    assert_eq!(ui.toasts().len(), 1, "the next stop's notification");
 }

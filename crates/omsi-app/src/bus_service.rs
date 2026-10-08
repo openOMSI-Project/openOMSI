@@ -10,6 +10,45 @@ use omsi_sim::traffic::{AiState, LaneKind, Network};
 use omsi_sim::VehicleInstance;
 use std::collections::VecDeque;
 
+/// Script callbacks describe the whole trip, including stations on unloaded tiles.
+/// The service's geometric queue only describes the part the bus can drive now.
+pub struct AiTimetable {
+    pub line: String,
+    pub terminus: String,
+    pub stops: Vec<(i64, String, f32, f32)>,
+}
+
+impl AiTimetable {
+    pub fn install(&self, host: &mut omsi_sim::VehicleHost, next: Option<&Stop>) {
+        host.schedule_active = 1.0;
+        host.tt_line = self.line.clone();
+        host.tt_stops = self.stops.iter().map(|s| (s.1.clone(), s.2, s.3)).collect();
+        host.tt_stop_ids = self.stops.iter().map(|s| s.0).collect();
+        host.tt_terminus_index = host
+            .hof
+            .as_ref()
+            .and_then(|hof| {
+                hof.termini
+                    .iter()
+                    .position(|t| t.texture_id == self.terminus)
+            })
+            .map_or(-1, |i| i as i32);
+        host.tt_busstop_index = timetable_stop_index(host, next).unwrap_or(0) as i32;
+        host.tt_delay = 0.0;
+    }
+}
+
+fn timetable_stop_index(host: &omsi_sim::VehicleHost, next: Option<&Stop>) -> Option<usize> {
+    let stop = next?;
+    // A circular trip may visit the same object twice. Its departure time identifies
+    // the visit, rather than a lookup by object id alone. f32 times lose subsecond
+    // precision on later days, so compare after casting to the callback's type.
+    host.tt_stop_ids
+        .iter()
+        .zip(&host.tt_stops)
+        .position(|(id, data)| *id == stop.id && data.2 == stop.depart as f32)
+}
+
 /// One stop of the trip, on the car's route.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Stop {
@@ -62,6 +101,8 @@ pub struct BusService {
     pub boarding: f32,
     /// When it may leave the stop (seconds of the day).
     pub leave_at: f64,
+    /// When it came to the stop it stands at (seconds of the day).
+    pub arrived_at: f64,
     /// The doors have been open at this stop already (a layover bus opens them only for
     /// the last minute before its departure).
     pub boarded: bool,
@@ -95,6 +136,12 @@ fn out_signal(bay: f32) -> i32 {
         1
     }
 }
+
+/// `AI_Engine` at a stop (`BusService::engine_running`): off this long after arriving when
+/// the departure is more than `ENGINE_OFF_WAIT` away, on again `ENGINE_ON_BEFORE` before it.
+const ENGINE_OFF_AFTER: f64 = 6.0;
+const ENGINE_OFF_WAIT: f64 = 60.0;
+const ENGINE_ON_BEFORE: f64 = 20.0;
 
 /// Seconds the doors stay open at a stop without anyone holding them.
 fn boarding_time(id: u64) -> f32 {
@@ -161,6 +208,33 @@ pub struct Ctx<'a> {
 }
 
 impl BusService {
+    /// Keep callbacks current before the next AI script frame. No trip-sized buffers
+    /// are rebuilt here; tile streaming only changes the geometric stop queue.
+    pub fn feed_timetable(&self, vehicle: &mut VehicleInstance, day_time: f64) {
+        if vehicle.host.schedule_active < 0.5 {
+            return;
+        }
+        if let Some(index) = timetable_stop_index(&vehicle.host, self.stops.front()) {
+            vehicle.host.tt_busstop_index = index as i32;
+        } else if self.stops.is_empty() && !self.route_open {
+            vehicle.host.tt_busstop_index = vehicle.host.tt_stops.len().saturating_sub(1) as i32;
+        }
+        vehicle.host.tt_delay = if self.at_stop() {
+            self.stops
+                .front()
+                .map(|s| day_time - s.depart)
+                .unwrap_or(self.delay)
+        } else {
+            vehicle
+                .host
+                .tt_stops
+                .get(vehicle.host.tt_busstop_index.max(0) as usize)
+                .map(|s| self.delay.max(day_time - s.1 as f64))
+                .unwrap_or(self.delay)
+        } as f32;
+        vehicle.set_var("schedule_active", vehicle.host.schedule_active);
+    }
+
     pub fn new(stops: Vec<Stop>) -> BusService {
         BusService {
             stops: stops.into(),
@@ -168,6 +242,7 @@ impl BusService {
             phase_t: 0.0,
             boarding: 0.0,
             leave_at: 0.0,
+            arrived_at: 0.0,
             boarded: false,
             delay: 0.0,
             layover: false,
@@ -201,6 +276,18 @@ impl BusService {
     }
 
     /// Standing at a stop (boarding, waiting or pulling out).
+    /// Whether its engine runs (`AI_Engine`): Omsi.exe (0x7d9128) switches a timetable
+    /// bus's engine off six seconds after it came to a stop it is to leave more than a
+    /// minute later, and on again twenty seconds before it leaves. The buses took their
+    /// breaks at the termini with the engines running (#1404).
+    pub fn engine_running(&self, day_time: f64) -> bool {
+        let standing = matches!(self.phase, Phase::Boarding | Phase::Waiting);
+        !(standing
+            && self.leave_at - self.arrived_at > ENGINE_OFF_WAIT
+            && day_time - self.arrived_at > ENGINE_OFF_AFTER
+            && self.leave_at - day_time > ENGINE_ON_BEFORE)
+    }
+
     pub fn at_stop(&self) -> bool {
         matches!(self.phase, Phase::Boarding | Phase::Waiting | Phase::Closing)
     }
@@ -266,6 +353,7 @@ impl BusService {
         let rail = ctx.net.lanes.get(at.0).is_some_and(|l| l.kind == LaneKind::Rail);
         let wait = early_wait(depart, ctx.day_time, layover, rail);
         self.leave_at = ctx.day_time + wait;
+        self.arrived_at = ctx.day_time;
         self.boarding = boarding_time(ctx.id);
         self.boarded = false;
         // a layover opens the doors for the last minute only; anywhere else people get off
@@ -292,6 +380,9 @@ impl BusService {
     /// Off from the stop: the next one is the front.
     fn depart(&mut self, st: &mut AiState, vehicle: &mut VehicleInstance, ctx: &Ctx) {
         let bay = self.stops.front().map(|s| s.bay).unwrap_or(0.0);
+        if let Some(stop) = self.stops.front() {
+            self.delay = ctx.day_time - stop.depart;
+        }
         self.stops.pop_front();
         self.near_d = f32::INFINITY;
         self.serve = None;
@@ -489,6 +580,119 @@ pub fn stop_shift(ty: &omsi_sim::VehicleType, rail: bool) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    /// A bus with a long wait at its stop switches its engine off after six seconds and on
+    /// twenty seconds before it leaves; a short stop keeps it running (#1404).
+    #[test]
+    fn the_engine_rests_through_a_long_wait() {
+        let mut b = super::BusService::new(Vec::new());
+        b.phase = super::Phase::Waiting;
+        b.arrived_at = 1000.0;
+        b.leave_at = 1300.0;
+        assert!(b.engine_running(1003.0), "just arrived");
+        assert!(!b.engine_running(1010.0), "resting");
+        assert!(b.engine_running(1285.0), "about to leave");
+        b.leave_at = 1040.0;
+        assert!(b.engine_running(1010.0), "a short stop");
+        b.leave_at = 1300.0;
+        b.phase = super::Phase::Running;
+        assert!(b.engine_running(1010.0), "driving");
+    }
+
+    #[test]
+    fn scheduled_ai_exposes_timetable_during_init_and_frame_ai() {
+        let template = crate::schedule::tests::script_test_vehicle(
+            "{init}\n(L.L.schedule_active) (S.L.init_active)\n(M.V.GetTTBusstopCount) (S.L.init_count)\n(M.V.GetTTLineString) (S.$.init_line)\n{end}\n{frame_ai}\n(L.L.schedule_active) (S.L.frame_active)\n(M.V.GetTTBusstopIndex) (S.L.frame_index)\n{end}\n",
+            "schedule_active\ninit_active\ninit_count\nframe_active\nframe_index\n",
+            "init_line\n",
+        );
+        let stop = Stop::from_tuple((0, 10.0, 0.0, 120.0, 7, 0.0));
+        let timetable = AiTimetable {
+            line: "042".into(),
+            terminus: "terminus".into(),
+            stops: vec![
+                (7, "First".into(), 100.0, 120.0),
+                (8, "Last".into(), 200.0, 220.0),
+            ],
+        };
+        let mut host = omsi_sim::VehicleHost::new(Default::default());
+        timetable.install(&mut host, Some(&stop));
+        let mut vehicle = VehicleInstance::new(template.ty.clone(), host);
+        assert_eq!(vehicle.var("init_active"), Some(1.0));
+        assert_eq!(vehicle.var("init_count"), Some(2.0));
+        assert_eq!(vehicle.str_var("init_line"), "042");
+        vehicle.set_var("schedule_active", 0.0);
+        vehicle.update_ai(0.01, &Default::default());
+        assert_eq!(vehicle.var("frame_active"), Some(1.0));
+        assert_eq!(vehicle.var("frame_index"), Some(0.0));
+        // Ordinary traffic has no assigned timetable; it must remain inactive.
+        let mut ordinary = VehicleInstance::new(
+            template.ty.clone(),
+            omsi_sim::VehicleHost::new(Default::default()),
+        );
+        ordinary.update_ai(0.01, &Default::default());
+        assert_eq!(ordinary.var("init_active"), Some(0.0));
+        assert_eq!(ordinary.var("frame_active"), Some(0.0));
+    }
+
+    #[test]
+    fn timetable_tracks_repeated_stops_streaming_and_trip_changes() {
+        let stop = |id, depart| Stop::from_tuple((0, 10.0, 0.0, depart, id, 0.0));
+        let first = stop(7, 120.0);
+        let second = stop(8, 220.0);
+        let repeated = stop(7, 320.0);
+        let timetable = AiTimetable {
+            line: "42".into(),
+            terminus: "terminal".into(),
+            stops: vec![
+                (7, "A".into(), 100.0, 120.0),
+                (8, "B".into(), 200.0, 220.0),
+                (7, "A".into(), 300.0, 320.0),
+            ],
+        };
+        let mut v =
+            crate::schedule::tests::script_test_vehicle("{frame_ai}\n{end}\n", "schedule_active\n", "");
+        v.host.hof = Some(std::sync::Arc::new(omsi_vehicle::Hof {
+            termini: vec![omsi_vehicle::hof::Terminus {
+                texture_id: "terminal".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        timetable.install(&mut v.host, Some(&first));
+        assert_eq!(v.host.tt_terminus_index, 0);
+        let mut service = BusService::new(vec![first, second, repeated]);
+        service.phase = Phase::Boarding;
+        service.feed_timetable(&mut v, 110.0);
+        assert_eq!(v.host.tt_delay, -10.0);
+        service.stops.pop_front();
+        service.phase = Phase::Running;
+        service.delay = 5.0;
+        service.feed_timetable(&mut v, 210.0);
+        assert_eq!(v.host.tt_busstop_index, 1);
+        assert_eq!(v.host.tt_delay, 10.0);
+        service.stops.pop_front();
+        service.feed_timetable(&mut v, 310.0);
+        assert_eq!(v.host.tt_busstop_index, 2);
+        // Exhausting the loaded geometry does not exhaust the script's timetable.
+        service.stops.clear();
+        service.route_open = true;
+        service.feed_timetable(&mut v, 315.0);
+        assert_eq!(v.host.tt_stops.len(), 3);
+        assert_eq!(v.host.tt_busstop_index, 2);
+        assert_eq!(v.host.schedule_active, 1.0);
+        let next = AiTimetable {
+            line: "43".into(),
+            terminus: "missing".into(),
+            stops: vec![(9, "C".into(), 400.0, 420.0)],
+        };
+        next.install(&mut v.host, Some(&stop(9, 420.0)));
+        assert_eq!(v.host.tt_line, "43");
+        assert_eq!(v.host.tt_stops.len(), 1);
+        assert_eq!(v.host.tt_busstop_index, 0);
+        assert_eq!(v.host.tt_terminus_index, -1);
+        assert_eq!(v.host.tt_delay, 0.0);
+    }
+
     use super::*;
 
     /// Somebody coming from another stop than the one the bus serves does not keep it there

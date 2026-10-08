@@ -846,10 +846,15 @@ index), `GetRouteTerminusIndex(route)`, `GetTerminusCode(idx)`, `GetTerminusInde
 `[addterminus]`/`[addterminus_allexit]` records are code, ident, then `stringcount_terminus`
 strings (no separate station line in any shipped file). AI buses get their destination the
 original way: string `SetLineTo` + `AI_target_index` (terminus index) and the
-`ai_scheduled_settarget` trigger. Depot callbacks with index -1 (what the lookups answer for an
-unknown code) return "" / -1, never entry 0. A depot file belongs to a map: when the bus folder
-has none of the name the map's `ailists.cfg` wants (a mod bus brings only its own map's), the
-openOMSI takes it from another vehicle folder (`omsi_vehicle::hof::depot_anywhere`). The FloFix
+`ai_scheduled_settarget` trigger - and, as every trip a bus starts calls
+`TRoadVehicleInst.virtual_10`, also when the depot file has no row for the trip's terminus or
+the group names no depot file at all (`AI_target_index` stays as it was). Depot callbacks with
+index -1 (what the lookups answer for an unknown code) return "" / -1, never entry 0. A depot
+file belongs to a map: when the bus folder has none of the name the map's `ailists.cfg` wants
+(a mod bus brings only its own map's), the openOMSI takes it from another vehicle folder
+(`omsi_vehicle::hof::depot_anywhere`); a bus of a plain `[aigroup_2]` pool, whose group names
+no depot, takes the map's depot of its folder where it has one, else the folder's first
+(`schedule::pool_depot`, Omsi.exe's selected-hof index 0). The FloFix
 "Atron" IBIS of many mods starts in a PIN mode (`IBIS_mode` 10) and wants the `PIN` constant
 of its constfile typed and confirmed before the mode keys work.
 

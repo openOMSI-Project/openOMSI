@@ -1549,6 +1549,11 @@ pub struct Humans {
     pub paid: Option<(f32, f32)>,
     pub change_due: Option<f32>,
     pub money: Option<crate::money::Money>,
+    /// The people inside the player's bus's box last frame (`run_over`): knocked down once
+    /// when they come into it, not again every frame they are in it.
+    under_bus: hashbrown::HashSet<u32>,
+    /// The tear-off ticket blocks of the player's bus (`money::TicketBlocks`).
+    pub ticket_blocks: Option<crate::money::TicketBlocks>,
     /// A rider pressed the stop button for the next stop (the app fires the vehicle trigger `int_haltewunsch`).
     pub stop_request: bool,
     /// Tickets sold at the cash desk this session and what they were worth.
@@ -1614,6 +1619,12 @@ pub struct Humans {
     /// wants one of them and boards only a bus showing one of its termini; at a stop no trip
     /// goes on from, anybody takes the first bus (0x61c33c).
     pub stop_targets: Option<HashMap<i64, Vec<(String, HashSet<String>)>>>,
+    /// Per bus stop, the destinations of the trips due there soon (`Schedule::
+    /// due_destinations`, made anew every game minute): the people turning up draw theirs
+    /// from these alone. None: from all of the stop's (no timetable).
+    pub due_dests: Option<HashMap<i64, HashSet<String>>>,
+    /// Game time `due_dests` was made at.
+    pub due_at: f64,
     /// The timetable's name of each stop object (`Schedule::stop_names`), the names the
     /// targets above are made of.
     pub stop_names: Option<HashMap<i64, String>>,
@@ -1726,6 +1737,14 @@ fn map_human_types(root: &Path, list: &[String]) -> Vec<Arc<HumanType>> {
     picked
 }
 
+// A malformed/imported population setting must not request millions of rendered agents.
+// Ordinary OMSI budgets (including the default 200) remain unchanged below this ceiling.
+const MAX_LOCAL_PEOPLE: usize = 4096;
+
+fn bounded_people_limit(configured: usize) -> usize {
+    configured.clamp(1, MAX_LOCAL_PEOPLE)
+}
+
 impl Humans {
     /// LAN uses the room id as the shared source of randomness.  This keeps the
     /// initial pedestrian selection and their generated identities identical on
@@ -1790,6 +1809,11 @@ impl Humans {
                 );
             }
         }
+        let configured_people = crate::settings::Settings::load().ai_max_humans as usize;
+        let people_limit = bounded_people_limit(configured_people);
+        if people_limit != configured_people {
+            log::warn!("human pool limit {configured_people} adjusted to {people_limit} for safe spawning");
+        }
         Humans {
             types,
             people: Vec::new(),
@@ -1826,6 +1850,8 @@ impl Humans {
             paid: None,
             change_due: None,
             money: None,
+            under_bus: hashbrown::HashSet::new(),
+            ticket_blocks: None,
             stop_request: false,
             tickets_sold: 0,
             ticket_cash: 0.0,
@@ -1856,11 +1882,13 @@ impl Humans {
             avatar_only: false,
             driver_away: false,
             stop_targets: None,
+            due_dests: None,
+            due_at: f64::NEG_INFINITY,
             stop_names: None,
             duty: None,
             stamped: Vec::new(),
             pedestrians: 14,
-            max_people: crate::settings::Settings::load().ai_max_humans.max(1) as usize,
+            max_people: people_limit,
             stroll_timer: 0.0,
             exact_fare: true,
             boarding: "auto".into(),
@@ -2041,7 +2069,7 @@ impl Humans {
     /// Room in the pool for one more person; when it is full somebody walking the street out
     /// of sight is taken for it, as Omsi.exe takes a task-8 person for a stop (0x61bd44).
     fn pool_room(&mut self) -> bool {
-        if self.pool_used() < self.max_people {
+        if self.pool_used() < bounded_people_limit(self.max_people) {
             return true;
         }
         let free = (0..self.people.len()).find(|&i| {
@@ -2053,7 +2081,7 @@ impl Humans {
                 self.release(i);
                 let p = self.people.swap_remove(i);
                 self.retire(&p);
-                true
+                self.pool_used() < bounded_people_limit(self.max_people)
             }
             None => false,
         }
@@ -2196,6 +2224,12 @@ impl Humans {
         heading: f64,
         state: State,
     ) -> Option<usize> {
+        // All local creation paths share the pool, including test riders and crossing
+        // pedestrians. Avatars and host mirrors use spawn_as directly and keep their
+        // existing ownership; never evict somebody aboard a bus to make room.
+        if !self.pool_room() {
+            return None;
+        }
         self.spawn_as(world, renderer, scene, position, heading, state, None)
     }
 
@@ -2643,7 +2677,8 @@ impl Humans {
                 let mean = (s.enter_max + s.enter_min) / 2.0;
                 // (0x61bf94: with a timetable, times the share of the trips due there - at a
                 // stop no trip leaves from, nobody)
-                let served = if self.stop_targets.is_some() && s.lines.is_empty() { 0.0 } else { 1.0 };
+                let none_due = self.due_dests.as_ref().is_some_and(|d| d.get(&id).is_none_or(|set| set.is_empty()));
+                let served = if self.stop_targets.is_some() && (s.lines.is_empty() || none_due) { 0.0 } else { 1.0 };
                 let w = (self.density.max(0.0) * mean * s.factor * served).round().max(0.0) as usize;
                 forced.unwrap_or(w).min(s.spots.len())
             };
@@ -2678,7 +2713,23 @@ impl Humans {
         let mut r = self.rand_f() as f32;
         let mut dest: Option<String> = None;
         let Some(stop) = self.stops.get(&id) else { return (None, None) };
-        for (n, w) in &stop.dests {
+        // (of the trips due here soon, `due_dests`; their weights made a whole again)
+        let due = self.due_dests.as_ref().map(|d| d.get(&id));
+        let dests: Vec<(&String, f32)> = match due {
+            Some(set) => {
+                let kept: Vec<(&String, f32)> = stop.dests.iter().filter(|(n, _)| set.is_some_and(|s| s.contains(n.trim()))).map(|(n, w)| (n, *w)).collect();
+                let total: f32 = kept.iter().map(|k| k.1).sum();
+                if total <= 0.0 {
+                    return (None, None);
+                }
+                // (the share that drew no destination stays the stop's own: those people go
+                // nowhere by bus, as before)
+                let all: f32 = stop.dests.iter().map(|d| d.1).sum();
+                kept.into_iter().map(|(n, w)| (n, w / total * all)).collect()
+            }
+            None => stop.dests.iter().map(|(n, w)| (n, *w)).collect(),
+        };
+        for (n, w) in dests {
             if r <= 0.0 {
                 break;
             }
@@ -3608,14 +3659,18 @@ impl Humans {
     /// People the moving bus has just knocked down. OMSI counts them in the driver's
     /// personnel file; they are only counted once and then walk away.
     pub fn run_over(&mut self, bus: &VehicleInstance) -> u32 {
-        if bus.physics.velocity_kmh().abs() < 5.0 {
-            return 0;
-        }
-        let Some(bb) = bus.ty.def.bounding_box else {
+        let moving = bus.physics.velocity_kmh().abs() >= 5.0;
+        let Some(bb) = bus.ty.def.bounding_box.filter(|_| moving) else {
+            self.under_bus.clear();
             return 0;
         };
-        let (half_x, half_y) = ((bb[0] - bb[3]).abs() / 2.0, (bb[1] - bb[4]).abs() / 2.0);
+        // (the box: its size and its centre in the bus frame - the size less the centre's
+        // coordinate had been taken for the half size, and anyone standing in that box was
+        // knocked down again every frame: 17 at once in one place, #1805)
+        let (half_x, half_y, half_z) = (bb[0] / 2.0, bb[1] / 2.0, bb[2] / 2.0);
+        let centre = Vec3::new(bb[3], bb[4], bb[5]);
         let inv = bus.body_rotation().transpose();
+        let mut inside: hashbrown::HashSet<u32> = hashbrown::HashSet::new();
         let mut knocked = Vec::new();
         for (i, p) in self.people.iter().enumerate() {
             // (sub_62a6a0 at 0x62dc6c: the people waiting at a stop and those on the pavements)
@@ -3627,11 +3682,15 @@ impl Humans {
             if p.place != Place::Ground || !counts {
                 continue;
             }
-            let local = inv.transform_vector3((p.position - bus.position).as_vec3());
-            if local.x.abs() < half_x + 0.2 && local.y.abs() < half_y + 0.2 && local.z.abs() < 3.0 {
-                knocked.push(i);
+            let local = inv.transform_vector3((p.position - bus.position).as_vec3()) - centre;
+            if local.x.abs() < half_x + 0.2 && local.y.abs() < half_y + 0.2 && local.z.abs() < half_z + 1.0 {
+                inside.insert(p.id);
+                if !self.under_bus.contains(&p.id) {
+                    knocked.push(i);
+                }
             }
         }
+        self.under_bus = inside;
         let mut gone = Vec::new();
         for &i in knocked.iter().rev() {
             // a waiting passenger knocked down leaves the stop and walks off (sub_626818)
@@ -4677,9 +4736,18 @@ impl Humans {
         }
     }
 
-    pub fn sync_money(&mut self, renderer: &Renderer, scene: &mut Scene, bus: &VehicleInstance) {
+    pub fn sync_money(&mut self, world: &World, renderer: &Renderer, scene: &mut Scene, bus: &VehicleInstance) {
         if let Some(m) = self.money.as_mut() {
             m.sync(renderer, scene, bus);
+        }
+        if let Some(pack) = self.tickets.as_ref().map(|t| t.path.clone()) {
+            let fresh = self.ticket_blocks.as_ref().is_none_or(|b| b.made_for != (bus.ty.def.path.clone(), pack.clone()));
+            if fresh && !bus.ty.def.attachments.is_empty() {
+                self.ticket_blocks = Some(crate::money::TicketBlocks::new(world, renderer, scene, bus, &pack));
+            }
+        }
+        if let Some(b) = self.ticket_blocks.as_ref() {
+            b.sync(renderer, scene, bus);
         }
     }
 
@@ -5159,6 +5227,8 @@ impl Humans {
     /// and where that is in the world now.
     pub fn cabin_walk(&self, bus: BusId, local: Vec3, step: glam::Vec2) -> Option<(Vec3, DVec3)> {
         const WIDTH: f32 = 0.3;
+        // what one step can climb, m
+        const STEP_UP: f32 = 0.6;
         let bn = self.last_buses.iter().find(|b| b.id == bus)?;
         let pts = &bn.cabin.graph.points;
         let want = glam::Vec2::new(local.x + step.x, local.y + step.y);
@@ -5169,7 +5239,11 @@ impl Humans {
             let ab = b2 - a2;
             let t = if ab.length_squared() > 1e-6 { ((want - a2).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
             let q = a2 + ab * t;
-            let d = (want - q).length() + (local.z - (pa.z + (pb.z - pa.z) * t)).abs();
+            // (the height tells the decks of a double-decker apart, not the steps: counted
+            // in full, a staircase rising from its first centimetre lost to the aisle beside
+            // it and the corridor held the walker at the aisle - an invisible wall at the
+            // foot of the stairs)
+            let d = (want - q).length() + ((local.z - (pa.z + (pb.z - pa.z) * t)).abs() - STEP_UP).max(0.0) * 2.0;
             if best.map(|x| d < x.0).unwrap_or(true) {
                 best = Some((d, q, pa.z + (pb.z - pa.z) * t));
             }
@@ -5186,8 +5260,10 @@ impl Humans {
         let xy = if d > WIDTH { q + (want - q) / d * WIDTH } else { want };
         // not through the seats and the driver's place: no nearer to one than 0.38 m
         // (walking away from one that close is let be)
+        // (on the walker's deck: the seats under a staircase, or the upper deck's over the
+        // aisle below, stopped the walker where nothing stands)
         let from = local.truncate();
-        let solid = bn.cabin.seats.iter().filter(|s| s.seated).map(|s| s.pos.truncate()).chain(bn.cabin.data.driver_positions.iter().map(|d| glam::Vec2::new(d.pos[0], d.pos[1])));
+        let solid = bn.cabin.seats.iter().filter(|s| s.seated && (s.floor.z - local.z).abs() < 0.45).map(|s| s.pos.truncate()).chain(bn.cabin.data.driver_positions.iter().filter(|d| (d.pos[2] - (local.z + 0.4)).abs() < 1.0).map(|d| glam::Vec2::new(d.pos[0], d.pos[1])));
         for c in solid {
             let (dn, d0) = ((xy - c).length(), (from - c).length());
             if dn < 0.38 && dn < d0 {
@@ -6574,4 +6650,105 @@ fn wrap_heading(h: f64) -> f64 {
 /// The angle between two headings (degrees, 0..180).
 fn angle_between(a: f64, b: f64) -> f64 {
     ((b - a + 540.0).rem_euclid(360.0) - 180.0).abs()
+}
+
+#[cfg(test)]
+mod population_limit_tests {
+    use super::*;
+
+    #[test]
+    fn imported_millions_cannot_become_a_local_population_budget() {
+        assert_eq!(bounded_people_limit(200), 200);
+        assert_eq!(bounded_people_limit(1), 1);
+        assert_eq!(bounded_people_limit(0), 1);
+        assert_eq!(bounded_people_limit(MAX_LOCAL_PEOPLE), MAX_LOCAL_PEOPLE);
+        assert_eq!(bounded_people_limit(2_000_000), MAX_LOCAL_PEOPLE);
+        assert_eq!(bounded_people_limit(usize::MAX), MAX_LOCAL_PEOPLE);
+    }
+
+    #[test]
+    fn the_pool_counts_local_people_and_never_recycles_riders_or_avatars() {
+        let dir = std::env::temp_dir().join(format!("omsi-pool-limit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("person.hum"), "[model]\nmodel.cfg\n").unwrap();
+        std::fs::write(dir.join("model.cfg"), "").unwrap();
+        let ty = Arc::new(HumanType::load(&dir.join("person.hum")).unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+        let person = |id, remote, puppet, standing| Person {
+            id,
+            ty: ty.clone(),
+            variant: 0,
+            meshes: Vec::new(),
+            position: DVec3::Y * 1000.0,
+            heading: 0.0,
+            lheading: 0.0,
+            place: Place::Ground,
+            vel: DVec2::ZERO,
+            pace: 1.1,
+            activity: Activity::Stand,
+            anim: OmsiAnim::default(),
+            state: if standing {
+                State::Standing
+            } else {
+                State::Pax(Box::new(Pax::new(1.1, 0.5)))
+            },
+            t_state: 0.0,
+            skins: Vec::new(),
+            skin_bones: None,
+            pose_changed: false,
+            interior: 0.0,
+            lit: 0.0,
+            tilt: Mat4::IDENTITY,
+            age: 40.0,
+            stuck: 0.0,
+            ghost: 0.0,
+            car_wait: 0.0,
+            detour: 0.0,
+            detour_side: 0.0,
+            why: "",
+            skinned: false,
+            since_posed: 0,
+            posed_at: (DVec3::ZERO, 0.0),
+            ankles: [Vec3::ZERO; 2],
+            puppet,
+            remote,
+        };
+        let mut h = Humans::new(Path::new("/nonexistent"));
+        h.max_people = 2;
+        h.people = vec![
+            person(1, false, None, false),
+            person(2, false, None, false),
+            person(3, true, None, true),
+            person(
+                4,
+                false,
+                Some(Puppet {
+                    mode: PuppetMode::Avatar,
+                }),
+                true,
+            ),
+        ];
+        assert_eq!(h.pool_used(), 2);
+        assert!(!h.pool_room());
+        assert_eq!(
+            h.people.len(),
+            4,
+            "avatars, mirrors and existing passengers survive"
+        );
+        h.people.push(person(5, false, None, true));
+        assert!(
+            !h.pool_room(),
+            "recycling one walker cannot grant a spawn when still over budget"
+        );
+        assert_eq!(h.pool_used(), 2);
+        assert!(h.people.iter().all(|p| p.id != 5));
+        h.people.retain(|p| p.id != 2);
+        h.people.push(person(6, false, None, true));
+        assert!(
+            h.pool_room(),
+            "an offscreen walker may make room at the exact limit"
+        );
+        assert_eq!(h.pool_used(), 1);
+        assert!(h.people.iter().any(|p| p.id == 1));
+    }
 }

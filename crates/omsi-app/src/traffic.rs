@@ -138,6 +138,7 @@ pub struct BusSetup {
     /// Fleet number and registration (`number`, `ident` string variables).
     pub number: Option<(String, String)>,
     pub hof: Option<Arc<omsi_vehicle::Hof>>,
+    pub timetable: crate::bus_service::AiTimetable,
 }
 
 pub struct AiCar {
@@ -608,6 +609,9 @@ pub struct Traffic {
     pub unsched_factor: f32,
     /// The options' `[AIMaxCountScheduled]` (0 = no limit).
     pub max_scheduled: u32,
+    /// `--no-timetable-buses`: the timetable runs for the player's duty, but puts no AI
+    /// bus on the road (#1762).
+    pub no_timetable_buses: bool,
     /// Where the player looks from (set every frame).
     pub viewer: Option<Viewer>,
     /// Buildings that hide what is behind them (the player's collision world).
@@ -968,6 +972,34 @@ fn crossing_arrival(st: &AiState, distance: f32, claimed: bool, waits_short: boo
     } else {
         time_to(distance, 0.0, st.accel) + st.reaction
     }
+}
+
+/// The nearest vehicle in the part of the chosen exit that must be clear for this car.
+///
+/// `way` distances are measured from the car's present lane origin; `rear` is measured
+/// from the occupied lane's start. Combining both lets a queue be found across short,
+/// consecutive path objects instead of only on the first lane after a junction.
+fn queued_exit_vehicle(
+    way: &[(usize, f32)],
+    exit: (usize, f32),
+    need: f32,
+    occupied: impl IntoIterator<Item = (usize, f32, f32)>,
+) -> Option<(f32, f32, usize)> {
+    let start = way
+        .iter()
+        .position(|&(lane, distance)| lane == exit.0 && (distance - exit.1).abs() < 0.01)?;
+    occupied
+        .into_iter()
+        .filter_map(|(lane, rear, speed)| {
+            let offset = way[start..]
+                .iter()
+                .take_while(|&&(_, distance)| distance - exit.1 < need)
+                .find(|&&(candidate, _)| candidate == lane)
+                .map(|&(_, distance)| distance - exit.1)?;
+            let space = offset + rear;
+            (space < need).then_some((space, speed, lane))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
 }
 
 /// A vehicle the AI does not drive, put onto the lanes for the right of way: the street
@@ -1441,6 +1473,7 @@ impl Traffic {
             density_curve: world.global.traffic_density_road.clone(),
             unsched_factor: crate::settings::Settings::load().ai_unsched_factor,
             max_scheduled: crate::settings::Settings::load().ai_max_scheduled,
+            no_timetable_buses: false,
             viewer: None,
             occluders: None,
             walkers: Vec::new(),
@@ -2695,6 +2728,7 @@ impl Traffic {
         host.font_lib = Some(world.fonts.clone());
         if let Some(b) = &bus {
             host.hof = b.hof.clone();
+            b.timetable.install(&mut host, b.stops.first());
         }
         // random paint scheme / advert (its variables there for the scripts' {init})
         let scheme = match scheme {
@@ -3002,10 +3036,14 @@ impl Traffic {
         number: Option<(String, String)>,
         hof: Option<Arc<omsi_vehicle::Hof>>,
         scheme: Option<Option<usize>>,
+        timetable: crate::bus_service::AiTimetable,
     ) -> Option<usize> {
         let &lane = route.first()?;
         let kind = self.net.lanes.get(lane)?.kind;
         // the options' [AIMaxCountScheduled]: no more timetable vehicles than that at once
+        if self.no_timetable_buses {
+            return None;
+        }
         if self.max_scheduled > 0 && self.cars.iter().filter(|c| c.is_bus() || !c.state.route.is_empty()).count() >= self.max_scheduled as usize {
             return None;
         }
@@ -3015,6 +3053,7 @@ impl Traffic {
             stops: stops.into_iter().map(crate::bus_service::Stop::from_tuple).collect(),
             number,
             hof,
+            timetable,
         };
         let center = self.viewer.map(|v| v.pos).unwrap_or_default();
         let id = self.create_car(world, renderer, scene, center, kind, lane, s, ty.clone(), seed, scheme, None, None, Some(setup));
@@ -3234,6 +3273,17 @@ impl Traffic {
         ahead: f32,
         by_lane: &HashMap<usize, Vec<(usize, f32, f32, bool)>>,
     ) -> bool {
+        // Parked scenery cars are not in `by_lane`. An otherwise empty lane must still
+        // leave room for this vehicle before it starts moving over.
+        if !parked_lane_clear(
+            self.parked.get(&lane).map(Vec::as_slice).unwrap_or(&[]),
+            s,
+            back,
+            ahead,
+            self.cars[i].half_width,
+        ) {
+            return false;
+        }
         let Some(list) = by_lane.get(&lane) else {
             return true;
         };
@@ -3252,6 +3302,15 @@ impl Traffic {
         by_lane: &HashMap<usize, Vec<(usize, f32, f32, bool)>>,
     ) -> bool {
         let me = &self.cars[i].state;
+        if !parked_lane_clear(
+            self.parked.get(&lane).map(Vec::as_slice).unwrap_or(&[]),
+            s,
+            me.rear + 1.0,
+            me.front + 2.0 + me.speed * 1.5,
+            self.cars[i].half_width,
+        ) {
+            return false;
+        }
         // the cars on the lane, and those about to come onto it from the lanes before it (a
         // bus changing lanes just after a joint cut in front of a car still on the lane
         // before, which the target lane alone did not show)
@@ -4133,17 +4192,7 @@ impl Traffic {
     /// road, #327) and to its `[ai_veh_type]` (`Lane::allows`).
     fn open_to(&self, i: usize, lane: usize) -> bool {
         let Some(l) = self.net.lanes.get(lane) else { return false };
-        if l.no_cars || l.density <= 0.0 {
-            return false;
-        }
-        let car = &self.cars[i];
-        if !l.allows(car.state.veh_type) {
-            return false;
-        }
-        match car.state.traffic_pool.as_ref() {
-            Some((pool, defaults)) if !l.group_density.is_empty() => l.pool_density(defaults, *pool) > 0.0,
-            _ => true,
-        }
+        lane_open_to(l, &self.cars[i].state)
     }
 
     /// The lanes of a car's way with their distance from its origin: the current lane (at
@@ -4226,22 +4275,7 @@ impl Traffic {
     /// went on green and then stopped as it came round the corner, at the light of the
     /// cross traffic on the path its turn joins - a stop line in mid-junction nobody sees.
     fn light_at_entry(&self, way: &[(usize, f32)], k: usize) -> Option<(usize, usize)> {
-        let l = way[k].0;
-        let light = self.net.lanes[l].traffic_light?;
-        let object = |x: usize| {
-            let lane = &self.net.lanes[x];
-            lane.key.filter(|_| lane.source == 2).map(|key| (key.tile, key.id))
-        };
-        let here = object(l)?;
-        for &(p, _) in way[..k].iter().rev() {
-            if object(p) != Some(here) {
-                break;
-            }
-            if self.net.lanes[p].traffic_light.is_some() {
-                return None;
-            }
-        }
-        Some(light)
+        entry_light(&self.net, way, k)
     }
 
     fn way_lanes(&self, st: &AiState, within: f32) -> Vec<(usize, f32)> {
@@ -4659,27 +4693,31 @@ impl Traffic {
         let ruled_before_exit = ruled;
         let mut exit_full = false;
         if !jn.inside {
-            if let Some((e, de)) = jn.exit {
-                let room = on_lane
-                    .get(&e)
-                    .map(|v| v.as_slice())
-                    .unwrap_or(&[])
-                    .iter()
-                    .filter(|x| !x.3 && x.0 != i)
-                    .map(|&(j, sj, _, _)| (sj - self.cars[j].state.rear, self.cars[j].state.speed))
-                    .fold(None::<(f32, f32)>, |acc, x| {
-                        if acc.map(|a| x.0 < a.0).unwrap_or(true) {
-                            Some(x)
-                        } else {
-                            acc
-                        }
-                    });
-                if let Some((space, speed)) = room {
-                    if speed < 1.5 && space < st.length + st.min_gap && de < 40.0 {
+            if let Some(exit) = jn.exit {
+                let need = st.length + st.min_gap;
+                // A map often builds the road immediately beyond a crossing from several
+                // short path objects. Looking only at the first exit lane then calls the
+                // exit empty while a queue stands on the next 2 m piece, and a car enters
+                // the box with nowhere to put its body. Follow this car's chosen way until
+                // there is enough clear road for all of it.
+                let all_cars = &self.cars;
+                let occupied = on_lane.iter().flat_map(|(&lane, cars)| {
+                    cars.iter().filter_map(move |&(j, s, _, passing)| {
+                        (!passing && j != i).then_some((
+                            lane,
+                            s - all_cars[j].state.rear,
+                            all_cars[j].state.speed,
+                        ))
+                    })
+                });
+                if let Some((space, speed, lane)) = queued_exit_vehicle(way, exit, need, occupied) {
+                    // (only near the crossing, as before: a car far off plans no stop for a
+                    // queue that may well have moved on by the time it gets there)
+                    if speed < 1.5 && space < need && exit.1 < 40.0 {
                         ruled = true;
                         exit_full = true;
                         if explain {
-                            why.push(format!("exit {e} full ({space:.1} m)"));
+                            why.push(format!("exit {} full on lane {lane} ({space:.1} m)", exit.0));
                         }
                     }
                 }
@@ -5285,8 +5323,18 @@ impl Traffic {
         for c in self.lights.iter_mut() {
             c.request.iter_mut().for_each(|r| *r = false);
         }
+        // How far ahead a vehicle asks for a light or a crossing: as far as the farthest
+        // `[approachdist]` of the map's lights says (OMSI takes them up to 1000 m), at least
+        // the 160 m it always was. Held to 160, a railway crossing set to ring 300 m before
+        // the train never rang (#1421).
+        let reach = self
+            .lights
+            .iter()
+            .flat_map(|c| c.approach.iter().flatten().copied())
+            .fold(160.0f32, f32::max)
+            .min(1200.0);
         for c in &self.cars {
-            for (l, d) in self.way_lanes(&c.state, 160.0) {
+            for (l, d) in self.way_lanes(&c.state, reach) {
                 if let Some((ci, li)) = self.net.lanes[l].traffic_light {
                     if let Some(ctl) = self.lights.get_mut(ci) {
                         let gap = d - c.state.front;
@@ -5310,7 +5358,13 @@ impl Traffic {
         for &(pos, heading) in &askers {
             // (off the lanes - a depot yard, a car park - a gate's lane that starts just
             // ahead, the way the bus is facing, is asked all the same: standing a few metres
-            // beside every lane there, the bus never opened the barrier in front of it)
+            // beside every lane there, the bus never opened the barrier in front of it.
+            // Only off the lanes: on the road it asked the lights of every lane up to 6 m
+            // beside it - Winsenburg's bus light jumped for a bus driving past on the road
+            // next to the bus bays, #1790; on a lane, the lanes ahead below ask)
+            if self.net.lane_along(pos, heading, LaneKind::Street, 2.5, 45.0).is_some() {
+                continue;
+            }
             let h = heading.to_radians();
             let fwd = glam::DVec2::new(h.sin(), h.cos());
             for l in 0..self.net.lanes.len() {
@@ -5328,7 +5382,7 @@ impl Traffic {
             }
         }
         for (pos, heading) in askers {
-            for (l, d) in self.lanes_ahead_of(pos, heading, 160.0) {
+            for (l, d) in self.lanes_ahead_of(pos, heading, reach) {
                 if let Some((ci, li)) = self.net.lanes[l].traffic_light {
                     if let Some(ctl) = self.lights.get_mut(ci) {
                         if d <= ctl.approach_dist(li) {
@@ -5889,6 +5943,7 @@ impl Traffic {
                             why = ("service", at);
                         }
                     }
+                    service.feed_timetable(&mut car.vehicle, self.day_time);
                 } else if car.passing.is_none() && car.park.is_none() {
                     // round a car parked at the kerb, else in the middle of the lane
                     let target = kerb_swerve.unwrap_or(0.0);
@@ -6184,6 +6239,7 @@ impl Traffic {
                 at_station: car.at_station() as i32,
                 at_station_side: car.at_station_side(),
                 priority_warning,
+                engine_off: car.bus.as_ref().is_some_and(|b| !b.engine_running(self.day_time)),
             });
         }
         // Who can be seen: a car out of the view (and farther than the mirrors and the
@@ -6765,6 +6821,14 @@ impl Traffic {
             b.restart(Vec::new(), false);
         }
         car.gone = true;
+        car.vehicle.host.schedule_active = 0.0;
+        car.vehicle.host.tt_line.clear();
+        car.vehicle.host.tt_stops.clear();
+        car.vehicle.host.tt_stop_ids.clear();
+        car.vehicle.host.tt_busstop_index = -1;
+        car.vehicle.host.tt_terminus_index = -1;
+        car.vehicle.host.tt_delay = 0.0;
+        car.vehicle.set_var("schedule_active", 0.0);
     }
 
     /// Take all random AI cars off the road now, keeping timetable buses. Returns how many
@@ -6893,7 +6957,7 @@ impl Traffic {
         let mut out = vec![(lane, 0.0f32)];
         let mut open = vec![(lane, self.net.lanes[lane].length() - s)];
         while let Some((l, to_end)) = open.pop() {
-            if to_end > reach || out.len() > 64 {
+            if to_end > reach || out.len() > 256 {
                 continue;
             }
             let end_heading = self.net.lanes[l].headings.last().copied().unwrap_or(0.0);
@@ -7316,6 +7380,58 @@ impl Traffic {
                 }
             }
         }
+    }
+}
+
+/// A parked car uses the same approximate body as the driving obstacle check:
+/// half length 2.3 m, half width 0.9 m, and 0.15 m lateral clearance. A car well
+/// off the target lane must not prevent a lane change on a narrow street.
+fn parked_lane_clear(
+    parked: &[(f32, f32)],
+    s: f32,
+    back: f32,
+    ahead: f32,
+    half_width: f32,
+) -> bool {
+    !parked.iter().any(|&(at, lat)| {
+        lat.abs() < half_width + 0.9 + 0.15 && at + 2.3 >= s - back && at - 2.3 <= s + ahead
+    })
+}
+
+#[cfg(test)]
+mod parked_lane_tests {
+    use super::*;
+
+    #[test]
+    fn a_parked_body_blocks_an_otherwise_empty_target_lane() {
+        assert!(parked_lane_clear(&[], 50.0, 30.0, 70.0, 0.9));
+        assert!(!parked_lane_clear(&[(55.0, 0.0)], 50.0, 30.0, 70.0, 0.9));
+        // The centre is outside the inspected strip, but the parked car's body is not.
+        assert!(!parked_lane_clear(&[(121.0, 0.0)], 50.0, 30.0, 70.0, 0.9));
+        assert!(!parked_lane_clear(&[(19.0, 0.0)], 50.0, 30.0, 70.0, 0.9));
+        assert!(parked_lane_clear(
+            &[(123.0, 0.0), (17.0, 0.0)],
+            50.0,
+            30.0,
+            70.0,
+            0.9
+        ));
+    }
+
+    #[test]
+    fn parked_clearance_accounts_for_vehicle_width_and_both_sides() {
+        for lateral in [-2.1, 2.1] {
+            // A car fits; a wider bus would overlap the parked body.
+            assert!(parked_lane_clear(&[(50.0, lateral)], 50.0, 4.0, 10.0, 0.9));
+            assert!(!parked_lane_clear(
+                &[(50.0, lateral)],
+                50.0,
+                7.0,
+                14.0,
+                1.25
+            ));
+        }
+        assert!(parked_lane_clear(&[(50.0, 2.7)], 50.0, 7.0, 14.0, 1.25));
     }
 }
 
@@ -7811,7 +7927,7 @@ mod road_scale_tests {
 
 #[cfg(test)]
 mod junction_arrival_tests {
-    use super::crossing_arrival;
+    use super::{crossing_arrival, queued_exit_vehicle};
     use omsi_sim::traffic::AiState;
 
     #[test]
@@ -7863,6 +7979,40 @@ mod junction_arrival_tests {
         assert_eq!(crossing_arrival(&st, 10.0, false, true, false), f32::MAX);
         assert!(crossing_arrival(&st, 10.0, true, false, false) < 5.0);
         assert_eq!(crossing_arrival(&st, 10.0, false, false, false), 5.0);
+    }
+
+    #[test]
+    fn a_queue_on_a_short_lane_after_the_exit_keeps_the_junction_clear() {
+        // Lanes 20 and 21 are two short pieces immediately beyond the crossing. The first
+        // is empty; a car whose rear is 1 m into the second leaves only 3 m beyond the exit.
+        let way = [(10, -20.0), (20, 5.0), (21, 7.0), (22, 10.0), (23, 40.0)];
+        assert_eq!(
+            queued_exit_vehicle(&way, (20, 5.0), 8.0, [(21, 1.0, 0.0)]),
+            Some((3.0, 0.0, 21))
+        );
+    }
+
+    #[test]
+    fn traffic_beyond_the_space_the_car_needs_does_not_close_the_exit() {
+        let way = [(10, -20.0), (20, 5.0), (21, 7.0), (22, 10.0), (23, 40.0)];
+        assert_eq!(
+            queued_exit_vehicle(&way, (20, 5.0), 8.0, [(22, 5.0, 0.0), (23, 0.0, 0.0)]),
+            None
+        );
+    }
+
+    #[test]
+    fn the_nearest_vehicle_across_exit_pieces_wins() {
+        let way = [(10, -20.0), (20, 5.0), (21, 7.0), (22, 10.0)];
+        assert_eq!(
+            queued_exit_vehicle(
+                &way,
+                (20, 5.0),
+                10.0,
+                [(21, 4.0, 1.0), (20, 5.0, 0.5), (22, -1.0, 0.0)]
+            ),
+            Some((4.0, 0.0, 22))
+        );
     }
 }
 
@@ -8036,5 +8186,126 @@ mod way_user_tests {
         assert!(merging_lead(&net, &me, &[user(vec![(0, -30.0), (2, 20.0)], 0.0, 9.0)]).is_none());
         // a bus whose way does not go on into the lane the car takes: nothing to do with it
         assert!(merging_lead(&net, &me, &[user(vec![(0, -30.0)], 12.0, 0.0)]).is_none());
+    }
+}
+
+/// A declared entry signal remains authoritative without scenery-object identity.
+fn entry_light(net: &Network, way: &[(usize, f32)], k: usize) -> Option<(usize, usize)> {
+    let l = way[k].0;
+    let light = net.lanes[l].traffic_light?;
+    let object = |x: usize| {
+        let lane = &net.lanes[x];
+        lane.key
+            .filter(|_| lane.source == 2)
+            .map(|key| (key.tile, key.id))
+    };
+    let Some(here) = object(l) else {
+        return Some(light);
+    };
+    for &(p, _) in way[..k].iter().rev() {
+        if object(p) != Some(here) {
+            break;
+        }
+        if net.lanes[p].traffic_light.is_some() {
+            return None;
+        }
+    }
+    Some(light)
+}
+
+#[cfg(test)]
+mod signal_entry_tests {
+    use super::*;
+    use omsi_sim::traffic::{LaneBuilder, LaneKey};
+
+    fn lane(id: Option<i64>, light: Option<(usize, usize)>) -> omsi_sim::traffic::Lane {
+        let mut lane = LaneBuilder::arc(DVec3::ZERO, 0.0, 20.0, 0.0, 0.0, LaneKind::Street, 3.0);
+        lane.source = 2;
+        lane.key = id.map(|id| LaneKey {
+            tile: (0, 0),
+            id,
+            path: 0,
+        });
+        lane.traffic_light = light;
+        lane
+    }
+
+    #[test]
+    fn a_signal_does_not_require_scenery_identity() {
+        let mut net = Network {
+            lanes: vec![lane(None, None), lane(None, Some((0, 1)))],
+            ..Default::default()
+        };
+        let way = [(0, -5.0), (1, 15.0)];
+        assert_eq!(entry_light(&net, &way, 1), Some((0, 1)));
+        net.lanes[1].source = 1;
+        net.lanes[1].key = Some(LaneKey {
+            tile: (0, 0),
+            id: 10,
+            path: 0,
+        });
+        assert_eq!(entry_light(&net, &way, 1), Some((0, 1)));
+    }
+
+    #[test]
+    fn junction_interior_deduplication_keeps_the_next_junction_signal() {
+        let net = Network {
+            lanes: vec![
+                lane(Some(10), Some((0, 0))),
+                lane(Some(10), Some((0, 1))),
+                lane(Some(11), Some((1, 0))),
+            ],
+            ..Default::default()
+        };
+        let way = [(0, -5.0), (1, 15.0), (2, 35.0)];
+        assert_eq!(entry_light(&net, &way, 0), Some((0, 0)));
+        assert_eq!(entry_light(&net, &way, 1), None);
+        assert_eq!(entry_light(&net, &way, 2), Some((1, 0)));
+    }
+}
+
+/// The same vehicle/group gates used by route planning also apply to lane changes.
+fn lane_open_to(lane: &omsi_sim::traffic::Lane, state: &AiState) -> bool {
+    lane.allows(state.veh_type)
+        && match state.traffic_pool.as_ref() {
+            Some((pool, defaults)) => lane.pool_density(defaults, *pool) > 0.0,
+            None => lane.density > 0.0,
+        }
+}
+
+#[cfg(test)]
+mod lane_permission_tests {
+    use super::*;
+    use omsi_sim::traffic::LaneBuilder;
+
+    #[test]
+    fn lane_changes_follow_type_and_pool_permissions() {
+        let mut lane = LaneBuilder::arc(DVec3::ZERO, 0.0, 20.0, 0.0, 0.0, LaneKind::Street, 3.0);
+        let mut state = AiState::new(0, 0.0, 1);
+        lane.no_cars = true;
+        lane.rule_bus = true;
+        assert!(!lane_open_to(&lane, &state));
+        state.veh_type = 1;
+        assert!(
+            lane_open_to(&lane, &state),
+            "taxis may use an explicitly open bus lane"
+        );
+        state.veh_type = 2;
+        assert!(lane_open_to(&lane, &state));
+        state.traffic_pool = Some((2, vec![1, 1, 1].into()));
+        lane.group_density = vec![(2, 0.0)];
+        assert!(!lane_open_to(&lane, &state));
+        lane.group_density = vec![(2, 0.5)];
+        lane.density = 0.0;
+        assert!(
+            lane_open_to(&lane, &state),
+            "the specific pool rule matches route-planning semantics"
+        );
+        lane.group_density.clear();
+        state.traffic_pool = Some((2, vec![1, 1, 0].into()));
+        assert!(
+            !lane_open_to(&lane, &state),
+            "disabled default groups remain closed without a path override"
+        );
     }
 }

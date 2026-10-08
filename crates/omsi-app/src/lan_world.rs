@@ -1210,6 +1210,8 @@ impl LanWorld {
                                 at_station: c.at_station as i32,
                                 at_station_side: sides.get(i).copied().unwrap_or(0.0),
                                 priority_warning: false,
+                                // (the host's buses' engines are not on the wire: running)
+                                engine_off: false,
                             },
                         )
                     })

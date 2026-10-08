@@ -328,6 +328,10 @@ pub struct ScriptedObject {
     /// `[htmltexture]` pages shown on the object: (script texture index, texture). The
     /// pages themselves are `inst.html_textures`.
     pub htmls: Vec<(usize, TextureId)>,
+    /// Per instance, its slots faded by `[alphascale]` variables (`LampSlots::alpha`; empty
+    /// when none is), and the alphas last given.
+    pub alpha_slots: Vec<LampSlots>,
+    pub alpha_last: Vec<Vec<f32>>,
 }
 
 /// Where a ray lands on a page (`[htmltexture]`) of a scenery object: see
@@ -1857,7 +1861,9 @@ fn terrain_ground(src: &MeshData, slots: &[usize], pos: DVec3, xf: Mat4, origin:
 /// name - and if so how much it gives to the wind. Not a `[tree]` (its cards have their
 /// own) and not a backdrop (a forest painted on one wide card).
 fn vegetation_give_of(sco: &omsi_scenery::sco::SceneryObject) -> Option<f32> {
-    const GROUP_WORDS: [&str; 18] = ["tree", "baum", "bäume", "baeume", "deciduous", "conifer", "shrub", "bush", "busch", "strauch", "hecke", "hedge", "plant", "pflanz", "arbor", "vegetation", "forest", "wald"];
+    // (not "wald": a whole DLC's objects are grouped as "Thüringer Wald", and its houses'
+    // cut-out windows and railings swayed in the wind, #1775)
+    const GROUP_WORDS: [&str; 17] = ["tree", "baum", "bäume", "baeume", "deciduous", "conifer", "shrub", "bush", "busch", "strauch", "hecke", "hedge", "plant", "pflanz", "arbor", "vegetation", "forest"];
     const NAME_WORDS: [&str; 15] = ["tree", "trees", "baum", "shrub", "shrubbery", "bush", "busch", "strauch", "hecke", "hedge", "arbor", "chestnut", "kastanie", "palm", "plant"];
     if sco.tree.is_some() {
         return None;
@@ -5131,6 +5137,8 @@ impl World {
                         texts: Vec::new(),
                         arrivals: false,
                         htmls: Vec::new(),
+                        alpha_slots: Vec::new(),
+                        alpha_last: Vec::new(),
                     });
                 }
                 // An editor-only object still lays its paths out: OMSI's invisible
@@ -6400,6 +6408,10 @@ impl World {
                 let mut extra = material_extra(&slot_ov, env_mask, bump, specular);
                 extra.ambient = Some(ambient);
                 extra.no_map_lights = ot.sco.no_map_lighting;
+                // a route arrow ([helparrow]) is a guide over the world, not a light in it:
+                // left out of the Enhanced picture's glow as the bus's own screens are (its
+                // self-lit yellow bloomed like a lamp at night, #1615)
+                extra.screen |= ot.sco.is_help_arrow;
                 // windy trees: a plant's leaves (its cut-out or blended slots) bend in the wind
                 if alpha != AlphaMode::Opaque {
                     if let Some(give) = vegetation_give_of(&ot.sco) {
@@ -7275,6 +7287,10 @@ impl World {
                         editable,
                         script: mut early_script,
                     } = o;
+                    let script_strings: &[String] = match (&lamp, strings.as_slice()) {
+                        (&Some((_, _, false)), [_, rest @ ..]) => rest,
+                        _ => strings.as_slice(),
+                    };
                     let tkey = self.type_gpu(renderer, scene, gpu, &ot, images, ground_mat);
                     if !tg.types.contains(&tkey) {
                         gpu.types.get_mut(&tkey).unwrap().users += 1;
@@ -7298,6 +7314,9 @@ impl World {
                         Vec::new();
                     let mut lamp_texts: Vec<(TextureId, omsi_sim::texttex::TextTextureState)> =
                         Vec::new();
+                    // The materials this placement's own `[texttexture]`s made: (slot, is item, material),
+                    // to keep them on a `[matl_change]` slot (see below).
+                    let mut text_slot_mats: Vec<(usize, bool, MaterialId)> = Vec::new();
                     // `[htmltexture]` pages shown on this object: (script texture index, texture)
                     let mut html_pages: Vec<(usize, TextureId)> = Vec::new();
                     let mut html_mats: HashMap<usize, MaterialId> = HashMap::new();
@@ -7315,14 +7334,14 @@ impl World {
                     });
                     let mut object_script = if needs_own_script {
                         let program = ot.program.clone().or_else(|| {
-                            (has_pages || (has_freetex && !strings.is_empty())).then(|| Arc::new(omsi_script::Program::default()))
+                            (has_pages || (has_freetex && !script_strings.is_empty())).then(|| Arc::new(omsi_script::Program::default()))
                         });
                         program.map(|program| {
                             let mut inst = early_script.take().unwrap_or_else(|| omsi_sim::scenery::SceneryInstance::new(
                                 program,
                                 &ot.mesh_defs(),
                                 self.script_clock(),
-                                &strings,
+                                script_strings,
                             ));
                             if has_pages {
                                 let object_dir = ot.sco.path.parent().unwrap_or(std::path::Path::new(""));
@@ -7341,7 +7360,7 @@ impl World {
                     }) {
                         ot.program.as_ref().map(|program| {
                             let mut probe = omsi_sim::scenery::SceneryInstance::new(
-                                program.clone(), &ot.mesh_defs(), self.script_clock(), &strings,
+                                program.clone(), &ot.mesh_defs(), self.script_clock(), script_strings,
                             );
                             probe.update(0.0, &omsi_sim::scenery::SceneryVars {
                                 in_use: 1.0, ..Default::default()
@@ -7426,6 +7445,19 @@ impl World {
                                 xf,
                                 mats.clone()
                             ));
+                            // What stands on a surface object casts its shadow: a `[shadow]`
+                            // mesh, or (casters "all") one rising more than 1.5 m over the
+                            // object's foot. Drawn as a ground layer it cast none - the
+                            // Spandau depot's buildings, made one object with its yard,
+                            // threw no shadow at all (#1503).
+                            if surface && !ot.mesh_shadow.get(mi).copied().unwrap_or(false) {
+                                let tagged = ot.mesh_casts.get(mi).copied().unwrap_or(false);
+                                let tall = ot.meshes.get(mi).is_some_and(|(m, _, _)| m.positions.iter().any(|p| p.z > 1.5));
+                                if tagged || tall {
+                                    renderer.set_casts_shadow(scene, i, true);
+                                    renderer.set_omsi_caster(scene, i, tagged);
+                                }
+                            }
                             i
                         } else {
                             let i = instance!(renderer.add_instance(scene, *mesh_id, pos, xf, mats.clone()));
@@ -7460,7 +7492,7 @@ impl World {
                                     overrides,
                                     object_script.as_ref(),
                                     freetex_probe.as_ref(),
-                                    &strings,
+                                    script_strings,
                                 ) else {
                                     continue;
                                 };
@@ -7559,6 +7591,7 @@ impl World {
                                         let mat = gpu.material(renderer, scene, mat);
                                         tg.textures.push(tex);
                                         tg.materials.push(mat);
+                                        text_slot_mats.push((slot, o.item, mat));
                                         renderer.set_material(scene, inst, slot, mat);
                                         if lamp.is_none() {
                                             script_texts.push((tex, state));
@@ -7572,7 +7605,7 @@ impl World {
                                         .trim()
                                         .parse::<usize>()
                                         .ok()
-                                        .and_then(|k| strings.get(k))
+                                        .and_then(|k| script_strings.get(k))
                                         .cloned()
                                         .unwrap_or_default();
                                     let alpha = text_alpha(o3d_mats, slot, overrides);
@@ -7582,6 +7615,7 @@ impl World {
                                         e.2 += 1;
                                         let mat = e.1;
                                         tg.texts.push(key);
+                                        text_slot_mats.push((slot, o.item, mat));
                                         renderer.set_material(scene, inst, slot, mat);
                                         continue;
                                     }
@@ -7602,8 +7636,21 @@ impl World {
                                     let mat = gpu.material(renderer, scene, mat);
                                     gpu.text_textures.insert(key.clone(), (tex, mat, 1));
                                     tg.texts.push(key);
+                                    text_slot_mats.push((slot, o.item, mat));
                                     renderer.set_material(scene, inst, slot, mat);
                                 }
+                            }
+                        }
+                        // A slot a `[matl_change]` switches keeps the material this
+                        // placement's own `[texttexture]` drew it with: the switch puts the
+                        // type's plain materials back every frame (`update_scripted`), and a
+                        // bus stop sign's route numbers went blank with them (#1756).
+                        for v in object_variants.iter_mut().filter(|v| v.0 == inst) {
+                            if let Some(&(_, _, m)) = text_slot_mats.iter().rev().find(|(s, it, _)| *s == v.1 && *it) {
+                                v.3 = m;
+                            }
+                            if let Some(&(_, _, m)) = text_slot_mats.iter().rev().find(|(s, it, _)| *s == v.1 && !*it) {
+                                v.2 = m;
                             }
                         }
                         // [htmltexture] + [useHtmlTexture]: a page drawn onto the slot; the
@@ -7800,7 +7847,7 @@ impl World {
                                 p.clone(),
                                 &ot.mesh_defs(),
                                 self.script_clock(),
-                                &strings,
+                                script_strings,
                             )))
                         });
                         let lit = vec![0.0; coronas.len()];
@@ -7866,6 +7913,35 @@ impl World {
                                 }
                             }
                         }
+                        // `[alphascale]` on the object's own slots (#1299: only the traffic
+                        // lights' were read, a bus stop sign faded by its script stood there
+                        // whole): as its script's {init} leaves the variables, and then
+                        // every frame for a script that changes them
+                        let alpha_slots: Vec<LampSlots> = if lamp.is_none() {
+                            all_instances
+                                .iter()
+                                .take(mesh_instances)
+                                .enumerate()
+                                .map(|(mi, &id)| {
+                                    let count = scene.instances.get(id).map(|i| i.materials.len()).unwrap_or(0);
+                                    let mut l = ot.meshes.get(mi).map(|(_, o3d_mats, overrides)| LampSlots::of_mesh(o3d_mats, overrides, count)).unwrap_or_default();
+                                    l.light.clear();
+                                    l
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        let faded = alpha_slots.iter().any(|l| !l.alpha.is_empty());
+                        let mut alpha_last = Vec::new();
+                        if faded {
+                            for (l, &id) in alpha_slots.iter().zip(&all_instances) {
+                                let (a, _) = l.values(&|v| v.trim().parse::<f32>().ok().or_else(|| inst.var(v)));
+                                let visible = scene.instances[id].visible;
+                                renderer.set_params(scene, id, &a, visible, &[]);
+                                alpha_last.push(a);
+                            }
+                        }
                         if inst.is_dynamic()
                             || !object_variants.is_empty()
                             || ot.sco.sound.is_some()
@@ -7898,6 +7974,8 @@ impl World {
                                 texts: script_texts,
                                 arrivals,
                                 htmls: html_pages,
+                                alpha_slots: if faded { alpha_slots } else { Vec::new() },
+                                alpha_last,
                             });
                         }
                     }
@@ -9851,11 +9929,25 @@ impl World {
                     .collect();
                 texture_updates.push((o.ty.clone(), selection, o.instances.clone(), switches));
             }
-            for ((inst, xf), &visible) in o.instances.iter().zip(&o.inst.mesh_transforms).zip(&o.inst.mesh_visible) {
+            for (k, ((inst, xf), &visible)) in o.instances.iter().zip(&o.inst.mesh_transforms).zip(&o.inst.mesh_visible).enumerate() {
                 renderer.set_transform(scene, *inst, o.pos, o.xf * *xf);
+                // (the slots its `[alphascale]` variables fade, see `ScriptedObject::alpha_slots`)
+                let alpha = o.alpha_slots.get(k).filter(|l| !l.alpha.is_empty()).map(|l| l.values(&|v| v.trim().parse::<f32>().ok().or_else(|| o.inst.var(v))).0);
                 let p = &mut scene.instances[*inst];
-                if p.visible != visible {
-                    renderer.set_params(scene, *inst, &[], visible, &[]);
+                match alpha {
+                    Some(a) => {
+                        if p.visible != visible || o.alpha_last.get(k) != Some(&a) {
+                            renderer.set_params(scene, *inst, &a, visible, &[]);
+                            if let Some(last) = o.alpha_last.get_mut(k) {
+                                *last = a;
+                            }
+                        }
+                    }
+                    None => {
+                        if p.visible != visible {
+                            renderer.set_params(scene, *inst, &[], visible, &[]);
+                        }
+                    }
                 }
             }
             updated += 1;
@@ -10790,7 +10882,14 @@ fn helper_text_image(tt: &omsi_model::TextTexture, atlas: Option<&omsi_content::
     // are 0.7 of its size, so nearly the line height gives letters of the same height)
     let line = atlas.map(|a| a.font.height.max(8) as f32).unwrap_or(h as f32 * 0.2);
     // the lines share the texture's height when they would not fit at the font's own
-    let pitch = line.min(h as f32 / n);
+    let mut pitch = line.min(h as f32 / n);
+    // A line too long for the texture is made smaller first, letters and all, down to two
+    // thirds of the height, and only what is still too wide is narrowed: narrowed alone, a
+    // long Polish street name came out in thin sticks nobody could read (#1696, #1365).
+    let widest = lines.iter().filter(|l| !l.is_empty()).map(|l| fonts.render(l, pitch * 0.95, omsi_ui::Weight::Medium).w).max().unwrap_or(0);
+    if widest > w {
+        pitch *= (w as f32 / widest as f32).max(2.0 / 3.0);
+    }
     let px = pitch * 0.95;
     let top = (h as f32 - pitch * n) * 0.5;
     let rgb = if tt.full_color { [255u8; 3] } else { [tt.color[0] as u8, tt.color[1] as u8, tt.color[2] as u8] };
@@ -10931,6 +11030,15 @@ fn slot_is_see_through(mesh: &MeshData, slot: usize, mask: &[u8]) -> bool {
     // in the paint scheme, its adverts and tint - is covered where the picture is, and is
     // a pane all the same)
     all > 0 && clear * 3 >= all * 2
+}
+
+/// Whether a texture (`mask`, see [`alpha_mask`]) is clear all over: no texel above 8 of
+/// 255. A slot blended by `[matl_alpha] 2` with such a texture is drawn for its depth alone
+/// - an "invisible cover" bus makers put in front of a roller blind or a window to hide it
+/// (a 16x16 clear `.tga`, #1113, #576): Omsi.exe writes its depth in model order, and what
+/// the model lists after it behind it is gone.
+fn texture_is_clear(mask: &[u8]) -> bool {
+    !mask.is_empty() && mask.iter().all(|&a| a <= 8)
 }
 
 /// Return whether the triangles of one material occupy a volumetric part of the vehicle.
@@ -11307,11 +11415,14 @@ impl Look {
             let mut extra = l.extra;
             extra.display = text_is_display(l.lightmap.is_some(), l.night.is_some());
             extra.screen = true;
+            // (the slot's own emissive stays: a text field made self-lit in its .x - the
+            // emissive colour 1, 1, 1 - shines as OMSI shows it, the New Lion's City's
+            // number plate and setvar screen; it was taken away, #1384)
             return Look {
                 diffuse: Some(t),
                 alpha: AlphaMode::Blend,
                 color: [1.0; 4],
-                emissive: [0.0; 3],
+                emissive: l.emissive,
                 unlit: false,
                 transmap: None,
                 envmap: None,
@@ -12664,9 +12775,19 @@ impl World {
                     // wheel arches, far wheels and interior drawn after it showed through the
                     // paint (#928, #932).
                     let coverage_tex = subst(coverage_texture(ov.iter().find_map(|o| o.transmap.as_deref()), &m.texture));
+                    let coverage = omsi_texture::find_texture(&coverage_tex, &dirs_ref).and_then(|p| alpha_mask(&p));
+                    // (an invisible cover: clear all over and writing its depth - no pane, it is
+                    // there to hide what comes after it, see `texture_is_clear`)
+                    let cover = declared_alpha == AlphaMode::Blend
+                        && !ov.iter().any(|o| o.no_z_write || o.no_z_check)
+                        && coverage.as_ref().is_some_and(|mask| texture_is_clear(mask));
+                    if cover {
+                        log::debug!("  {} slot {slot} '{}': an invisible cover (clear texture), writes depth in model order", def.file, m.texture);
+                    }
                     let see_through = !named_pane
+                        && !cover
                         && declared_alpha == AlphaMode::Blend
-                        && omsi_texture::find_texture(&coverage_tex, &dirs_ref).and_then(|p| alpha_mask(&p)).is_some_and(|mask| slot_is_see_through(&vm.data, slot, &mask));
+                        && coverage.as_ref().is_some_and(|mask| slot_is_see_through(&vm.data, slot, mask));
                     if see_through {
                         log::debug!("  {} slot {slot} '{}': see-through by its texture's alpha, writes no depth", def.file, m.texture);
                     }
@@ -12787,7 +12908,7 @@ impl World {
                     // film's as well: see `MaterialExtra::writes_depth`. Left out of the
                     // depth buffer, the stacked panes of a door blended over each other
                     // whichever lay in front, #211.)
-                    if (transparent_layer_hint || see_through) && alpha == AlphaMode::Blend {
+                    if (transparent_layer_hint || see_through) && !cover && alpha == AlphaMode::Blend {
                         extra.writes_depth = declared_alpha == AlphaMode::Blend && !ov.iter().any(|o| o.no_z_write) && !def.is_shadow;
                         extra.no_z_write = true;
                     }
@@ -13271,6 +13392,13 @@ fn object_lanes(
 /// Resolve the texture name for a scenery object's `[matl_freetex]` slot.
 /// Tries the object's script variable first, then freetex probe, and falls back to
 /// tile placement strings (by explicit numeric index or by freetex declaration order).
+///
+/// The object's own string variable owns the slot: when its `[stringvarnamelist]` (or a
+/// script) declares `var`, its value is the file name and an empty value means the slot
+/// has none - the object's own texture stays, as in Omsi.exe. Reading the placement
+/// strings of another variable instead put a bus stop sign's route number (`72`, `A47X`)
+/// or a stop name in a `[matl_freetex]` slot, which Omsi.exe never does; those are the
+/// `[texttexture]` sizes of the sign, not files (#1756).
 pub(crate) fn resolve_scenery_freetex_name<'a>(
     var: &str,
     override_: &MaterialDef,
@@ -13281,14 +13409,19 @@ pub(crate) fn resolve_scenery_freetex_name<'a>(
 ) -> Option<&'a str> {
     let script_name = object_script.map(|s| s.str_var(var).trim()).unwrap_or("");
     let probe_name = freetex_probe.map(|p| p.str_var(var).trim()).unwrap_or("");
+    let declared = object_script.map(|s| s.program.str_var(var).is_some()).unwrap_or(false)
+        || freetex_probe.map(|p| p.program.str_var(var).is_some()).unwrap_or(false);
+    if declared {
+        // a name a script sets in {frame} is only in the probe's state at first (see the
+        // caller), so both are read; neither having one leaves the slot's own texture
+        let name = if !script_name.is_empty() { script_name } else { probe_name };
+        let name = name.trim_matches('"');
+        return (!name.is_empty()).then_some(name);
+    }
     let string_by_idx = var.parse::<usize>().ok().and_then(|idx| strings.get(idx)).map(|s| s.trim()).unwrap_or("");
     let freetex_idx = overrides.iter().filter(|o| !o.item && o.freetex.is_some()).position(|o| std::ptr::eq(o, override_)).unwrap_or(0);
     let string_by_order = strings.get(freetex_idx).map(|s| s.trim()).unwrap_or("");
-    let name = if !script_name.is_empty() {
-        script_name
-    } else if !probe_name.is_empty() {
-        probe_name
-    } else if !string_by_idx.is_empty() {
+    let name = if !string_by_idx.is_empty() {
         string_by_idx
     } else if !string_by_order.is_empty() {
         string_by_order
@@ -13307,6 +13440,17 @@ pub(crate) fn resolve_scenery_freetex_name<'a>(
 mod tests {
     /// A route helper's text in letters its font lacks breaks its lines at `@` as OMSI's
     /// own text textures do (#1553): two bands of letters, one above the other, no `@`.
+    #[test]
+    fn a_long_helper_text_is_made_smaller_before_it_is_narrowed() {
+        let tt = omsi_model::TextTexture { width: 64, height: 128, color: [255.0; 3], ..Default::default() };
+        let ink_rows = |text: &str| -> usize {
+            let img = helper_text_image(&tt, None, text).expect("drawn with the interface font");
+            (0..128).filter(|&y| (0..64).any(|x| img.rgba[(y * 64 + x) * 4 + 3] > 0)).count()
+        };
+        // (#1696: the long name keeps letters of a readable shape: smaller, not only thinner)
+        assert!(ink_rows("Łąka Łąka Łąka Łąka Łąka") < ink_rows("Łąka"));
+    }
+
     #[test]
     fn helper_text_breaks_lines_at_the_at_sign() {
         let tt = omsi_model::TextTexture { width: 256, height: 64, color: [255.0; 3], ..Default::default() };
@@ -13461,6 +13605,16 @@ mod tests {
 
     /// An LED panel's light map is one white pixel; a flipdot's is a picture with dark
     /// parts (the Krueger's `vmatrix_leer_LM.bmp`), and does not make an LED panel (#413).
+    #[test]
+    fn a_clear_texture_is_an_invisible_cover() {
+        assert!(texture_is_clear(&vec![0u8; 64]));
+        assert!(texture_is_clear(&vec![5u8; 64]));
+        let mut pane = vec![0u8; 64];
+        pane[10] = 62;
+        assert!(!texture_is_clear(&pane));
+        assert!(!texture_is_clear(&[]));
+    }
+
     #[test]
     fn a_transmapped_slot_is_see_through_by_its_transmap_not_its_reflection_mask() {
         // the stock Golf 2: diffuse alpha 0 (reflection mask), transmap opaque (#928, #932)
@@ -13705,6 +13859,16 @@ mod tests {
             assert!((at(0, x, 1) - expect(x)).abs() <= 1.0, "row {x}");
         }
         assert!((0..n * n).all(|i| own.rgba[i * 4 + 2] == 0));
+    }
+
+    /// A DLC's buildings grouped as "Thüringer Wald" are no plants; trees and hedges are
+    /// (#1775).
+    #[test]
+    fn a_forest_named_map_is_no_plant() {
+        let sco = |text: &str| SceneryObject::parse(&omsi_cfg::CfgFile::from_str("haus.sco", text));
+        assert!(vegetation_give_of(&sco("[groups]\n2\nThüringer Wald\nGebäude\n[mesh]\nhaus.o3d\n")).is_none());
+        assert!(vegetation_give_of(&sco("[groups]\n2\nThüringer Wald\nBäume\n[mesh]\nbaum.o3d\n")).is_some());
+        assert!(vegetation_give_of(&sco("[groups]\n1\nHedges\n[mesh]\nh.o3d\n")).is_some());
     }
 
     /// A bus bay's lines made as a plain object (NCCR's `Parkbox(bus).sco`: a flat mesh 5 mm
@@ -14497,6 +14661,28 @@ mod material_tests {
         // 4. Returns None when no matching string exists
         let name_empty = resolve_scenery_freetex_name("Missing", &ov1, &overrides, None, None, &[]);
         assert_eq!(name_empty, None);
+
+        // 5. A string variable the object declares owns the slot: an empty one means the
+        //    slot has no picture of its own, never another variable's placement string.
+        //    (A bus stop sign's route number stood in a `[matl_freetex]` slot this way,
+        //    #1756.)
+        let mut prog2 = omsi_script::Program::default();
+        prog2.declare_str_var("Textur");
+        let empty_script = omsi_sim::scenery::SceneryInstance::new(
+            Arc::new(prog2),
+            &[],
+            omsi_sim::SimClock::default(),
+            &[String::new()],
+        );
+        assert_eq!(
+            resolve_scenery_freetex_name("Textur", &ov1, &overrides, Some(&empty_script), None, &strings),
+            None
+        );
+        // a variable the object does not declare keeps the positional fallback
+        assert_eq!(
+            resolve_scenery_freetex_name("Textur2", &ov1, &overrides, Some(&empty_script), None, &strings),
+            Some("zero.bmp")
+        );
     }
 }
 

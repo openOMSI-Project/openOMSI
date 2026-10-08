@@ -607,7 +607,13 @@ impl Network {
     /// street passes each stop twice, once from the other side, and the bus stopped at the
     /// stop across the road on its way out. Falls back to the nearest point.
     pub fn project_stop_on_route(&self, route: &[usize], p: DVec3, reach: Option<f64>, from: usize) -> Option<(usize, f32, f32)> {
-        // (index, s, distance, lateral) of the best on the kerb side, and of any
+        self.project_stop_on_route_side(route, p, reach, from, 0)
+    }
+
+    /// The same for a platform opposite the usual kerb (1), or either side (2).
+    /// The side is the stop object's OMSI value, relative to the map's traffic hand.
+    pub fn project_stop_on_route_side(&self, route: &[usize], p: DVec3, reach: Option<f64>, from: usize, side: u8) -> Option<(usize, f32, f32)> {
+        // (index, s, distance, lateral) of the best on the platform side, and of any
         let mut kerb: Option<(usize, f32, f64, f32)> = None;
         let mut any: Option<(usize, f32, f64, f32)> = None;
         for (ri, &li) in route.iter().enumerate().skip(from.min(route.len())) {
@@ -626,7 +632,8 @@ impl Network {
                 let rel = (p - q).truncate();
                 let lateral = (rel.x * dir.y - rel.y * dir.x) as f32;
                 let cand = (ri, l.dist[k] + (l.dist[k + 1] - l.dist[k]) * t as f32, d, lateral);
-                let kerb_side = if self.left_hand { lateral < -0.3 } else { lateral > 0.3 };
+                let left = self.left_hand != (side == 1);
+                let kerb_side = side == 2 || if left { lateral < -0.3 } else { lateral > 0.3 };
                 if kerb_side && kerb.map(|b| d < b.2).unwrap_or(true) {
                     kerb = Some(cand);
                 }
@@ -637,7 +644,7 @@ impl Network {
         }
         match kerb.or(any) {
             Some((ri, s, _, lat)) => Some((ri, s, lat)),
-            None if from > 0 => self.project_stop_on_route(route, p, reach, 0),
+            None if from > 0 => self.project_stop_on_route_side(route, p, reach, 0, side),
             None => None,
         }
     }
@@ -1601,9 +1608,13 @@ impl TrafficLightController {
             }
             match p.jump_to {
                 Some(to) => {
-                    // A jump a couple of seconds back extends the current phase. It is not
-                    // a loop: after replaying that small stretch, continue through it.
-                    self.rewound = (to > 1e-6 && to < p.time - 1e-6).then_some(k);
+                    // A jump a couple of seconds back while somebody asks extends the
+                    // current phase. It is not a loop: after replaying that small stretch,
+                    // continue through it. One taken while nobody asks is the program's
+                    // rest: the main road stays green round it until a request comes
+                    // (Winsenburg's win-4: replayed once, it ran through yellow and red
+                    // with nobody waiting and flickered between green and yellow, #1722).
+                    self.rewound = (!p.if_request && to > 1e-6 && to < p.time - 1e-6).then_some(k);
                     self.time = (to as f64).rem_euclid(cycle);
                     self.passed.clear();
                     if left <= 0.0 {
@@ -2034,8 +2045,9 @@ impl AiState {
     fn choose_after(&mut self, net: &Network, lane: usize) -> Option<usize> {
         let l = &net.lanes[lane];
         // (a car of a traffic pool - the trucks of a map that keeps them to its port roads -
-        // takes the ways its pool may go, as it was put on one; where none of them does, the
-        // ways open to cars, then any: it does not stand at the junction for ever)
+        // takes only the ways its pool may go, as it was put on one. A forbidden exit
+        // remains forbidden even if every exit is closed; normal end-of-route handling
+        // must deal with that, rather than driving into a pedestrian or restricted lane.)
         let open_to = |pooled: bool| -> Vec<usize> {
             l.next
                 .iter()
@@ -2050,10 +2062,10 @@ impl AiState {
                 })
                 .collect()
         };
-        let pooled = self.traffic_pool.is_some().then(|| open_to(true)).filter(|o| !o.is_empty());
+        let pooled = self.traffic_pool.is_some().then(|| open_to(true));
         let weighted = pooled.is_some();
         let open = pooled.unwrap_or_else(|| open_to(false));
-        let mut choices = if open.is_empty() { l.next.clone() } else { open };
+        let mut choices = open;
         // and a way that goes on rather than into the end of the network, where there is
         // the choice (the map's edge is where OMSI takes its cars away; a village like
         // Grundorf had a queue of twenty growing at the end of its one outbound road)
@@ -2597,6 +2609,72 @@ impl AiState {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn platform_side_selects_the_correct_visit_on_a_two_way_route() {
+        let out = LaneBuilder::polyline(
+            vec![DVec3::new(0.0, 0.0, 0.0), DVec3::new(100.0, 0.0, 0.0)],
+            LaneKind::Street,
+            3.0,
+        );
+        let back = LaneBuilder::polyline(
+            vec![DVec3::new(100.0, 6.0, 0.0), DVec3::new(0.0, 6.0, 0.0)],
+            LaneKind::Street,
+            3.0,
+        );
+        let mut net = Network {
+            lanes: vec![out, back],
+            ..Default::default()
+        };
+        // North of both lanes: right of the westbound lane, left of the eastbound.
+        let stop = DVec3::new(50.0, 8.0, 0.0);
+        let at = |net: &Network, side| {
+            net.project_stop_on_route_side(&[0, 1], stop, Some(25.0), 0, side)
+                .unwrap()
+                .0
+        };
+        assert_eq!(at(&net, 0), 1);
+        assert_eq!(at(&net, 1), 0);
+        assert_eq!(at(&net, 2), 1);
+        net.left_hand = true;
+        assert_eq!(at(&net, 0), 0);
+        assert_eq!(at(&net, 1), 1);
+        assert_eq!(at(&net, 2), 1);
+        assert_eq!(
+            net.project_stop_on_route_side(&[0, 1], stop, Some(25.0), 2, 1)
+                .unwrap()
+                .0,
+            1
+        );
+        // A central platform is left of both directions: choose the nearest lane.
+        let central = DVec3::new(50.0, 2.0, 0.0);
+        net.left_hand = false;
+        for side in [1, 2] {
+            assert_eq!(
+                net.project_stop_on_route_side(&[0, 1], central, Some(25.0), 0, side)
+                    .unwrap()
+                    .0,
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn platform_side_uses_the_local_tangent_on_a_curve() {
+        let lane = LaneBuilder::arc(DVec3::ZERO, 0.0, 30.0, 40.0, 0.0, LaneKind::Street, 3.0);
+        let (point, heading) = lane.at(15.0);
+        let h = (heading as f64).to_radians();
+        let right = DVec3::new(h.cos(), -h.sin(), 0.0);
+        let net = Network {
+            lanes: vec![lane],
+            ..Default::default()
+        };
+        let (_, s, lat) = net
+            .project_stop_on_route_side(&[0], point - right * 4.0, Some(25.0), 0, 1)
+            .unwrap();
+        assert!((s - 15.0).abs() < 1.0);
+        assert!((lat + 4.0).abs() < 0.2);
+    }
+
+    #[test]
     fn a_stop_is_matched_to_the_lane_it_stands_beside() {
         // out along y = 0 (east), back along y = 6 (west); the stop stands north of the
         // way back: on its right, across the road from the way out
@@ -2656,6 +2734,39 @@ mod tests {
         assert!(!l.allows(0) && !l.allows(1));
         l.rule_bus = true;
         assert!(!l.allows(0) && l.allows(1) && l.allows(2) && !l.allows(3));
+    }
+
+    #[test]
+    fn no_legal_exit_does_not_fall_back_to_a_forbidden_lane() {
+        let mut net = junction();
+        let mut car = AiState::new(0, 0.0, 7);
+        net.lanes[1].no_cars = true;
+        assert_eq!(car.choose_after(&net, 0), None);
+        net.lanes[1].no_cars = false;
+        net.lanes[1].density = 0.0;
+        assert_eq!(car.choose_after(&net, 0), None);
+        net.lanes[1].density = 1.0;
+        car.veh_type = 3;
+        assert_eq!(car.choose_after(&net, 0), None);
+        net.lanes[1].rule_trucks = true;
+        assert_eq!(car.choose_after(&net, 0), Some(1));
+        // Explicit timetable paths retain their original OMSI semantics.
+        car.veh_type = -1;
+        car.route = vec![0, 1];
+        net.lanes[1].density = 0.0;
+        car.plan_next(&net);
+        assert_eq!(car.planned_next, Some(1));
+    }
+
+    #[test]
+    fn pool_closed_exits_cannot_fall_back_to_general_traffic() {
+        let mut net = junction();
+        let mut car = AiState::new(0, 0.0, 7);
+        car.traffic_pool = Some((2, vec![1, 1, 1].into()));
+        net.lanes[1].group_density = vec![(2, 0.0)];
+        assert_eq!(car.choose_after(&net, 0), None);
+        net.lanes[1].group_density = vec![(2, 0.5)];
+        assert_eq!(car.choose_after(&net, 0), Some(1));
     }
 
     #[test]
@@ -2834,6 +2945,33 @@ mod tests {
         c.advance(3.0);
         assert!((c.time - 53.0).abs() < 1e-3);
         assert_eq!(c.state(0), 3, "the bus gets its phase");
+    }
+
+    #[test]
+    fn a_rest_loop_holds_while_nobody_asks() {
+        // win-4.sco (#1722): main green 2-12 s, jumping back from 12 to 2 while no bus
+        // asks at the bus light; a bus sends it on through yellow.
+        let mut c = TrafficLightController::from_program(
+            vec![
+                (vec![(3, 2.0), (6, 10.0), (9, 3.0), (0, 7.0), (9, 3.0), (0, 1.0)], None),
+                (vec![(0, 16.0), (6, 6.0), (0, 1.0)], None),
+            ],
+            Some(37.0),
+            &[],
+            &[[1.0, 12.0, 1.0, 2.0], [1.0, 22.0, 1.0, 2.0], [1.0, 22.0, 0.0, 18.0], [1.0, 2.0, 0.0, 12.0], [1.0, 7.0, 0.0, 12.0]],
+        );
+        c.time = 3.0;
+        for _ in 0..1200 {
+            c.advance(0.1);
+            assert_eq!(c.state(0), 6, "the main road left its green at {:.1} s with nobody asking", c.time);
+        }
+        c.request[1] = true;
+        let mut saw_bus_green = false;
+        for _ in 0..300 {
+            c.advance(0.1);
+            saw_bus_green |= c.state(1) == 6;
+        }
+        assert!(saw_bus_green, "a bus asking gets its green");
     }
 
     #[test]

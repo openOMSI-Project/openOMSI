@@ -27,9 +27,9 @@ use glam::{DVec3, Mat4, Vec3};
 use omsi_render::SmokeParticle;
 
 /// How far the puddle threshold drops with the wetness (`PUDDLE_SPREAD` in `enhanced.wgsl`
-/// and `shader.wgsl`): a road wet through has standing water on about a third of it, the
+/// and `shader.wgsl`): a road wet through has standing water on about a fifth of it, the
 /// rest is wet asphalt.
-const PUDDLE_SPREAD: f32 = 0.45;
+const PUDDLE_SPREAD: f32 = 0.37;
 /// The procedural patterns repeat every `PATTERN_PERIOD` metres (`shader.wgsl`).
 const PATTERN_PERIOD: f64 = 1000.0;
 
@@ -54,11 +54,11 @@ pub fn water_at(x: f64, y: f64, wet_road: f32) -> Water {
         return Water::default();
     }
     // `world_pattern_xy`: the map coordinate, which the shader takes modulo the pattern's
-    // period (a whole number of cells of both octaves)
+    // period (a whole number of cells of every octave)
     let (px, py) = (x.rem_euclid(PATTERN_PERIOD) as f32, y.rem_euclid(PATTERN_PERIOD) as f32);
-    let pn = vnoise_f(px, py, 0.22, 17.3, -9.1) * 0.65 + vnoise_f(px, py, 0.9, -4.0, 8.0) * 0.35;
+    let pn = vnoise_f(px, py, 0.35, 17.3, -9.1) * 0.6 + vnoise_f(px, py, 1.6, -4.0, 8.0) * 0.3 + vnoise_f(px, py, 5.0, 2.7, 11.3) * 0.1;
     let t = 1.0 - wet_road * PUDDLE_SPREAD;
-    Water { puddle: smoothstep(t - 0.06, t + 0.06, pn), depth: ((pn - t) / 0.2).clamp(0.0, 1.0), wet: wet_road }
+    Water { puddle: smoothstep(t - 0.02, t + 0.02, pn), depth: ((pn - t) / 0.15).clamp(0.0, 1.0), wet: wet_road }
 }
 
 /// `hash_cell` of `shader.wgsl`: the lattice cell as an exact integer modulo the lattice's

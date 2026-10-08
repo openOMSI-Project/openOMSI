@@ -62,6 +62,7 @@ fn android_main(app: AndroidApp) {
         }
     }
     init_log();
+    rescue_update();
     // the content folder (mods, archives, screenshots): on the shared storage when the
     // app may write there, else in the app's own folder on it
     let shared = PathBuf::from(SHARED);
@@ -106,6 +107,56 @@ fn android_main(app: AndroidApp) {
     lan_mods::clean_up();
     // (the activity ends with the program)
     std::process::exit(0);
+}
+
+/// The file a start leaves in the app's folder until the launcher has drawn its first
+/// picture (`started_ok`).
+fn start_mark() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join("start-pending"))
+}
+
+/// A start after one that never got as far as the launcher's first picture (the graphics
+/// driver hung or took the process down while the shaders were made - 0.2.4 to 0.2.10 on
+/// the Galaxy S24/S25, #1708): the update is looked for at once, in the background, beside
+/// whatever the start is doing, and a newer release is downloaded and handed to the
+/// system's installer, which asks the player. The launcher's own check comes after its
+/// first picture, and a build that cannot draw one could never be updated from within.
+fn rescue_update() {
+    let Some(mark) = start_mark() else { return };
+    let stuck = mark.exists();
+    let _ = std::fs::write(&mark, VERSION);
+    if !stuck || omsi_cfg::env::var_os("OMSI_NO_UPDATE").is_some() {
+        return;
+    }
+    log::warn!("the last start did not reach the launcher: looking for an update now");
+    std::thread::spawn(|| {
+        let r = match crate::updater::latest() {
+            Ok(Some(r)) => r,
+            Ok(None) => return log::info!("rescue update: this is the latest version"),
+            Err(e) => return log::warn!("rescue update: {e:#}"),
+        };
+        log::warn!("rescue update: installing {}", r.version);
+        let mut u = crate::updater::Updater::default();
+        u.install(r);
+        // (the installer's answer; on success the system ends this process)
+        for _ in 0..1800 {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            u.poll();
+            if let crate::updater::Status::Failed(e) = u.status() {
+                return log::warn!("rescue update: {e}");
+            }
+        }
+    });
+}
+
+/// The launcher (or a game) has drawn a picture: this start went well.
+fn started_ok() {
+    static DONE: AtomicBool = AtomicBool::new(false);
+    if !DONE.swap(true, Ordering::Relaxed) {
+        if let Some(m) = start_mark() {
+            let _ = std::fs::remove_file(m);
+        }
+    }
 }
 
 /// The log to the system's (logcat) and to `game.log` in the app's data folder - a phone
@@ -380,9 +431,13 @@ impl ApplicationHandler for Shell {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let redraw = matches!(event, WindowEvent::RedrawRequested);
         match self.game.as_mut() {
             Some(g) => g.window_event(event_loop, id, event),
             None => self.launcher().window_event(event_loop, id, event),
+        }
+        if redraw {
+            started_ok();
         }
         self.switch(event_loop);
     }

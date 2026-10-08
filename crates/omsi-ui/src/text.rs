@@ -221,8 +221,13 @@ impl Fonts {
 
     /// Width of `text` in pixels at `px`.
     pub fn width(&self, text: &str, px: f32, weight: Weight) -> f32 {
-        let translated = crate::i18n::tr(text);
-        let comp = composed(&translated);
+        self.width_as_is(&crate::i18n::tr(text), px, weight)
+    }
+
+    /// [`Fonts::width`] of a text that is not the interface's own (a Lua plugin's): as it
+    /// is, not looked up in the translations.
+    pub fn width_as_is(&self, text: &str, px: f32, weight: Weight) -> f32 {
+        let comp = composed(text);
         let text = &*comp;
         let main = self.face(weight);
         let mut w = 0.0;

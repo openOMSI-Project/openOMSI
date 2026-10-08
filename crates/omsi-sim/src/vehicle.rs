@@ -915,6 +915,10 @@ pub struct AiFrame {
     /// something in its way that is to be warned - the stock ambulance's script sounds its
     /// siren for the next 30 m on it.
     pub priority_warning: bool,
+    /// `AI_Engine` -1: a timetable bus standing at a stop for its departure with time to
+    /// spare switches its engine off (the stock AI scripts: engine off, parking brake on),
+    /// and on again 20 s before it leaves (Omsi.exe 0x7d9128).
+    pub engine_off: bool,
 }
 
 pub struct VehicleInstance {
@@ -1153,6 +1157,9 @@ impl VehicleInstance {
                     put(var, *v);
                 }
             }
+        }
+        if let Some(i) = var_index.get("schedule_active") {
+            state.vars[*i as usize] = host.schedule_active;
         }
         vm.run_init(&program, &mut state, &mut host);
         let mut animators: Vec<MeshAnimator> = ty
@@ -1927,6 +1934,21 @@ impl VehicleInstance {
         self.rigid = Some(rb);
     }
 
+    /// The bus's total mileage, as Omsi.exe 0x64207E writes it into a situation:
+    /// the starting reading plus the kilometres driven since it was loaded.
+    pub fn odometer_km(&self) -> f64 {
+        self.host.km_base + self.driven_km
+    }
+
+    /// Continue a saved reading without giving the bus another random service history.
+    /// Omsi.exe clears driven km at 0x643DBB and restores the total into the starting
+    /// reading at 0x643DF3; subtract our already driven distance to keep the same total
+    /// even when the caller has ticked the vehicle before restoring its situation.
+    pub fn set_odometer_km(&mut self, km: f64) {
+        self.host.km_base = km - self.driven_km;
+        self.km_started = true;
+    }
+
     /// Where variable `name` sits among the script's variables (`State::vars`).
     pub fn var_slot(&self, name: &str) -> Option<usize> {
         omsi_script::compile::with_lower(name, |k| self.var_index.get(k).map(|&i| i as usize))
@@ -2080,7 +2102,7 @@ impl VehicleInstance {
         // `[kmcounter_init] year km`: in service since that year, so many kilometres a year -
         // the odometer starts at what that comes to on the day driven (it stood at 0 on
         // every bus that has one, #305), a little different from bus to bus of the kind.
-        // Omsi.exe 0x7d18e8: Random(100)/10 + 8 + max(0, years) * km * (1 + 0.2 *
+        // Omsi.exe 0x7D1E42: Random(100)/10 + 8 + max(0, years) * km * (1 + 0.2 *
         // (Random(100) - 50) / 50), and 1980 / 60000 km a year without the keyword
         // (TRoadVehicle.LoadFromFile's defaults).
         if !self.km_started {
@@ -2094,7 +2116,7 @@ impl VehicleInstance {
             }
         }
         // (the sum is split, not the parts: 0.7 km + 0.5 km is 1 km 200 m, not 0 km 1200 m)
-        let total = self.host.km_base + self.driven_km;
+        let total = self.odometer_km();
         self.set_engine_var("kmcounter_km", total.trunc() as f32);
         self.set_engine_var("kmcounter_m", (total.fract() * 1000.0) as f32);
         self.set_engine_var("humans_count", self.host.humans_count);
@@ -2154,7 +2176,9 @@ impl VehicleInstance {
     /// Run one of the engine's service triggers with `secs` on the clock: OMSI holds
     /// `veh_tank` / `veh_wash` down while the pump or the wash runs and the bus script
     /// decides what a second of it is worth (the SD202 takes 3 litres and caps at 250).
-    fn service(&mut self, name: &str, secs: f32) -> bool {
+    /// One step of a depot service: its trigger (`veh_tank`, `veh_wash`) with `secs` of
+    /// the script's clock. False when the bus has no such handling.
+    pub fn service(&mut self, name: &str, secs: f32) -> bool {
         let keep = self.host.clock.timegap;
         self.host.clock.timegap = secs;
         let ok = self.trigger(name);
@@ -2351,6 +2375,7 @@ impl VehicleInstance {
         pinned: &[(omsi_script::VarId, f32)],
     ) {
         self.host.clock.advance(dt);
+        self.set_engine_var("schedule_active", self.host.schedule_active);
         self.physics.speed = ai.speed;
         self.physics.steer_deg = ai.steer_deg;
         let v_kmh = ai.speed * 3.6;
@@ -2439,7 +2464,7 @@ impl VehicleInstance {
             // (the engine's field +0x638: an AI bus lights its saloon when it drives with
             // its lights on - the LiAZ's `lights_AI` switches both saloon circuits on it)
             ("AI_Interiorlight", ai.lights as i32 as f32),
-            ("AI_Engine", 1.0),
+            ("AI_Engine", if ai.engine_off { -1.0 } else { 1.0 }),
             ("AI_Scheduled_AtStation", station),
             // Which side's doors: OMSI hands the stop's side to the script, and a vehicle
             // with doors on both sides opens only the platform's (the BRT stops in
@@ -3705,6 +3730,17 @@ impl TrailerPart {
         let h = heading.to_radians();
         self.pivot = Some(c - DVec3::new(h.sin(), h.cos(), 0.0) * self.length as f64);
         self.position = position;
+    }
+
+    /// `set_pose` for a part another game drives (LAN), which sends where the part is and
+    /// its heading but not how it leans: tilted so that its front coupling meets the leading
+    /// part's at `coupling` (`coupling_point`). Drawn level, an articulated bus's rear
+    /// section climbing a slope sank into the road in the other players' games (#1702).
+    pub fn set_remote_pose(&mut self, position: DVec3, heading: f64, coupling: DVec3) {
+        let ahead = self.coupling_front.y.abs().max(0.5) as f64;
+        let rise = coupling.z - (position.z + self.coupling_front.z as f64);
+        self.pitch = (rise.atan2(ahead).to_degrees() as f32).clamp(-20.0, 20.0);
+        self.set_pose(position, heading);
     }
 
     /// Forget where this part was: the next step puts it straight behind the leading part
@@ -5404,6 +5440,30 @@ mod tests {
             .map(|(p, r)| (*p - *r).length())
             .fold(0.0f32, f32::max);
         assert!(worst < 1e-3, "straight bellows off by {worst}");
+    }
+
+    #[test]
+    fn restored_odometer_survives_engine_updates_and_continues_driving() {
+        for driven in [0.0, 2.75] {
+            let mut v = VehicleInstance::new(coupling_test_type(None), VehicleHost::new(Default::default()));
+            v.driven_km = driven;
+            v.set_odometer_km(75556.639);
+            assert_eq!(v.odometer_km(), 75556.639);
+            v.update_engine_vars(0.02);
+            assert_eq!(v.odometer_km(), 75556.639);
+            assert_eq!(v.var("kmcounter_km"), Some(75556.0));
+            assert!((v.var("kmcounter_m").unwrap() - 639.0).abs() < 0.001);
+            v.driven_km += 0.5;
+            v.update_engine_vars(0.02);
+            assert!((v.odometer_km() - 75557.139).abs() < 1e-8);
+            assert_eq!(v.var("kmcounter_km"), Some(75557.0));
+            assert!((v.var("kmcounter_m").unwrap() - 139.0).abs() < 0.001);
+        }
+        // A restored zero is deliberate, rather than the sentinel for a random start.
+        let mut v = VehicleInstance::new(coupling_test_type(None), VehicleHost::new(Default::default()));
+        v.set_odometer_km(0.0);
+        v.update_engine_vars(0.02);
+        assert_eq!(v.odometer_km(), 0.0);
     }
 
     /// A bus without `[kmcounter_init]` starts with Omsi.exe's defaults (in service since

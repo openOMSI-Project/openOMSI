@@ -601,7 +601,11 @@ fn program_path(exe: &Path) -> PathBuf {
         s = t.to_string();
     }
     while let Some(t) = s.strip_suffix(OLD) {
-        s = t.to_string();
+        // (`openomsi.exe.2.old-update`: put aside beside an older one, see `aside_of`)
+        s = match t.rsplit_once('.') {
+            Some((head, n)) if !head.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => head.to_string(),
+            _ => t.to_string(),
+        };
     }
     if s == exe.to_string_lossy() {
         exe.to_path_buf()
@@ -645,6 +649,28 @@ fn old_of(p: &Path) -> PathBuf {
     let mut s = p.as_os_str().to_os_string();
     s.push(OLD);
     PathBuf::from(s)
+}
+
+/// Where `target` is put aside: its `*.old-update`, or `*.<n>.old-update` while an earlier
+/// one cannot be deleted - still loaded (the launcher's DirectX shader compiler,
+/// `dxcompiler.dll`) or held by a virus scanner. Windows renames nothing onto a file that
+/// is there, and the update failed with "cannot be replaced" (#1753).
+fn aside_of(target: &Path) -> PathBuf {
+    let first = old_of(target);
+    remove_any(&first);
+    if !first.exists() && !first.is_symlink() {
+        return first;
+    }
+    for n in 2..100 {
+        let mut s = target.as_os_str().to_os_string();
+        s.push(format!(".{n}{OLD}"));
+        let p = PathBuf::from(s);
+        remove_any(&p);
+        if !p.exists() && !p.is_symlink() {
+            return p;
+        }
+    }
+    first
 }
 
 /// Unpack `zip` into `to` (a fresh folder), with the files' Unix modes and links.
@@ -727,8 +753,7 @@ pub fn install_archive(zip: &Path, place: &Place) -> anyhow::Result<()> {
     let result = (|| -> anyhow::Result<()> {
         for name in &items {
             let target = target_of(name, place);
-            let old = old_of(&target);
-            remove_any(&old);
+            let old = aside_of(&target);
             let had = target.exists() || target.is_symlink();
             if had {
                 std::fs::rename(&target, &old).map_err(|e| anyhow::anyhow!("{} cannot be replaced ({e}) - is the folder writable?", short_path(&target)))?;
@@ -962,6 +987,7 @@ mod tests {
         assert_eq!(program_path(Path::new("/home/me/openOMSI/openomsi.old-update")), PathBuf::from("/home/me/openOMSI/openomsi"));
         assert_eq!(program_path(Path::new("/home/me/openOMSI/openomsi.old-update (deleted)")), PathBuf::from("/home/me/openOMSI/openomsi"));
         assert_eq!(program_path(Path::new("C:\\Games\\openOMSI\\openomsi.exe.old-update")), PathBuf::from("C:\\Games\\openOMSI\\openomsi.exe"));
+        assert_eq!(program_path(Path::new("C:\\Games\\openOMSI\\openomsi.exe.2.old-update")), PathBuf::from("C:\\Games\\openOMSI\\openomsi.exe"));
     }
 
     #[test]

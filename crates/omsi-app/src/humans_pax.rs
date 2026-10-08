@@ -64,6 +64,10 @@ impl Task {
     }
 }
 
+/// Seconds a person stands at a shut door of the bus they want before going back to wait
+/// at the stop (`Pax::door_since`).
+const DOOR_GIVE_UP: f64 = 25.0;
+
 /// The ticket a passenger has (+0x61c): nothing to do, a ticket to stamp, one to buy.
 pub(super) const TICKET_NONE: u8 = 0;
 pub(super) const TICKET_STAMP: u8 = 2;
@@ -97,6 +101,11 @@ pub(super) struct Pax {
     pub pt_target: Option<usize>,
     /// Stop 0.7 m short of the target (+0x5ec).
     pub short: bool,
+    /// Since when (`time`) the person has stood at the shut door of the bus they want
+    /// (`DOOR_GIVE_UP`), and the bus they then left standing: not walked to again before it
+    /// opens a door.
+    pub door_since: Option<f64>,
+    pub shunned: Option<BusId>,
     /// Walking to a door from outside (+0x5d0): keep 0.5 m off the bus side
     /// (`clamp_x`, +0x5cc) unless the door is open (+0x5d1) and they are level with it;
     /// a door on the left (+0x5d2).
@@ -192,6 +201,8 @@ impl Pax {
             pt: None,
             pt_target: None,
             short: false,
+            door_since: None,
+            shunned: None,
             clamp: false,
             clamp_open: false,
             clamp_left: false,
@@ -800,7 +811,12 @@ impl Humans {
                     continue;
                 }
                 reg.near.push(*id);
-                if same_way {
+                // A scheduled AI already knows its next stop. Nearby platforms must not
+                // overwrite that identity according to their object-id sort order.
+                // Keep the original geometric fallback for the player and unknown trips.
+                let matches_trip = !matches!(bn.id, BusId::Ai(_))
+                    || bn.next_stop.as_ref().is_none_or(|next| next.id == *id);
+                if same_way && matches_trip {
                     reg.next = Some(*id);
                 }
                 // a bus not in service, or at its own terminus, empties and takes nobody
@@ -1716,6 +1732,13 @@ impl Humans {
                 };
                 let (b, why) = b;
                 let Some(bn) = bus_ix.get(&b).map(|k| &buses[*k]) else { return };
+                // (a bus they gave up on at its shut doors: once it opens one)
+                if self.pax(i).unwrap().shunned == Some(b) {
+                    if !bn.entry_open.iter().any(|o| *o) {
+                        return;
+                    }
+                    self.pax_mut(i).unwrap().shunned = None;
+                }
                 self.pax_mut(i).unwrap().bus = Some(b);
                 // still rolling in, or standing in the stop's box: to the gather point
                 if bn.speed.abs() <= 2.0 && !self.in_stop_box(stop, b) {
@@ -1844,6 +1867,28 @@ impl Humans {
             }
         }
         if p.seat.is_none() {
+            self.set_task(i, Task::WalkingToBusstop, buses, bus_ix, world);
+            return;
+        }
+        // At a shut door that stays shut - a bus on its layover, at the end of its trip, or
+        // standing in the stop's box without serving it - nobody stands pressed against it
+        // for good: after `DOOR_GIVE_UP` the place is given back and the person waits at the
+        // stop again, for this bus only once it opens a door (they stood at its doors for
+        // ten minutes and more).
+        let at_shut_door = p.st == 2 && !bn.entry_open.iter().any(|o| *o);
+        let since = if at_shut_door { Some(p.door_since.unwrap_or(self.time)) } else { None };
+        self.pax_mut(i).unwrap().door_since = since;
+        if since.is_some_and(|t| self.time - t > DOOR_GIVE_UP) {
+            if let Some(k) = p.seat {
+                self.free_seat(bn.id, k);
+            }
+            let pp = self.pax_mut(i).unwrap();
+            pp.seat = None;
+            pp.door_since = None;
+            pp.shunned = Some(bn.id);
+            if super::debug_pax() {
+                log::info!("t={:.1} pax {} gives up at the shut doors of {:?}", self.time, self.people[i].label(), bn.id);
+            }
             self.set_task(i, Task::WalkingToBusstop, buses, bus_ix, world);
             return;
         }
@@ -1984,7 +2029,11 @@ impl Humans {
                 let group = bn.cabin.group_at(pp.pt.or_else(|| bn.cabin.omsi_nearest(here, &all, false, false, None, None)));
                 let exits = bn.cabin.in_group(bn.cabin.exit_points(), group);
                 let open: Vec<bool> = (0..exits.len()).map(|k| bn.exit_open.get(k).copied().unwrap_or(false)).collect();
-                let target = bn.cabin.omsi_nearest(here, &exits, false, false, None, Some(&open));
+                // (with every exit still shut - the bus rolling in - the nearest exit, not the
+                // first of the list: the people of the whole saloon gathered at one door while
+                // the others stood empty, #1149)
+                let any_open = open.iter().zip(&exits).any(|(o, e)| *o && e.is_some());
+                let target = bn.cabin.omsi_nearest(here, &exits, false, false, None, any_open.then_some(open.as_slice()));
                 if pp.st == 5 {
                     // walking: on from the point walked to, towards the new door (Omsi.exe
                     // changes only the target and the door)
@@ -2383,6 +2432,111 @@ impl Humans {
 mod tests {
     use super::*;
 
+    #[test]
+    fn arriving_ai_uses_the_timetable_stop_not_a_neighbour() {
+        let dir = std::env::temp_dir().join(format!("omsi-ai-stop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("test.bus"),
+            "[passengercabin]\ncabin.cfg\n[paths]\npaths.cfg\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("paths.cfg"),
+            "[pathpnt]\n1\n0\n0\n[pathpnt]\n0\n0\n0\n[pathlink]\n0\n1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("cabin.cfg"),
+            "[entry]\n0\n[exit]\n0\n[passpos]\n0\n0\n0.9\n0.45\n0\n",
+        )
+        .unwrap();
+        let def = omsi_vehicle::Vehicle::load(&dir.join("test.bus")).unwrap();
+        let cabin =
+            Arc::new(Cabin::load_train(&[(&def, Vec3::ZERO, f32::INFINITY)]).expect("cabin"));
+        std::fs::remove_dir_all(&dir).unwrap();
+        let mut humans = Humans::new(Path::new("/nonexistent"));
+        humans.stops.insert(42, test_stop("Scheduled", ""));
+        let mut neighbour = test_stop("Neighbour", "");
+        neighbour.pos = DVec3::Y * 3.0;
+        humans.stops.insert(99, neighbour);
+        let mut bus = BusNow {
+            id: BusId::Ai(3),
+            next_stop: Some(RequestStop {
+                id: 42,
+                name: "Scheduled".into(),
+                alias: String::new(),
+                pos: DVec3::ZERO,
+            }),
+            cabin,
+            pos: DVec3::ZERO,
+            rot: Mat4::IDENTITY,
+            heading: 0.0,
+            speed: 0.0,
+            entry_open: vec![true],
+            exit_open: vec![true],
+            walk_open: None,
+            interior: 0.0,
+            air: CabinAir::default(),
+            half: DVec2::new(1.25, 6.0),
+            centre: DVec2::ZERO,
+            accel: DVec2::ZERO,
+            trailers: Vec::new(),
+            terminus: Some("Elsewhere".into()),
+            takes: Takes::Terminus,
+            places_off: Vec::new(),
+            served: None,
+        };
+        let register = |humans: &mut Humans, bus: &BusNow| {
+            humans
+                .register_buses(std::slice::from_ref(bus), 0.0)
+                .remove(&bus.id)
+                .unwrap()
+        };
+        let registered = register(&mut humans, &bus);
+        assert_eq!(
+            registered.next,
+            Some(42),
+            "a neighbouring platform cannot replace the trip stop"
+        );
+        assert_eq!(
+            registered.near,
+            [42, 99],
+            "nearby stops still participate in boarding detection"
+        );
+        bus.next_stop.as_mut().unwrap().id = 123;
+        assert_eq!(
+            register(&mut humans, &bus).next,
+            None,
+            "do not arrive at a different stop while the trip stop is absent"
+        );
+        bus.served = Some(123);
+        assert_eq!(
+            register(&mut humans, &bus).next,
+            Some(123),
+            "an unloaded timetable stop retains the upstream served-stop fallback"
+        );
+        bus.served = None;
+        bus.next_stop = None;
+        assert_eq!(
+            register(&mut humans, &bus).next,
+            Some(99),
+            "unknown routes retain the geometric fallback"
+        );
+        bus.next_stop = Some(RequestStop {
+            id: 42,
+            name: "Scheduled".into(),
+            alias: String::new(),
+            pos: DVec3::ZERO,
+        });
+        bus.id = BusId::Player;
+        assert_eq!(
+            register(&mut humans, &bus).next,
+            Some(99),
+            "preserve the player's OMSI-compatible geometric detection"
+        );
+    }
+
     /// A timetable bus waits for the people walking up to its doors from its stop and for
     /// those on their way out of it - not for the people still at the gather point, who
     /// held a full bus at the stop for good (#767).
@@ -2746,3 +2900,4 @@ mod tests {
         assert_eq!(next(1, 2), Some(2));
     }
 }
+

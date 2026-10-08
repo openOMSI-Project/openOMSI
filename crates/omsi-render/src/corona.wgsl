@@ -197,6 +197,13 @@ fn vs_main(in: CoronaIn) -> CoronaOut {
         let inner = select(0.0, acos(clamp(in.extra.x, -1.0, 1.0)), in.extra.x >= -1.0);
         brightness = brightness * clamp((outer - ang) / max(outer - inner, 0.0001), 0.0, 1.0);
     }
+    // the light that reaches the eye through the fog: Beer-Lambert's exp(-density x
+    // distance), the same law the scene's own fog follows (`shader.wgsl`). Left out, the
+    // street lamps and signals shone at full strength to the end of the view in a fog that
+    // had hidden their poles 50 m away, a fan of dots at the horizon (#1212).
+    if (!streak) {
+        brightness = brightness * exp(-dist * max(camera.fog.w, 0.0));
+    }
     // a star grows with the light's strength; every sprite's strength stops at 1
     let star_sprite = (u32(in.extra.z + 0.5) & 8u) != 0u && !streak;
     let grow = select(1.0, brightness, star_sprite);

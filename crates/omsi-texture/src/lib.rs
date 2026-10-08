@@ -776,6 +776,22 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A `[matl_freetex]` name of a bus stop sign (`\New Territories East\Freetex_Lolipop\x.bmp`)
+    /// is rooted at `texture\`, however its leading backslash reads as a path root.
+    #[test]
+    fn a_leading_backslash_names_a_texture_below_the_folder() {
+        let dir = std::env::temp_dir().join(format!("omsi-freetex-root-{}", std::process::id()));
+        let tex = dir.join("texture");
+        let sub = tex.join("New Territories East/Freetex_Lolipop");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("x.bmp"), b"x").unwrap();
+        assert_eq!(
+            find_texture("\\New Territories East\\Freetex_Lolipop\\x.bmp", &[tex.as_path()]),
+            Some(sub.join("x.bmp"))
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A 2x2 32-bit BI_RGB bitmap, stored bottom-up, with these BGRA pixels in file order.
     fn bmp32(pixels: [[u8; 4]; 4]) -> Vec<u8> {
         let mut b = Vec::new();

@@ -2832,6 +2832,19 @@ fn release(
     }
 }
 
+/// The rear sections of another game's vehicle where that game has them (`rear`: position
+/// and heading of each), each leaning so that it meets the part in front at their joint
+/// (`Trailer::set_remote_pose`).
+fn place_remote_rear(v: &mut omsi_sim::VehicleInstance, rear: &[(DVec3, f64)]) {
+    let mut lead = (v.position, v.body_rotation());
+    for (i, cur) in rear.iter().enumerate() {
+        let Some(t) = v.trailers.get_mut(i) else { break };
+        let c = t.coupling_point(lead.0, lead.1);
+        t.set_remote_pose(cur.0, cur.1, c);
+        lead = (t.position, t.body_rotation());
+    }
+}
+
 fn ease_heading(from: f64, to: f64, k: f64) -> f64 {
     let dh = (to - from + 540.0).rem_euclid(360.0) - 180.0;
     if dh.abs() > 90.0 {
@@ -2868,11 +2881,7 @@ fn drive_remote(rv: &mut RemoteVehicle, pose: &Pose, dt: f32, exact: bool) {
         rv.target = (rv.vehicle.position, rv.vehicle.heading);
         rv.pose_seen = (rv.vehicle.position, Instant::now());
         rv.rear = pose.rear.iter().map(|q| (DVec3::new(q.x, q.y, q.z), q.heading as f64)).collect();
-        for (i, cur) in rv.rear.iter().enumerate() {
-            if let Some(t) = rv.vehicle.trailers.get_mut(i) {
-                t.set_pose(cur.0, cur.1);
-            }
-        }
+        place_remote_rear(&mut rv.vehicle, &rv.rear);
         rv.doors = pose.doors.clone();
         rv.suspension = pose.suspension.clone();
         rv.values = pose.values.clone();
@@ -2896,16 +2905,14 @@ fn drive_remote(rv: &mut RemoteVehicle, pose: &Pose, dt: f32, exact: bool) {
         rv.vehicle.heading = ease_heading(rv.vehicle.heading, rv.target.1, kd);
         // the rear sections where the other game has them
         rv.rear.resize(pose.rear.len(), (DVec3::ZERO, 0.0));
-        for (i, (cur, q)) in rv.rear.iter_mut().zip(pose.rear.iter()).enumerate() {
+        for (cur, q) in rv.rear.iter_mut().zip(pose.rear.iter()) {
             // (carried on with the bus: a rear section follows the same way)
             let tgt = (DVec3::new(q.x, q.y, q.z) + ahead, q.heading as f64);
             let jump = cur.0 == DVec3::ZERO || (tgt.0 - cur.0).length() > 25.0;
             cur.0 = if jump { tgt.0 } else { cur.0 + (tgt.0 - cur.0) * kd };
             cur.1 = if jump { tgt.1 } else { ease_heading(cur.1, tgt.1, kd) };
-            if let Some(t) = rv.vehicle.trailers.get_mut(i) {
-                t.set_pose(cur.0, cur.1);
-            }
         }
+        place_remote_rear(&mut rv.vehicle, &rv.rear);
         glide(&mut rv.doors, &pose.doors, k);
         glide(&mut rv.suspension, &pose.suspension, k);
         glide(&mut rv.values, &pose.values, k);
@@ -2992,6 +2999,7 @@ fn drive_remote(rv: &mut RemoteVehicle, pose: &Pose, dt: f32, exact: bool) {
         // already in those values - the frame only runs the AI half of the script.
         at_station_side: 0.0,
         priority_warning: false,
+        engine_off: false,
     };
     // and every other variable of theirs, as their scripts have it (`omsi_net::vars`)
     pinned.extend(rv.synced.iter().filter(|(id, _)| !rv.smooth.contains(*id)).map(|(id, v)| (*id as VarId, *v)));

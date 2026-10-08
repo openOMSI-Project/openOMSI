@@ -151,6 +151,10 @@ impl App {
                 n.toggle_map();
                 return;
             }
+            // and gives the mouse back to the bus when the plugins' panels have it
+            if self.release_plugin_focus() {
+                return;
+            }
         }
         let event_key = PhysicalKey::Code(code);
         if let (Some(m), PhysicalKey::Code(code)) = (self.menu.as_mut(), event_key) {
@@ -325,7 +329,9 @@ impl App {
                 // plain Left/Right are OMSI's view_interiorcam_minus/plus, except when a wheel
                 // steers: then the arrows glance (held, the head turns) and only Ctrl+Left/Right
                 // switch the interior camera, below. (Where the arrows drive, `ours` skips this.)
+                // (unless the settings ask for the cameras on them all the same, #1345)
                 let plain_arrow = matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) && !ctrl
+                    && !self.settings.arrows_switch_cams
                     && self.controllers.as_ref().is_some_and(|c| c.wheel_steering());
                 // (the keys that fly the camera are the camera's, unmodified: S, OMSI's
                 // view_toggle_viewpoint, threw the free camera back to the driver's view,
@@ -418,8 +424,11 @@ impl App {
                         self.set_info_bar(!self.info_bar);
                         return;
                     }
-                    // OMSI's `view_set_schedule` (Insert: 210 / 1, the key's state every frame)
-                    KeyCode::Insert if !shift_now && !ctrl => {
+                    // OMSI's `view_set_schedule` (Insert: 210 / 1, the key's state every frame),
+                    // only where keyboard.cfg has no entry for it: an entry is the player's
+                    // binding, handled above, and one with scan code 0 is unbound - Insert opened
+                    // the timetable all the same (#1245)
+                    KeyCode::Insert if !shift_now && !ctrl && !self.game_keys.iter().any(|b| b.action.eq_ignore_ascii_case("view_set_schedule")) => {
                         self.timetable = !self.timetable;
                         return;
                     }
@@ -1387,13 +1396,20 @@ impl App {
             self.player.as_mut(),
             ray,
         ) {
-            self.drag_delta = (0.0, 0.0);
+            let (dx, dy) = std::mem::take(&mut self.drag_delta);
             p.occlude_controls = self.view == "outside";
             if pressed {
                 if let Some((page, u, v)) = p.html_hit(o, d) {
                     p.release();
                     p.html_pointer(page, u, v, omsi_sim::htmltex::PointerKind::Down);
                     self.html_pressed = Some((page, u, v));
+                    self.dragging = false;
+                    return;
+                }
+                // a tear-off ticket block: a ticket of its type torn off for the passenger
+                if let Some(n) = self.humans.as_ref().and_then(|h| h.ticket_blocks.as_ref()).and_then(|b| b.hit(o, d, &p.vehicle)) {
+                    log::info!("ticket block {n}: a ticket torn off");
+                    p.vehicle.set_engine_var("GivenTicket", n as f32);
                     self.dragging = false;
                     return;
                 }
@@ -1406,6 +1422,12 @@ impl App {
                     p.html_pointer(page, u, v, omsi_sim::htmltex::PointerKind::Up);
                     self.dragging = false;
                     return;
+                }
+                // CursorMoved and the release can arrive between redraws. Deliver the
+                // last movement before `_off`, so a short adjustment is not lost or
+                // mistaken for a stationary click on a drag-only control.
+                if self.dragging && (dx != 0.0 || dy != 0.0) {
+                    p.drag(dx, dy);
                 }
                 if self.dragging && self.buttons_held.1 {
                     p.release_keeping();
@@ -2490,6 +2512,7 @@ impl App {
             spawn: Some(format!("{x},{y},{heading}")),
             situation_vars: Vec::new(),
             situation_strvars: Vec::new(),
+            situation_odometer_km: None,
             situation_others: Vec::new(),
             line: None,
             tour: None,
@@ -2576,6 +2599,7 @@ impl App {
             spawn: Some(format!("{},{},{},{}", t.position.x, t.position.y, t.heading, t.position.z)),
             situation_vars: Vec::new(),
             situation_strvars: Vec::new(),
+            situation_odometer_km: None,
             situation_others: Vec::new(),
             line: None,
             tour: None,
@@ -2934,8 +2958,7 @@ impl App {
             }
             // the route ends here: free drive, as the list of lines has it
             "endduty" => {
-                self.duty = None;
-                self.service_msg = Some(("Free drive: no duty".into(), 4.0));
+                crate::game_lists::end_duty(self);
                 self.close_game_menu();
             }
             "tobus" => {
@@ -3490,10 +3513,60 @@ impl App {
         }
     }
 
+    /// The running fuel pump or bus wash, one frame of it: its trigger with the frame's
+    /// time; done once the tank (the dirt) has not changed for `SERVICE_SETTLE` seconds, and
+    /// stopped by driving off.
+    pub(crate) fn tick_service(&mut self, dt: f32) {
+        const SERVICE_SETTLE: f32 = 1.5;
+        let Some((kind, idle)) = self.pumping else { return };
+        let Some(p) = self.player.as_mut() else {
+            self.pumping = None;
+            return;
+        };
+        let (name, var) = if kind == "refuel" { ("veh_tank", "engine_tank_content") } else { ("veh_wash", "Dirt_Wiped") };
+        if p.vehicle.physics.velocity_kmh().abs() > 2.0 {
+            self.pumping = None;
+            self.service_msg = Some((if kind == "refuel" { "Refuelling stopped" } else { "Washing stopped" }.into(), 4.0));
+            return;
+        }
+        let before = p.vehicle.var(var).unwrap_or(0.0);
+        p.vehicle.service(name, dt);
+        let now = p.vehicle.var(var).unwrap_or(0.0);
+        let idle = if (now - before).abs() > 1e-4 { 0.0 } else { idle + dt };
+        if idle > SERVICE_SETTLE {
+            self.pumping = None;
+            let line = if kind == "refuel" { format!("refuelled: {now:.0} l in the tank") } else { format!("washed: dirt {:.0}%", now * 100.0) };
+            log::info!("{line}");
+            self.service_msg = Some((line, 6.0));
+        } else {
+            self.pumping = Some((kind, idle));
+            if kind == "refuel" {
+                self.service_msg = Some((format!("Refuelling: {now:.0} l"), 1.0));
+            }
+        }
+    }
+
     /// One of the depot services of the game menu: "refuel", "wash" or "repair".
     pub(crate) fn run_service(&mut self, kind: &str) {
         let Some(w) = self.world.clone() else { return };
         let Some(p) = self.player.as_mut() else { return };
+        // The pump and the wash run as OMSI's do, `veh_tank` / `veh_wash` every frame
+        // while they are on, the tank filling litre by litre (`tick_service`); it had been
+        // full the moment the menu was clicked (#1785). (Off a station: the message below.)
+        if matches!(kind, "refuel" | "wash") && at_petrol_station(&w, &p.vehicle) {
+            let name = if kind == "refuel" { "veh_tank" } else { "veh_wash" };
+            if !p.vehicle.service(name, 0.0) {
+                self.service_msg = Some((format!("this vehicle has no {} handling ({name})", if kind == "refuel" { "fuel pump" } else { "bus wash" }), 6.0));
+                return;
+            }
+            if kind == "wash" {
+                p.vehicle.dirt = 0.0;
+                p.vehicle.set_engine_var("Dirt_Norm", 0.0);
+            }
+            self.pumping = Some((if kind == "refuel" { "refuel" } else { "wash" }, 0.0));
+            self.service_msg = Some((if kind == "refuel" { "Refuelling... (drive off to stop)" } else { "Washing..." }.into(), 4.0));
+            return;
+        }
         let one = Args {
             refuel: kind == "refuel",
             wash: kind == "wash",

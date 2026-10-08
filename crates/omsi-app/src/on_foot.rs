@@ -315,9 +315,10 @@ impl App {
             (Some(t), Some(h)) => h.type_index(t) as u64,
             _ => self.args.root.to_string_lossy().len() as u64 * 7 + 3,
         };
-        // up where the driver looks: out of that side of the bus (by a door there, else
-        // beside the cab) when there is room outside, else beside the seat inside, facing
-        // that way
+        // up beside the seat inside, facing where the driver looks, as in OMSI 2 - a second
+        // Ctrl+Shift+G steps out (`step_out`). Only a bus with no standing place by the seat
+        // puts the driver out of the side looked at (by a door there, else beside the cab):
+        // with the camera turned, getting up pushed the driver out of the door (#1725).
         let look_yaw = self.camera.as_ref().map(|c| c.yaw as f64).unwrap_or(v.heading);
         let ly = look_yaw.to_radians();
         let look = DVec2::new(ly.sin(), ly.cos());
@@ -328,7 +329,7 @@ impl App {
         // there is no standing room in such a cab, the driver who got up stood with their
         // head in the roof over the windscreen
         let cab_door = self.humans.as_mut().and_then(|h| h.vehicle_cab_door(v));
-        let outside = match (cab_door, side.abs() > 0.45, self.humans.as_mut()) {
+        let outside = match (cab_door, stand.is_none() && side.abs() > 0.45, self.humans.as_mut()) {
             (Some(d), _, Some(_)) => outside_at(self.world.as_deref(), v, &others, d),
             (None, true, Some(h)) => outside_spot(h, self.world.as_deref(), v, &others, side.signum(), seat_w),
             _ => None,

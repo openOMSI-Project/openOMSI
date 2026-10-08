@@ -84,6 +84,15 @@ pub struct Emitter {
     ended: Vec<(DVec3, Vec3, f64)>,
 }
 
+/// The weather's wind (m/s, world, x east y north), as the air the particles move in
+/// (`set_wind`): smoke drifts with it.
+static WIND: std::sync::Mutex<[f32; 3]> = std::sync::Mutex::new([0.0; 3]);
+
+/// The wind the particles drift in from now on (the weather's, every frame).
+pub fn set_wind(w: Vec3) {
+    *WIND.lock().unwrap_or_else(|e| e.into_inner()) = w.to_array();
+}
+
 /// The particle systems of one vehicle part or scenery object.
 #[derive(Debug, Clone, Default)]
 pub struct ParticleSet {
@@ -149,6 +158,7 @@ impl ParticleSet {
         }
         let mut plane: Option<[f32; 3]> = None;
         let eye = eye();
+        let wind = Vec3::from(*WIND.lock().unwrap_or_else(|e| e.into_inner()));
         for i in 0..self.emitters.len() {
             // move what is there
             let mut ended = Vec::new();
@@ -160,7 +170,9 @@ impl ParticleSet {
                         ended.push((p.pos, p.vel, p.ground));
                         return false;
                     }
-                    p.vel *= p.brake.clamp(BRAKE_MIN, 1.5).powf(dt * BRAKE_RATE);
+                    // (braked against the air, which moves with the wind: smoke drifts off
+                    // with it - it rose straight up in a gale, #1798)
+                    p.vel = wind + (p.vel - wind) * p.brake.clamp(BRAKE_MIN, 1.5).powf(dt * BRAKE_RATE);
                     p.vel.z -= 9.81 * p.gravity * dt;
                     p.pos += p.vel.as_dvec3() * dt as f64;
                     true

@@ -163,8 +163,12 @@ impl Popup {
     /// The options shown (their places in `options`): those with the typed text in them.
     fn shown(&self) -> Vec<usize> {
         let q = self.query.to_lowercase();
-        (0..self.options.len()).filter(|&k| q.is_empty() || self.options[k].to_lowercase().contains(&q)).collect()
+        (0..self.options.len()).filter(|&k| q.is_empty() || matches(&self.options[k], &q)).collect()
     }
+}
+
+pub fn matches(text: &str, q: &str) -> bool {
+    text.to_lowercase().contains(q) || omsi_ui::tr(text).to_lowercase().contains(q)
 }
 
 /// A calendar dropdown for a date field.

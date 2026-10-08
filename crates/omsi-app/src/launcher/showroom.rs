@@ -77,6 +77,11 @@ pub struct Showroom {
     pub generation: u64,
 }
 
+/// Names the bus whose preview is being read and placed, until it is in the picture.
+fn placing_mark() -> PathBuf {
+    omsi_launcher_lib::data_dir().join("showroom-placing.txt")
+}
+
 fn args_for(look: &Look) -> Args {
     let mut v = vec!["omsi".to_string(), "--root".into(), look.root.to_string_lossy().to_string()];
     if !look.map.is_empty() {
@@ -97,6 +102,13 @@ fn args_for(look: &Look) -> Args {
         v.extend(["--date".into(), look.date.clone()]);
     }
     Args::try_parse_from(v).unwrap_or_else(|_| Args::parse_from(["omsi"]))
+}
+
+// (a launcher closed while a preview loads did not hang: the mark goes with it)
+impl Drop for Showroom {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(placing_mark());
+    }
 }
 
 impl Showroom {
@@ -157,6 +169,7 @@ impl Showroom {
                     swapped = true;
                 }
                 Ok(Err(e)) => {
+                    let _ = std::fs::remove_file(placing_mark());
                     log::warn!("showroom {}: {e}", look.bus);
                     self.error = Some(e);
                     // (the bus before stayed in the picture as if it were the one chosen, and
@@ -167,6 +180,7 @@ impl Showroom {
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
                 Err(_) => {
+                    let _ = std::fs::remove_file(placing_mark());
                     self.failed = Some(look.clone());
                     self.loading = None;
                 }
@@ -218,6 +232,25 @@ impl Showroom {
     }
 
     fn start_loading(&mut self, renderer: &Renderer, look: Look) {
+        // A preview that never came (the launcher hung while placing it, and had to be
+        // ended) is not tried again for that bus: the bus is remembered and the launcher hung
+        // at every start, whatever version (#1478, #1635).
+        // (`showroom-skip.txt` keeps such buses, a line each; delete it to try them again)
+        let skip = omsi_launcher_lib::data_dir().join("showroom-skip.txt");
+        if std::fs::read_to_string(placing_mark()).is_ok_and(|b| b.trim() == look.bus.trim()) {
+            log::warn!("showroom: the preview of {} hung the launcher when it was last tried; it is left out from now on ({})", look.bus, skip.display());
+            let _ = std::fs::remove_file(placing_mark());
+            let mut list = std::fs::read_to_string(&skip).unwrap_or_default();
+            list.push_str(look.bus.trim());
+            list.push('\n');
+            let _ = std::fs::write(&skip, list);
+        }
+        if std::fs::read_to_string(&skip).is_ok_and(|t| t.lines().any(|b| b.trim() == look.bus.trim())) {
+            self.error = Some("The 3D preview of this bus stopped the launcher once, so it is left out".into());
+            self.failed = Some(look);
+            return;
+        }
+        let _ = std::fs::write(placing_mark(), &look.bus);
         let args = args_for(&look);
         let root = look.root.clone();
         let map_cfg = omsi_cfg::resolve_path(&root, &look.map);
@@ -229,6 +262,7 @@ impl Showroom {
                 Arc::new(w)
             }
             Err(e) => {
+                let _ = std::fs::remove_file(placing_mark());
                 self.error = Some(format!("{e:#}"));
                 self.wanted = None;
                 return;
@@ -299,6 +333,7 @@ impl Showroom {
         }
         let lighting = lighting_for(&args, &weather);
         log::info!("showroom: {} ({} meshes, {:.1} m long) placed in {:.2} s", r.look.bus, render.instances.len(), length, t0.elapsed().as_secs_f64());
+        let _ = std::fs::remove_file(placing_mark());
         Shown { look: r.look, scene, world: Some(world), vehicle: Some(vehicle), render: Some(render), trailers, centre, length, weather, lighting }
     }
 

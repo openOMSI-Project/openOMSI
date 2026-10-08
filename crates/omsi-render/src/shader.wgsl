@@ -322,6 +322,11 @@ struct PointLight {
 // per cell CELL_CAP light indices, 0xffffffff = empty
 @group(0) @binding(4) var<storage, read> grid: array<u32>;
 const CELL_CAP: u32 = 32u;
+// The cutout of `[matl_alpha] 1`: Omsi.exe sets ALPHAREF 0x80 with ALPHAFUNC GREATER, so a
+// texel of alpha 128 is thrown away. Painters' window layers (a bus's glass unwrapped on its
+// own texture to draw on) mark the clear glass with exactly 128: cut below one half, those
+// texels stayed and every window was the layer's black.
+const ALPHA_REF: f32 = 128.5 / 255.0;
 
 @group(1) @binding(0) var t_diffuse: texture_2d<f32>;
 @group(1) @binding(1) var s_diffuse: sampler;
@@ -865,7 +870,7 @@ fn fs_shadow_test(in: FsIn) {
         let tm = sample_transmap(tex_address(in.uv - in.params.zw));
         a = select(1.0, tm.a, material.params.w > 0.5);
     }
-    if (a < 0.5) {
+    if (a < ALPHA_REF) {
         discard;
     }
 }
@@ -1633,13 +1638,14 @@ fn fs_main(in: FsIn) -> @location(0) vec4<f32> {
 // Shared with Enhanced and the wheel splash mask: pools spread as the road soaks.
 fn road_puddle_coverage(world: vec3<f32>, normal: vec3<f32>, wet: f32) -> f32 {
     let xy = world_pattern_xy(world);
-    let pn = vnoise_f(xy, 0.22, vec2<f32>(17.3, -9.1)) * 0.65
-        + vnoise_f(xy, 0.9, vec2<f32>(-4.0, 8.0)) * 0.35;
+    let pn = vnoise_f(xy, 0.35, vec2<f32>(17.3, -9.1)) * 0.6
+        + vnoise_f(xy, 1.6, vec2<f32>(-4.0, 8.0)) * 0.3
+        + vnoise_f(xy, 5.0, vec2<f32>(2.7, 11.3)) * 0.1;
     // The pools spread from the lowest spots as the road soaks, but they stay pools: a road
-    // wet through has standing water on about a third of it (PUDDLE_SPREAD in enhanced.wgsl,
+    // wet through has standing water on about a fifth of it (PUDDLE_SPREAD in enhanced.wgsl,
     // the same in `omsi-app/src/puddles.rs`) and wet asphalt between.
     let threshold = 1.0 - wet * PUDDLE_SPREAD;
-    return smoothstep(threshold - 0.06, threshold + 0.06, pn) * smoothstep(0.75, 0.95, normal.z);
+    return smoothstep(threshold - 0.02, threshold + 0.02, pn) * smoothstep(0.75, 0.95, normal.z);
 }
 
 @fragment
@@ -1708,11 +1714,13 @@ fn shade_vanilla(in: FsIn, puddle_weight: ptr<function, f32>, eye: vec3<f32>) ->
     if (ALPHA_TEST && mode > 0.5 && mode < 1.5) {
         if (ALPHA_TO_COVERAGE) {
             let aa = max(fwidth(tex.a) * 0.5, 1.0 / 255.0);
-            if (tex.a < 0.5 - aa) {
+            // (not `ALPHA_REF - aa`: a layer whose clear glass is alpha 128 kept a third of
+            // its samples there, a moire of the layer's paint over every window)
+            if (tex.a < ALPHA_REF) {
                 discard;
             }
-            tex.a = smoothstep(0.5 - aa, 0.5 + aa, tex.a);
-        } else if (tex.a < 0.5) {
+            tex.a = smoothstep(ALPHA_REF - aa, ALPHA_REF + aa, tex.a);
+        } else if (tex.a < ALPHA_REF) {
             discard;
         }
     }
@@ -1924,9 +1932,11 @@ fn shade_vanilla(in: FsIn, puddle_weight: ptr<function, f32>, eye: vec3<f32>) ->
     if (snow > 0.0) {
         let up = clamp(n.z, 0.0, 1.0);
         let ground = select(0.0, 1.0, material.extra.x > 0.5 || material.params2.z > 0.0);
+        // (a road kept clear - "snow on road" off - stays asphalt, #1362)
+        let cleared = select(1.0, 0.0, camera.post.z > 0.5 && material.extra.x < 0.5 && material.params2.z > 0.0);
         // only surfaces that really face up get a cover; a soft threshold keeps the snow
         // off the sides and off the grazing rims that showed as a white outline
-        let cover = snow * clamp(max(ground, smoothstep(0.78, 0.95, up) * 0.8), 0.0, 1.0);
+        let cover = cleared * snow * clamp(max(ground, smoothstep(0.78, 0.95, up) * 0.8), 0.0, 1.0);
         let light = camera.sun_color.rgb * camera.sun_dir.w * ndl * shadow * 0.6 + camera.sky_color.rgb * 0.7 + camera.ambient.xyz;
         let white = vec3<f32>(0.92, 0.94, 0.98) * light * ao;
         lit = mix(lit, white, cover * (0.55 + 0.35 * tex.a));

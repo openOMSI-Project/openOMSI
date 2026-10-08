@@ -119,6 +119,9 @@ pub(crate) fn game_info(app: &crate::App) -> Vec<(&'static str, InfoValue)> {
             v.push(("terminus", Text(trip.terminus.trim().to_string())));
             v.push(("trip_name", Text(trip.name.trim().to_string())));
             v.push(("stops", Num(trip.stops.len() as f64)));
+            // the bus reached the trip's last stop: the trip is over, though the duty moves on to
+            // the next one only a minute before it leaves
+            v.push(("trip_done", Bool(d.trip_done())));
             if let Some(s) = trip.stops.get(d.next_stop) {
                 v.push(("next_stop", Text(s.name.trim().to_string())));
                 v.push(("next_stop_number", Num(d.next_stop as f64 + 1.0)));

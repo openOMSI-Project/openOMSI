@@ -460,7 +460,10 @@ impl Renderer {
         rt.records.clear();
         let mut chosen: Vec<(BlasKey, [f32; 12], u32, u8)> = Vec::new();
         for inst in &scene.instances {
-            if !inst.visible || inst.blob || inst.decal || inst.ground_layer {
+            // (a decal - a surface object lying on the road - is no geometry for the rays,
+            // but what such an object raises and casts a shadow from is: the Spandau depot's
+            // halls, one object with its yard, lost their shadow close up in Enhanced+, #1783)
+            if !inst.visible || inst.blob || (inst.decal && !inst.casts_shadow) || inst.ground_layer {
                 continue;
             }
             let m = &scene.meshes[inst.mesh];

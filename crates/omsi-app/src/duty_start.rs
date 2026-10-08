@@ -97,7 +97,24 @@ pub(crate) fn place_on_duty(args: &mut Args) {
                 let (path, _) = navigator::way_back(&net, from, heading, &targets, 40_000.0)?;
                 Some(path.iter().map(|&l| net.lanes[l].length() as f64).sum())
             };
-            let pick = if args.auto_entry {
+            // A trip that begins well before its first stop (a run out of the depot, whose
+            // first stop is the line's terminus) starts at the entry point where its route
+            // begins: the nearest way to the stop put the bus at the terminus and the depot
+            // run was skipped (#1642).
+            let route_start = net.lanes[route[0]].start();
+            let depot = (args.auto_entry && (p - route_start).truncate().length() > 100.0)
+                .then(|| {
+                    entries
+                        .iter()
+                        .map(|e| (e, (e.2 - route_start).truncate().length()))
+                        .filter(|(_, d)| *d < 40.0)
+                        .min_by(|a, b| a.1.total_cmp(&b.1))
+                        .map(|(e, _)| (e, route[..=li].iter().map(|&l| net.lanes[l].length() as f64).sum::<f64>()))
+                })
+                .flatten();
+            let pick = if let Some(d) = depot {
+                Some(d)
+            } else if args.auto_entry {
                 entries.iter().filter_map(|e| cost(e.2, e.3).map(|c| (e, c))).min_by(|a, b| a.1.total_cmp(&b.1))
             } else {
                 entries.iter().find(|e| e.0 == args.entry.min(entries.len().saturating_sub(1))).and_then(|e| cost(e.2, e.3).map(|c| (e, c)))
@@ -128,7 +145,7 @@ pub(crate) fn place_on_duty(args: &mut Args) {
             // stop - at town speed, with ten minutes to start the bus and set the IBIS.
             // (Not for a joining player: the clock is the host's.)
             let leave = stop.arr.max(trip.departure) - way / 7.0 - 600.0;
-            if args.lan_join.is_none() && !crate::real_time::started_synced() && leave - now > 15.0 * 60.0 {
+            if args.lan_join.is_none() && !crate::real_time::started_synced() && !args.keep_time && leave - now > 15.0 * 60.0 {
                 let from = schedule::hhmm(now);
                 args.time = format!("{:02}:{:02}:00", (leave / 3600.0) as i64 % 24, (leave / 60.0) as i64 % 60);
                 log::info!("duty start: the tour's first trip leaves at {}: the clock goes from {from} to {}", schedule::hhmm(trip.departure), args.time);

@@ -23,7 +23,8 @@
 //! of its own. Two settings ask for it - how much of it there is (`Settings::head_idle`: zero is
 //! exactly nothing, and that is the default) and how fast it moves (`Settings::head_idle_pace`:
 //! one is the periods written here). A step with the first at zero is nothing at all and puts
-//! the head back to the middle, so no other code has to ask whether the effect is on.//!
+//! the head back to the middle, so no other code has to ask whether the effect is on.
+//!
 //! While the player is reaching for a switch the sway waits where it is (`Hold` below): a view
 //! that goes on sliding under the pointer is a view that misses what it was reaching for.
 use glam::Vec3;
@@ -108,6 +109,14 @@ impl HeadIdle {
     }
 }
 
+/// How much of the sway a bus moving at `kmh` keeps: all of it standing, none from 5 km/h,
+/// eased in between so that it neither stops with a jerk as the bus pulls away nor jumps
+/// back when it stops (#1325: it swayed on the road too).
+pub(crate) fn standstill(kmh: f32) -> f32 {
+    let x = ((kmh.abs() - 0.5) / 4.5).clamp(0.0, 1.0);
+    1.0 - x * x * (3.0 - 2.0 * x)
+}
+
 /// The sway held back while the player is reaching for something.
 ///
 /// OMSI's switches are small and the cursor has to find them: while a control is under it the
@@ -174,6 +183,16 @@ mod head_idle_tests {
             head.step(dt, strength, pace);
         }
         head
+    }
+
+    #[test]
+    fn the_sway_is_for_a_bus_standing_still() {
+        assert_eq!(super::standstill(0.0), 1.0);
+        assert_eq!(super::standstill(0.3), 1.0);
+        assert_eq!(super::standstill(5.0), 0.0);
+        assert_eq!(super::standstill(50.0), 0.0);
+        let mid = super::standstill(2.75);
+        assert!(mid > 0.4 && mid < 0.6, "{mid}");
     }
 
     #[test]

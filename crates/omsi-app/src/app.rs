@@ -165,11 +165,15 @@ pub(crate) struct App {
     /// What happened since the Lua plugins' last frame: crashes, people knocked down,
     /// stops skipped (see `plugins::queue_event`).
     pub(crate) plugin_events: Vec<omsi_plugin::GameEvent>,
+    /// The Lua plugins' panels and notifications on the screen (`omsi.ui`).
+    pub(crate) plugin_panels: crate::plugin_ui::PluginPanels,
     /// Seconds Ctrl+Shift+Page Up/Down has been held (the clock runs faster the longer).
     pub(crate) clock_hold: f32,
     /// How far the clock was set since the timetable was last put out again (s; see
     /// `shift_clock`).
     pub(crate) clock_jump: f64,
+    /// The bus whose seat (`settings::bus_seats`) `settings.seat` holds now.
+    pub(crate) seat_bus: String,
     /// A controller button held for looking left, right, up, down (`view_look_*`).
     pub(crate) pad_look: [bool; 4],
     /// A controller button held for the multiplayer bus radio (`voice_radio`).
@@ -190,6 +194,13 @@ pub(crate) struct App {
     pub(crate) headtrack: Option<crate::headtrack::HeadTracker>,
     /// When head tracking last failed to start (tried again a few seconds later).
     pub(crate) headtrack_failed: Option<std::time::Instant>,
+    /// Last TrackIR/OpenTrack output scales, used to keep the displayed camera position
+    /// fixed while a sensitivity slider is changed.
+    pub(crate) headtrack_scale_last: Option<[f32; 6]>,
+    /// Per-axis compensation for a live sensitivity change.
+    pub(crate) headtrack_scale_bias: [f32; 6],
+    /// Last inversion state; inversion is a direction change, not a new camera origin.
+    pub(crate) headtrack_invert_last: Option<[bool; 6]>,
     /// Steering wheels, pedals, joysticks and gamepads (`Inputs/gamectrler.cfg`).
     pub(crate) controllers: Option<crate::controllers::Controllers>,
     /// OMSI's mouse control (`toggel_mouse_ctrl`, O): the cursor's place steers (across) and
@@ -318,6 +329,9 @@ pub(crate) struct App {
     pub(crate) fps_t: Instant,
     /// Last workshop / fuel pump / wash message, and how long it still shows.
     pub(crate) service_msg: Option<(String, f32)>,
+    /// The fuel pump or the bus wash running (`run_service`): which, and the seconds the
+    /// tank or the dirt has not changed (it ends after `SERVICE_SETTLE`).
+    pub(crate) pumping: Option<(&'static str, f32)>,
     /// The server's notifications on the screen (`notify`), oldest first.
     pub(crate) notices: Vec<crate::ui::Notice>,
     /// The look for a newer release during the session (cards over the navigator).
@@ -702,6 +716,7 @@ impl App {
                         paint: o.paint.clone(),
                         situation_vars: o.vars.clone(),
                         situation_strvars: o.strvars.clone(),
+                        situation_odometer_km: o.odometer_km,
                         situation_others: Vec::new(),
                         line: None,
                         tour: None,
@@ -770,6 +785,7 @@ impl App {
                     match traffic::Traffic::new(&self.args.root, &w, self.args.traffic) {
                         Ok(mut t) => {
                             t.lights_only = !populated;
+                            t.no_timetable_buses = self.args.no_timetable_buses;
                             if let Some(lan) = self.lan.as_ref() {
                                 t.set_lan_seed(lan::population_seed(lan));
                             }

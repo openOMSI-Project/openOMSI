@@ -2,9 +2,9 @@
 //! endian doubles - x, y, z in cm, yaw, pitch, roll in degrees - to UDP port 4242). opentrack
 //! takes TrackIR, Tobii, webcams (neuralnet tracker) and phones, on every platform.
 //!
-//! On Windows the pose is also read from opentrack's default output there, "freetrack 2.0
-//! Enhanced": the `FT_SharedMem` mapping that TrackIR (NPClient) games read, as Omsi.exe
-//! does through its TrackIR support. A UDP pose wins over it.
+//! On Windows openOMSI also reads NaturalPoint's native NPClient interface directly when
+//! available, and keeps opentrack's `FT_SharedMem` output as a fallback. A recent UDP pose wins
+//! over native TrackIR, which in turn wins over `FT_SharedMem`.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -33,7 +33,10 @@ pub struct HeadTracker {
 
 impl HeadTracker {
     /// Listen on `port` (on every interface: opentrack may run on another machine).
-    pub fn start(port: u16) -> Option<HeadTracker> {
+    /// On Windows, `window_handle` is the native game window used by NPClient.
+    pub fn start(port: u16, window_handle: Option<isize>) -> Option<HeadTracker> {
+        #[cfg(not(windows))]
+        let _ = window_handle;
         // (the port may be taken: opentrack's own "UDP over network" input listens on 4242
         // too, which is how FreePIE hands it a TrackIR's pose. On Windows the freetrack
         // mapping is still read then; elsewhere there is nothing to read.)
@@ -64,6 +67,8 @@ impl HeadTracker {
                 #[cfg(windows)]
                 let mut freetrack = freetrack::Reader::default();
                 #[cfg(windows)]
+                let mut npclient = npclient::Reader::new(window_handle);
+                #[cfg(windows)]
                 let mut last_udp: Option<Instant> = None;
                 loop {
                     // (the game's end takes the thread with it)
@@ -80,7 +85,7 @@ impl HeadTracker {
                     let Ok(n) = got else {
                         #[cfg(windows)]
                         if last_udp.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {
-                            if let Some(pose) = freetrack.poll() {
+                            if let Some(pose) = npclient.poll().or_else(|| freetrack.poll()) {
                                 *out.lock().unwrap() = Some((pose, Instant::now()));
                             }
                         }
@@ -190,6 +195,330 @@ mod freetrack {
                 log::info!("head tracking: receiving poses from freetrack (FT_SharedMem)");
             }
             Some(freetrack_pose(v[0], v[1], v[2], v[3], v[4], v[5]))
+        }
+    }
+}
+
+
+#[cfg(windows)]
+mod npclient {
+    use super::HeadPose;
+    use std::ffi::c_void;
+    use std::mem::transmute_copy;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant};
+    use windows::core::{s, w, PCWSTR};
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    use windows::Win32::System::Registry::{
+        RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
+    };
+
+    type NpResult = i32;
+
+    // NaturalPoint's public NPClient pose structure. The layout is 60 bytes:
+    // two u16 fields, one u32 field, followed by fifteen f32 values.
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct TrackIrData {
+        w_np_status: u16,
+        w_p_frame_signature: u16,
+        dw_np_io_data: u32,
+        f_np_roll: f32,
+        f_np_pitch: f32,
+        f_np_yaw: f32,
+        f_np_x: f32,
+        f_np_y: f32,
+        f_np_z: f32,
+        f_np_raw_x: f32,
+        f_np_raw_y: f32,
+        f_np_raw_z: f32,
+        f_np_delta_x: f32,
+        f_np_delta_y: f32,
+        f_np_delta_z: f32,
+        f_np_smooth_x: f32,
+        f_np_smooth_y: f32,
+        f_np_smooth_z: f32,
+    }
+
+    type RegisterWindowHandle = unsafe extern "system" fn(*mut c_void) -> NpResult;
+    type UnregisterWindowHandle = unsafe extern "system" fn() -> NpResult;
+    type RegisterProgramProfileId = unsafe extern "system" fn(u16) -> NpResult;
+    type QueryVersion = unsafe extern "system" fn(*mut u16) -> NpResult;
+    type RequestData = unsafe extern "system" fn(u16) -> NpResult;
+    type GetData = unsafe extern "system" fn(*mut TrackIrData) -> NpResult;
+    type StartDataTransmission = unsafe extern "system" fn() -> NpResult;
+    type StopDataTransmission = unsafe extern "system" fn() -> NpResult;
+
+    const NP_YAW: u16 = 0x0001;
+    const NP_PITCH: u16 = 0x0002;
+    const NP_ROLL: u16 = 0x0004;
+    const NP_X: u16 = 0x0008;
+    const NP_Y: u16 = 0x0010;
+    const NP_Z: u16 = 0x0020;
+    const NP_REQUEST: u16 = NP_YAW | NP_PITCH | NP_ROLL | NP_X | NP_Y | NP_Z;
+
+    // This developer profile ID is accepted by current TrackIR 5.4 installations
+    // and is sufficient for direct NPClient polling.
+    const PROFILE_ID: u16 = 1001;
+
+    struct Native {
+        _dll: HMODULE,
+        unregister_window: UnregisterWindowHandle,
+        get_data: GetData,
+        stop_transmission: StopDataTransmission,
+        last_frame: Option<u16>,
+    }
+
+    impl Drop for Native {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = (self.stop_transmission)();
+                let _ = (self.unregister_window)();
+            }
+        }
+    }
+
+    /// Direct reader for NaturalPoint's NPClient64.dll.
+    ///
+    /// This is deliberately kept private to the Windows head-tracking thread:
+    /// the vendor DLL owns process-global state and is not something the rest of
+    /// openOMSI should have to know about.
+    pub struct Reader {
+        native: Option<Native>,
+        hwnd: Option<isize>,
+        tried: Option<Instant>,
+        announced: bool,
+        native_enabled: bool,
+    }
+
+    impl Reader {
+        pub fn new(hwnd: Option<isize>) -> Self {
+            let native_enabled = std::env::var_os("OMSI_TRACKIR_NATIVE")
+                .map(|v| v != "0")
+                .unwrap_or(true);
+            if !native_enabled {
+                log::info!("head tracking: native TrackIR NPClient disabled by OMSI_TRACKIR_NATIVE=0");
+            }
+            Self {
+                native: None,
+                hwnd,
+                tried: None,
+                announced: false,
+                native_enabled,
+            }
+        }
+
+        fn dll_path() -> Option<PathBuf> {
+            let mut bytes = vec![0u8; 4096];
+            let mut kind = windows::Win32::System::Registry::REG_VALUE_TYPE::default();
+            let mut len = bytes.len() as u32;
+
+            let result = unsafe {
+                RegGetValueW(
+                    HKEY_CURRENT_USER,
+                    w!("Software\\NaturalPoint\\NATURALPOINT\\NPClient Location"),
+                    w!("Path"),
+                    RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ,
+                    Some(&mut kind),
+                    Some(bytes.as_mut_ptr() as *mut c_void),
+                    Some(&mut len),
+                )
+            };
+            if result.is_err() || len < 2 {
+                return None;
+            }
+
+            let units = &bytes[..len as usize];
+            let wide: Vec<u16> = units
+                .chunks_exact(2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                .take_while(|&c| c != 0)
+                .collect();
+            let path = String::from_utf16_lossy(&wide);
+            if path.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(path))
+            }
+        }
+
+        fn load_path() -> Option<(HMODULE, PathBuf)> {
+            let mut candidates = Vec::new();
+
+            if let Some(dir) = Self::dll_path() {
+                if dir.extension().is_some_and(|e| e.eq_ignore_ascii_case("dll")) {
+                    candidates.push(dir.clone());
+                } else {
+                    candidates.push(dir.join("NPClient64.dll"));
+                    candidates.push(dir.join("NPClient.dll"));
+                }
+            }
+
+            // Keep conventional fallbacks as well. This helps installations where
+            // the registry value is missing or stale but the standard TrackIR 5 directory exists.
+            candidates.push(Path::new(r"C:\Program Files (x86)\NaturalPoint\TrackIR5\NPClient64.dll").to_path_buf());
+            candidates.push(Path::new(r"C:\Program Files\NaturalPoint\TrackIR5\NPClient64.dll").to_path_buf());
+
+            for path in candidates {
+                if !path.is_file() {
+                    continue;
+                }
+                let wide: Vec<u16> = path.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
+                if let Ok(dll) = unsafe { LoadLibraryW(PCWSTR(wide.as_ptr())) } {
+                    return Some((dll, path));
+                }
+            }
+            None
+        }
+
+        unsafe fn symbol<T: Copy>(dll: HMODULE, name: windows::core::PCSTR) -> Option<T> {
+            let proc = GetProcAddress(dll, name)?;
+            Some(transmute_copy(&proc))
+        }
+
+        fn try_start(&mut self) -> Option<()> {
+            if !self.native_enabled {
+                return None;
+            }
+            if self.native.is_some() {
+                return Some(());
+            }
+            if self.tried.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {
+                return None;
+            }
+            self.tried = Some(Instant::now());
+
+            let (dll, path) = Self::load_path()?;
+            let symbols = unsafe {
+                Some((
+                    Self::symbol::<RegisterWindowHandle>(dll, s!("NP_RegisterWindowHandle"))?,
+                    Self::symbol::<UnregisterWindowHandle>(dll, s!("NP_UnregisterWindowHandle"))?,
+                    Self::symbol::<RegisterProgramProfileId>(dll, s!("NP_RegisterProgramProfileID"))?,
+                    Self::symbol::<QueryVersion>(dll, s!("NP_QueryVersion"))?,
+                    Self::symbol::<RequestData>(dll, s!("NP_RequestData"))?,
+                    Self::symbol::<GetData>(dll, s!("NP_GetData"))?,
+                    Self::symbol::<StartDataTransmission>(dll, s!("NP_StartDataTransmission"))?,
+                    Self::symbol::<StopDataTransmission>(dll, s!("NP_StopDataTransmission"))?,
+                ))
+            }?;
+
+            let (
+                register_window,
+                unregister_window,
+                register_profile,
+                query_version,
+                request_data,
+                get_data,
+                start_transmission,
+                stop_transmission,
+            ) = symbols;
+
+            let hwnd = self.hwnd.map(|h| h as *mut c_void).unwrap_or(std::ptr::null_mut());
+            let register_result = unsafe { register_window(hwnd) };
+            if register_result != 0 {
+                                return None;
+            }
+
+            let mut version = 0u16;
+            let version_result = unsafe { query_version(&mut version) };
+            if version_result != 0 {
+                unsafe {
+                    let _ = unregister_window();
+                }
+                return None;
+            }
+
+            let profile_result = unsafe { register_profile(PROFILE_ID) };
+            if profile_result != 0 {
+                log::warn!("head tracking: TrackIR NPClient rejected profile ID {PROFILE_ID} (result {profile_result})");
+            }
+
+            let request_result = unsafe { request_data(NP_REQUEST) };
+            if request_result != 0 {
+                unsafe {
+                    let _ = unregister_window();
+                }
+                return None;
+            }
+
+            let start_result = unsafe { start_transmission() };
+            if start_result != 0 {
+                unsafe {
+                    let _ = unregister_window();
+                }
+                return None;
+            }
+
+            log::info!(
+                "head tracking: native TrackIR NPClient {}.{} loaded from {}",
+                version >> 8,
+                version & 0xff,
+                path.display()
+            );
+
+            self.native = Some(Native {
+                _dll: dll,
+                unregister_window,
+                get_data,
+                stop_transmission,
+                last_frame: None,
+            });
+            Some(())
+        }
+
+        /// Poll a fresh TrackIR frame. NPClient position values are in millimetres;
+        /// openOMSI's HeadPose uses centimetres, so translation is divided by ten.
+        pub fn poll(&mut self) -> Option<HeadPose> {
+            self.try_start()?;
+            let native = self.native.as_mut()?;
+
+            let mut data = TrackIrData::default();
+            let result = unsafe { (native.get_data)(&mut data) };
+            if result != 0 {
+                return None;
+            }
+
+            if native.last_frame.replace(data.w_p_frame_signature) == Some(data.w_p_frame_signature) {
+                return None;
+            }
+
+            // NPClient uses the NaturalPoint/TrackIR coordinate convention. Keep the
+            // native pose in openOMSI's common head-tracking convention here. User-facing
+            // sensitivity and inversion are applied later, in the camera path, so native
+            // TrackIR and OpenTrack behave identically.
+            // Keep the native TrackIR translation signs here.  seat_offset()
+            // applies the OMSI camera-frame conversion below.  In particular,
+            // this makes the native TrackIR X and Z directions match the
+            // desired default camera movement, so users do not need to enable
+            // the X/Z inversion switches for a normal TrackIR installation.
+            // (NPClient's units: +-16383 for +-180 degrees and for +-50 cm, as opentrack's
+            // NPClient writes them - into the cm and degrees of the UDP and freetrack poses, so
+            // the sensitivities' 100 is 1:1 whichever source the pose comes from)
+            const DEG: f32 = 180.0 / 16383.0;
+            const CM: f32 = 50.0 / 16383.0;
+            let v = [
+                data.f_np_x * CM,
+                data.f_np_y * CM,
+                data.f_np_z * CM,
+                -data.f_np_yaw * DEG,
+                -data.f_np_pitch * DEG,
+                // TrackIR native roll is opposite to the OMSI camera convention.
+                -data.f_np_roll * DEG,
+            ];
+            if v.iter().any(|x| !x.is_finite()) {
+                return None;
+            }
+
+            if !self.announced {
+                self.announced = true;
+                log::info!("head tracking: receiving native TrackIR poses from NPClient");
+            }
+
+            Some(HeadPose {
+                pos: [v[0], v[1], v[2]],
+                rot: [v[3], v[4], v[5]],
+            })
         }
     }
 }
