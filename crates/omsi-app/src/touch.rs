@@ -23,6 +23,8 @@ enum Btn {
     Pause,
     Camera,
     LookReset,
+    Walk,
+    StepOut,
     Map,
     Timetable,
     Panel,
@@ -266,7 +268,28 @@ impl App {
         let y = pad + r;
         let step = r * 2.0 + 10.0 * u;
         let mut x = pad + r;
-        for (btn, icon) in [(Btn::Menu, "menu"), (Btn::Pause, if self.paused { "play_arrow" } else { "pause" }), (Btn::Camera, "videocam"), (Btn::LookReset, "360")] {
+        let btns_foot = [
+            (Btn::Menu, "menu"),
+            (Btn::Pause, if self.paused { "play_arrow" } else { "pause" }),
+            (Btn::Camera, "videocam"),
+            (Btn::Walk, "airline_seat_recline_normal"),
+            (Btn::StepOut, "exit_to_app"),
+            (Btn::LookReset, "360"),
+        ];
+        let btns_seat = [
+            (Btn::Menu, "menu"),
+            (Btn::Pause, if self.paused { "play_arrow" } else { "pause" }),
+            (Btn::Camera, "videocam"),
+            (Btn::StepOut, "directions_walk"),
+            (Btn::LookReset, "360"),
+            (Btn::Menu, ""),
+        ];
+        let top_btns: &[(Btn, &str)] = if self.session.on_foot.is_some() {
+            &btns_foot[..]
+        } else {
+            &btns_seat[..5]
+        };
+        for &(btn, icon) in top_btns {
             push(&mut b, btn, rb(x, y, r), icon, "", btn == Btn::Pause && self.paused, true);
             x += step;
         }
@@ -774,6 +797,14 @@ impl App {
                     _ => "Passenger's view",
                 };
                 self.touch_note(v);
+            }
+            Btn::Walk => {
+                self.foot_key(KeyCode::KeyG, true, false, false, false);
+                self.foot_key(KeyCode::KeyG, false, false, false, false);
+            }
+            Btn::StepOut => {
+                self.foot_key(KeyCode::KeyG, true, false, true, true);
+                self.foot_key(KeyCode::KeyG, false, false, true, true);
             }
             Btn::LookReset => {
                 self.game_action("view_reset_direction");
