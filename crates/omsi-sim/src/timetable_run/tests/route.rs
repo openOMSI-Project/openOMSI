@@ -33,6 +33,17 @@ fn bay_alignment_follows_the_platform_side_without_moving_rail_vehicles() {
 }
 
 #[test]
+fn distant_or_opposite_side_stop_does_not_pull_bus_across_platform() {
+    let bus = script_test_vehicle("{frame}\n{end}\n", "", "");
+    let ty = &bus.ty;
+    assert_eq!(bay_for(-14.7, ty, false, false, 0.0), 0.0);
+    assert_eq!(bay_for(14.7, ty, false, false, 0.0), 0.0);
+    assert_eq!(bay_for(-4.0, ty, false, false, 0.0), 0.0);
+    assert_eq!(bay_for(4.0, ty, false, false, 1.0), 0.0);
+    assert_eq!(bay_for(-4.0, ty, false, false, 2.0), -3.05);
+}
+
+#[test]
 fn where_a_bus_is_on_a_partly_loaded_route() {
     let key = |id: i64| {
         Some(LaneKey {

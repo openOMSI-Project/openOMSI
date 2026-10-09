@@ -16,6 +16,8 @@ use crate::traffic::Network;
 /// map's bus bay is a spline of its own that the route runs through). The pole's offset
 /// says nothing about where the kerb is - most stand behind the pavement - and a bus
 /// moved 1.6 m to the right of its lane drove along with its right wheels on the pavement.
+/// A box on the *opposite* side or more than 8 m from its authored route lane cannot be
+/// reached as a bay: following that offset sends the bus across the NCC median/platform.
 /// Stops moved `shift` metres back along `route` (the lanes the stops' route indices less
 /// `base` count in): where the vehicle's origin comes to rest (`bus_service::stop_shift`).
 /// One that comes to lie before the route's first lane keeps a distance below zero on it.
@@ -59,6 +61,11 @@ pub(crate) fn bay_for(lat: f32, ty: &crate::VehicleType, rail: bool, left_hand: 
     // Platform side is independent of traffic hand. With boarding on both sides,
     // align the flank facing this stop's box rather than assuming a right-hand kerb.
     let left = if side == 2.0 { lat < 0.0 } else { left_hand != (side == 1.0) };
+    // The timetable's station step may point at a lane on the other side of a broad
+    // platform. Its pole must not make the bus cross that platform to serve the stop.
+    if lat.abs() > 8.0 || (left && lat > 0.3) || (!left && lat < -0.3) {
+        return 0.0;
+    }
     if left {
         lat - centre + hw - 0.3
     } else {
