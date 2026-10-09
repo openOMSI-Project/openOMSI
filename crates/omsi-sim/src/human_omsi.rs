@@ -217,7 +217,7 @@ impl OmsiRig {
 /// knee's angle over the phase's fraction, in units of the leg's swing angle.
 const THIGH_CURVE: [(f32, f32); 4] = [(0.0, 0.75), (0.2, 1.1), (0.8, -1.1), (1.0, 0.75)];
 const KNEE_CURVE: [(f32, f32); 4] = [(0.0, 1.0), (0.2, 0.0), (0.8, 0.0), (1.0, 1.0)];
-/// The knee through a running stride (not Omsi.exe's): never straight - a little bent under
+/// The knee through a running stride: never straight - a little bent under
 /// the body while the foot is down, a short stance - and folded well up behind as the leg
 /// swings through (the heel kick).
 const RUN_KNEE_CURVE: [(f32, f32); 5] = [(0.0, 1.0), (0.22, 0.2), (0.5, 0.15), (0.72, 0.3), (1.0, 1.0)];
@@ -250,7 +250,7 @@ fn frac(x: f32) -> f32 {
 
 const DEG: f32 = std::f32::consts::PI / 180.0;
 
-/// The run (`crate::human::run_factor`, not Omsi.exe's), at a full run: how much longer the
+/// The run (`crate::human::run_factor`), at a full run: how much longer the
 /// stride gets, the most the knees bend (degrees, through `RUN_KNEE_CURVE`), the lean
 /// forward (degrees), how much more the arms swing from the shoulder, the elbows' bend
 /// (degrees) and how much of the walk's dip at every step is left (a runner barely dips:
@@ -321,9 +321,8 @@ impl OmsiAnim {
         let mut a = [0.0f32; 30];
         // the stride used at this speed (+0x2d8 times |v| / 1.2, at most 1)
         let rel = (inp.speed.abs() / 1.2).min(1.0);
-        // (not Omsi.exe's, whose people never run: from 2 m/s the walk turns into a run -
-        // a longer stride, the knees higher, a lean forward, the elbows bent; nothing changes
-        // at a walking pace)
+        // (from 2 m/s the walk turns into a run - a longer stride, the knees higher, a lean
+        // forward, the elbows bent; nothing changes at a walking pace)
         let run = if inp.kind == 1 { crate::human::run_factor(inp.speed.abs()) } else { 0.0 };
         let stride = rel * rig.stride * (1.0 + RUN_STRIDE * run);
         // stooping under a low ceiling
@@ -368,7 +367,7 @@ impl OmsiAnim {
                 let p = self.phase;
                 let f_half = frac(p + 0.5);
                 let f = frac(p);
-                // (the walk's knee as Omsi.exe has it; running, the knee of a run blended in)
+                // (the walk's knee; running, the knee of a run blended in)
                 let knee = |x: f32| {
                     let walk = curve(&KNEE_CURVE, x) * swing * 1.5 * 2.0;
                     if run > 0.0 {
@@ -703,7 +702,7 @@ mod tests {
         assert!((max_thigh - 24.0).abs() < 1.5, "{max_thigh}");
     }
 
-    /// A run (not Omsi.exe's) takes longer strides than a walk sped up would, swings the legs
+    /// A run takes longer strides than a walk sped up would, swings the legs
     /// and the knees further, leans forward and bends the elbows; a walk stays as it was.
     #[test]
     fn running_lengthens_the_stride_and_bends_the_elbows() {

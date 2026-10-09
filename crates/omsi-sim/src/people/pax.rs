@@ -191,7 +191,7 @@ pub struct Pax {
     /// Distance moved this frame (+0x644, `LastMovedDist`).
     pub moved: f32,
     /// Late for a bus pulling in to the stop: walking up to it, then hurrying for it (see
-    /// `runners`). Not Omsi.exe's.
+    /// `runners`).
     pub late: Option<Late>,
 }
 

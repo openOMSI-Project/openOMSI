@@ -1,4 +1,4 @@
-//! Somebody late for the bus (not Omsi.exe's). While a bus is on its way to a stop near
+//! Somebody late for the bus. While a bus is on its way to a stop near
 //! the player and still 150 m off or more, now and then somebody is put out on the
 //! pavement of the stop's street out of the player's sight, walking along to the stop:
 //! from before it, or from beyond it, coming towards the bus - timed by how far off the bus
