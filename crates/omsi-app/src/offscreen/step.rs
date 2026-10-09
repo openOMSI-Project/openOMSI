@@ -131,6 +131,12 @@ impl Offscreen<'_> {
                         log::info!("server: traffic density now {n}");
                     }
                 }
+                Some(crate::admin::TrafficOrder::Next) => {
+                    if let Some(t) = traffic.as_mut() {
+                        t.target = crate::game_lists::next_step(&crate::game_lists::TRAFFIC, t.target);
+                        log::info!("server: traffic density now {}", t.target);
+                    }
+                }
                 Some(crate::admin::TrafficOrder::Clear) => {
                     if let Some(t) = traffic.as_mut() {
                         let ids: Vec<u64> = t.cars.iter().filter(|c| !c.is_bus()).map(|c| c.id).collect();

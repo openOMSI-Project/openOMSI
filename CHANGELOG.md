@@ -4,6 +4,16 @@ Every push to `main` is released as `MAJOR.MINOR.COMMIT` (see
 [docs/VERSIONING.md](docs/VERSIONING.md)); the downloads are on the
 [Releases](https://github.com/openOMSI-Project/openOMSI/releases) page.
 
+## Unreleased
+
+### New
+- **Public dedicated server browser**: Multiplayer → Servers → Favorites | Public. Dedicated
+  servers with `public = auto` (default) or `1` post to the lobby when their tunnel is ready;
+  `public = 0` stays private. The Public tab lists online servers (verified with `/status`)
+  and can add them to Favorites.
+- **`dispatch` in `server.cfg`**: turns the local web dispatch console on or off
+  (`http://127.0.0.1:<web_port>/dispatch`; needs `admin_password`).
+
 ## 0.2.20 - 2026-10-08
 
 ### New

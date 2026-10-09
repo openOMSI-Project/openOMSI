@@ -17,7 +17,7 @@
 //! `ban <id>`, `bring <id>`, `goto <id>`, `time <seconds>`, `speed <factor>`,
 //! `weather next`, `say <text>`, `bringall`, `service <repair|refuel|wash> <id|all>`,
 //! `unstick <id>`, `clock <seconds of the day>`, `traffic next`, `traffic clear`,
-//! `weather cycle`, `weather set <Weather/file.owt>`.
+//! `weather cycle`, `weather set <Weather/file.owt>`, `stop`, `restart` (dedicated server).
 
 use crate::App;
 use omsi_net::{LanSession, Role};
@@ -501,18 +501,33 @@ pub(crate) struct ServerAdmin {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum TrafficOrder {
     Density(usize),
+    /// Step to the next density in the game menu's Traffic list (`traffic next`).
+    Next,
     Clear,
 }
 
 impl TrafficOrder {
-    /// `clear`, or a density (held to 0 .. the top of the game menu's Traffic steps, the
+    /// `clear`, `next`, or a density (held to 0 .. the top of the game menu's Traffic steps, the
     /// same limit as server.cfg's `traffic`: it was 100 here, 120 in the menu, #1327).
     pub fn parse(arg: &str) -> Option<TrafficOrder> {
         match arg.trim() {
             "clear" => Some(TrafficOrder::Clear),
+            "next" => Some(TrafficOrder::Next),
             v => v.parse::<usize>().ok().map(|n| TrafficOrder::Density(n.min(crate::game_lists::TRAFFIC_MAX))),
         }
     }
+}
+
+/// A short admin line in every player's chat (local dispatch / Administration menu).
+fn announce(lan: &mut LanSession, text: &str) {
+    if let Err(e) = lan.announce("Admin", text) {
+        log::info!("server: announce: {e}");
+    }
+}
+
+fn clock_hhmm(secs: f64) -> String {
+    let s = secs.rem_euclid(86400.0) as i64;
+    format!("{:02}:{:02}", s / 3600, (s % 3600) / 60)
 }
 
 /// Wrong answers within `LOCK_WINDOW` that lock the administration for everybody.
@@ -586,6 +601,7 @@ pub(crate) fn server_command(lan: &mut LanSession, from: u32, text: &str, adm: &
                     // (`kick <id> [reason]`: the reason is what the player reads when the game closes)
                     let why = a.trim().split_once(' ').map(|x| x.1.trim()).filter(|r| !r.is_empty());
                     if let Some(id) = a.trim().split(' ').next().and_then(|x| x.parse::<u32>().ok()) {
+                        announce(lan, &format!("{} player {id}", if v == "ban" { "banned" } else { "kicked" }));
                         lan.kick(id, why.unwrap_or(if v == "ban" { "sent away for this session" } else { "sent away by an admin" }), v == "ban");
                     }
                 }
@@ -605,21 +621,42 @@ pub(crate) fn server_command(lan: &mut LanSession, from: u32, text: &str, adm: &
                 "time" if !crate::real_time::server_real() => {
                     if let Some(s) = finite(a) {
                         adm.shift += s.clamp(-86400.0, 86400.0);
+                        let dir = if s >= 0.0 { "forward" } else { "back" };
+                        announce(lan, &format!("clock shifted {dir} by {} min", (s.abs() / 60.0).round() as i64));
                     }
                 }
                 "speed" if !crate::real_time::server_real() => {
                     if let Some(s) = finite(a) {
                         lan.clock_speed = s.clamp(1.0, 30.0);
+                        announce(lan, &format!("time speed ×{}", lan.clock_speed));
                     }
                 }
                 // the menu offers "weather next" and "weather set <file>" for each installed
                 // weather; a server took every one of them for "next"
                 "weather" => match a.trim().split_once(' ').map(|(k, f)| (k, f.trim())) {
-                    Some(("set", file)) if weather_file_ok(file) => adm.set_weather = Some(file.replace('\\', "/")),
-                    _ => adm.next_weather = true,
+                    Some(("set", file)) if weather_file_ok(file) => {
+                        adm.set_weather = Some(file.replace('\\', "/"));
+                        announce(lan, &format!("weather set to {file}"));
+                    }
+                    Some(("cycle", _)) => {
+                        adm.next_weather = true;
+                        announce(lan, "weather cycle / next");
+                    }
+                    _ => {
+                        adm.next_weather = true;
+                        announce(lan, "next weather");
+                    }
                 },
                 "say" => {
                     let _ = lan.say(a);
+                }
+                "stop" => {
+                    announce(lan, "server stopping");
+                    crate::quit::request_stop();
+                }
+                "restart" => {
+                    announce(lan, "server restarting…");
+                    crate::quit::request_restart();
                 }
                 // a word for one player only: `tell <id> <text>`, a chat line from "Admin
                 // (private)" that the others do not get
@@ -660,10 +697,15 @@ pub(crate) fn server_command(lan: &mut LanSession, from: u32, text: &str, adm: &
                         lan.command(id, "duty-off");
                     }
                 }
-                // the AI traffic: `traffic <density>` (as server.cfg's `traffic`) or `traffic
-                // clear` (every AI car off the road, a jam; the timetable's buses stay)
+                // the AI traffic: `traffic <density>` (as server.cfg's `traffic`), `traffic next`,
+                // or `traffic clear` (every AI car off the road, a jam; the timetable's buses stay)
                 "traffic" => {
                     if let Some(o) = TrafficOrder::parse(a) {
+                        match o {
+                            TrafficOrder::Clear => announce(lan, "AI traffic cleared"),
+                            TrafficOrder::Next => announce(lan, "traffic density stepped"),
+                            TrafficOrder::Density(n) => announce(lan, &format!("traffic density {n}")),
+                        }
                         adm.traffic = Some(o);
                     }
                 }
@@ -693,7 +735,9 @@ pub(crate) fn server_command(lan: &mut LanSession, from: u32, text: &str, adm: &
                 "clock" if !crate::real_time::server_real() => {
                     // (the server's clock is the session's: moved by the difference)
                     if let Some(s) = finite(a) {
-                        adm.set_clock = Some(s.rem_euclid(86400.0));
+                        let want = s.rem_euclid(86400.0);
+                        adm.set_clock = Some(want);
+                        announce(lan, &format!("clock set to {}", clock_hhmm(want)));
                     }
                 }
                 _ => {}
@@ -820,11 +864,12 @@ mod traffic_order_tests {
     #[test]
     fn a_traffic_order_is_read() {
         assert_eq!(TrafficOrder::parse("clear"), Some(TrafficOrder::Clear));
+        assert_eq!(TrafficOrder::parse("next"), Some(TrafficOrder::Next));
         assert_eq!(TrafficOrder::parse(" 20 "), Some(TrafficOrder::Density(20)));
         assert_eq!(TrafficOrder::parse("0"), Some(TrafficOrder::Density(0)));
         assert_eq!(TrafficOrder::parse("400"), Some(TrafficOrder::Density(120)));
         assert_eq!(TrafficOrder::parse("120"), Some(TrafficOrder::Density(crate::game_lists::TRAFFIC_MAX)));
-        for bad in ["", "next", "-5", "2.5"] {
+        for bad in ["", "-5", "2.5"] {
             assert_eq!(TrafficOrder::parse(bad), None, "{bad}");
         }
     }

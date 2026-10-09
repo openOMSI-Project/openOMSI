@@ -50,6 +50,12 @@ pub(crate) struct ServerCfg {
     pub share_positions: bool,
     /// The GreenTeaSpeak server and channel the players talk in (`voice`).
     pub voice: Option<crate::voice::VoiceServer>,
+    /// Post to the public lobby so the launcher's Multiplayer → Servers → Public list
+    /// can show this server (`auto` / `0` / `1`; see `omsi_net::lobby::Mode`).
+    pub public: omsi_net::lobby::Mode,
+    /// Serve the local web dispatch console at `http://127.0.0.1:<web_port>/dispatch`
+    /// (needs `admin_password`; only from this machine).
+    pub dispatch: bool,
 }
 
 pub(crate) const DEFAULT_CFG: &str = "\
@@ -81,12 +87,24 @@ max_players = 16
 # start a free Cloudflare quick tunnel (needs cloudflared) and print its https address
 tunnel = 1
 
+# show this server in every player's Multiplayer → Servers → Public list
+# (auto: when the tunnel address is ready; 1: same when a join URL is known; 0: never)
+public = auto
+
 # how many tiles round the map's first entry point are kept loaded (0: all of them)
 radius = 0
 
 # players who say \"/admin <password>\" in the chat get the Administration menu (Esc):
-# send players away, bring them, the clock, its speed, the weather (empty: nobody)
+# send players away, bring them, the clock, its speed, the weather (empty: nobody).
+# The same password opens the local web dispatch console and POST /admin (X-Admin-Password)
 admin_password =
+
+# local web dispatch at http://127.0.0.1:<web_port>/dispatch (call log, clock, weather,
+# traffic, say / kick, stop / restart; with share_positions = 1 a live map). Only from this
+# machine — not through the tunnel; from another PC use SSH port forward, e.g.
+#   ssh -L 27025:127.0.0.1:27025 user@server
+# then open http://127.0.0.1:27025/dispatch (1 = on, 0 = off)
+dispatch = 1
 
 # how fast the clock runs (1 = real time, 2 = twice as fast, up to 30)
 time_speed = 1
@@ -170,6 +188,8 @@ impl ServerCfg {
             vehicles: kv.get("vehicles").map(|v| v.split(';').map(|x| x.trim().replace('\\', "/")).filter(|x| !x.is_empty()).collect()).unwrap_or_default(),
             share_positions: flag("share_positions", false),
             voice: crate::voice::VoiceServer::from_kv(|k| kv.get(k).cloned()),
+            public: omsi_net::lobby::Mode::parse(kv.get("public").map(|s| s.as_str()).unwrap_or("auto")),
+            dispatch: flag("dispatch", true),
         })
     }
 }
@@ -192,6 +212,7 @@ pub(crate) fn info_of(cfg: &ServerCfg) -> omsi_net::ws::ServerInfo {
         players_public: cfg.share_positions,
         player_list: Vec::new(),
         local_admin_password: cfg.admin_password.clone(),
+        dispatch_page: cfg.dispatch,
         ..Default::default()
     }
 }

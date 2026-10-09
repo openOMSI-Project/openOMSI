@@ -17,6 +17,7 @@ pub fn signal_name(sig: i32) -> &'static str {
         SIGTERM => "SIGTERM",
         SIGINT => "SIGINT",
         SIGHUP => "SIGHUP",
+        RESTART => "restart",
         _ => "a signal",
     }
 }
@@ -24,6 +25,24 @@ pub fn signal_name(sig: i32) -> &'static str {
 const SIGHUP: i32 = 1;
 const SIGINT: i32 = 2;
 const SIGTERM: i32 = 15;
+/// Exit code for a dedicated server that should be started again (`start.sh` / `start.cmd`).
+pub const RESTART: i32 = 75;
+
+/// Ask the game or dedicated server to end (the next step sees [`requested`]). Used by the
+/// local admin page (`stop` / `restart`) where no OS signal arrives.
+pub fn request(sig: i32) {
+    let _ = REQUESTED.compare_exchange(0, sig, Ordering::SeqCst, Ordering::SeqCst);
+}
+
+/// Stop the dedicated server (same as SIGTERM).
+pub fn request_stop() {
+    request(SIGTERM);
+}
+
+/// Stop and ask `start.sh` / `start.cmd` to launch again (exit code [`RESTART`]).
+pub fn request_restart() {
+    request(RESTART);
+}
 
 #[cfg(unix)]
 mod sys {

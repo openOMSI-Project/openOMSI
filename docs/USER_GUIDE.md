@@ -717,7 +717,14 @@ listed where they are read (`grep -r OMSI_ crates`).
 
 `--lan-host [port]` hosts a session (UDP, port 27015 by default), `--lan-join <where>`
 joins one and `--lan-name` is your name. The launcher's Drive page has the same as *LAN
-play: host / join*.
+play: host / join*. The Multiplayer page also has **Servers**:
+
+* **Favorites** - addresses you add by hand (a tunnel link, `host:port`, or `openomsi` for
+  the official server), kept in `~/.openomsi/servers.json`.
+* **Public** - dedicated servers that opted into the lobby (`public = auto` or `1` in
+  `server.cfg`, with a tunnel). Refresh loads the list; Join works like Favorites; the star
+  copies a server into Favorites. Sessions hosted with a code stay private and do not appear
+  here.
 
 A host prints a **session code** - `OMSI-7Q4K-2M9X-HD3P-R8TZ-KC5W-NB6E`, a base-32
 alphabet without look-alike characters, the scrambled session id first and the host's

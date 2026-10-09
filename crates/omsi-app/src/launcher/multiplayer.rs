@@ -6,10 +6,11 @@
 //!   Cloudflare tunnel where routers cannot be passed (`omsi_net::bridge`, `ws`, `tunnel`;
 //!   cloudflared is fetched by the game when it is not installed). The page says none of
 //!   that: the player gives out a code, that is all.
-//! * **Servers** - dedicated servers (`omsi --server`, like Minecraft's) added once by their
-//!   address and kept in a list with their icon, message of the day, map and players. Joining
-//!   one turns the Drive page into the server's: the map, time, date and weather are the
-//!   server's, the bus and the duty are the player's, and "Leave Server" goes back.
+//! * **Servers** - dedicated servers (`omsi --server`, like Minecraft's): **Favorites** are
+//!   addresses the player added; **Public** lists servers that posted to the lobby
+//!   (`public = auto` / `1` in `server.cfg`). Joining one turns the Drive page into the
+//!   server's: the map, time, date and weather are the server's, the bus and the duty are
+//!   the player's, and "Leave Server" goes back.
 
 use super::state::{JoinProto, ServerEntry};
 use super::theme::*;
@@ -23,6 +24,8 @@ use serde_json::Value;
 #[derive(Default)]
 pub struct MultiplayerView {
     pub tab: usize,
+    /// Under Servers: 0 Favorites, 1 Public.
+    pub servers_tab: usize,
     pub add_address: String,
     pub add_name: String,
     pub selected: Option<usize>,
@@ -132,7 +135,21 @@ fn by_code(l: &mut Launcher, r: Rect) {
 }
 
 fn servers(l: &mut Launcher, r: Rect) {
-    // add a server
+    let sub = Rect::new(r.x, r.y, 280.0, 36.0);
+    let mut tab = l.mp.servers_tab;
+    if l.ui.segmented("mp-srv-tab", sub, &mut tab, &["Favorites", "Public"]) {
+        l.mp.servers_tab = tab;
+        l.mp.selected = None;
+    }
+    let rest = Rect::new(r.x, sub.bottom() + 14.0, r.w, r.bottom() - sub.bottom() - 14.0);
+    if l.mp.servers_tab == 0 {
+        favorites(l, rest);
+    } else {
+        public_list(l, rest);
+    }
+}
+
+fn favorites(l: &mut Launcher, r: Rect) {
     let bar = Rect::new(r.x, r.y, r.w, ROW);
     let name_w = 200.0;
     let btn_w = 150.0;
@@ -181,49 +198,7 @@ fn servers(l: &mut Launcher, r: Rect) {
         if l.ui.row(&format!("srv-{}", e.address), rr, sel) {
             l.mp.selected = Some(k);
         }
-        let info = l.state.server_info.get(&e.address).map(|x| x.1.clone());
-        // the icon, or the first letter of the name
-        let ir = Rect::new(rr.x + 12.0, rr.y + 10.0, 64.0, 64.0);
-        match l.icons.get(&e.address) {
-            Some(tex) => l.ui.image(ir, *tex, 8.0),
-            None => {
-                l.ui.p().rounded(ir, 8.0, FIELD);
-                let letter = e.name.chars().chain(info.as_ref().and_then(|i| i.as_ref().ok()).map(|i| i.name.clone()).unwrap_or_default().chars()).next().unwrap_or('S').to_uppercase().to_string();
-                l.ui.text_in(&letter, ir, 26.0, Weight::Bold, TEXT_DIM, Align::Center);
-            }
-        }
-        if let Some(Ok(i)) = info.as_ref() {
-            if !i.icon.is_empty() && !l.icons.contains_key(&e.address) && !l.icons_pending.iter().any(|p| p.0 == e.address) {
-                if let Ok(img) = image::load_from_memory(&i.icon) {
-                    l.icons_pending.push((e.address.clone(), img.to_rgba8()));
-                }
-            }
-        }
-        let x = ir.right() + 14.0;
-        let title = if !e.name.is_empty() { e.name.clone() } else { info.as_ref().and_then(|i| i.as_ref().ok()).map(|i| i.name.clone()).unwrap_or_else(|| e.address.clone()) };
-        l.ui.text_in(&title, Rect::new(x, rr.y + 10.0, rr.w - 320.0, 22.0), 15.0, Weight::Medium, TEXT, Align::Left);
-        match info.as_ref() {
-            Some(Ok(i)) => {
-                l.ui.text_in(&i.motd, Rect::new(x, rr.y + 32.0, rr.w - 320.0, 18.0), 12.5, Weight::Regular, TEXT_SOFT, Align::Left);
-                let map = std::path::Path::new(&i.map.replace('\\', "/")).parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| i.map.clone());
-                l.ui.text_in(&format!("{map} · {} · {}", i.time, if i.weather.is_empty() { "the map's weather" } else { i.weather.as_str() }), Rect::new(x, rr.y + 52.0, rr.w - 320.0, 18.0), 11.5, Weight::Regular, TEXT_FAINT, Align::Left);
-                l.ui.text_in(&format!("{}/{}", i.players, i.max_players), Rect::new(rr.right() - 300.0, rr.y + 10.0, 80.0, 22.0), 14.0, Weight::Medium, OK, Align::Right);
-                l.ui.icon("signal_cellular_alt", Vec2::new(rr.right() - 206.0, rr.y + 21.0), 16.0, OK);
-            }
-            Some(Err(err)) => {
-                l.ui.text_in(&format!("Can't reach the server: {err}"), Rect::new(x, rr.y + 32.0, rr.w - 320.0, 18.0), 12.0, Weight::Regular, DANGER, Align::Left);
-                l.ui.text_in(&e.address, Rect::new(x, rr.y + 52.0, rr.w - 320.0, 18.0), 11.5, Weight::Regular, TEXT_FAINT, Align::Left);
-            }
-            None => {
-                l.ui.text_in("Asking the server…", Rect::new(x, rr.y + 32.0, rr.w - 320.0, 18.0), 12.0, Weight::Regular, TEXT_DIM, Align::Left);
-            }
-        }
-        if l.ui.button(&format!("srv-join-{k}"), Rect::new(rr.right() - 180.0, rr.y + 24.0, 120.0, 36.0), "Join", Some("exit_to_app"), ButtonKind::Primary) {
-            join = Some(e.address.clone());
-        }
-        if l.ui.icon_button(&format!("srv-del-{k}"), Vec2::new(rr.right() - 30.0, rr.y + 42.0), 16.0, "delete", "Remove from the list") {
-            remove = Some(k);
-        }
+        draw_server_row(l, rr, &e.address, &e.name, k, true, &mut join, &mut remove);
     }
     if let Some(k) = remove {
         let gone = l.state.servers.remove(k);
@@ -231,6 +206,127 @@ fn servers(l: &mut Launcher, r: Rect) {
         l.state.save_servers();
         l.mp.selected = None;
     }
+    finish_join(l, join);
+    if l.ui.button("mp-refresh", Rect::new(r.x, r.bottom() - ROW, 150.0, ROW), "Refresh", Some("refresh"), ButtonKind::Normal) {
+        for e in &entries {
+            l.state.ask_server(&e.address, 0.0);
+        }
+    }
+    join_via(l, r);
+}
+
+fn public_list(l: &mut Launcher, r: Rect) {
+    l.state.fetch_public(60.0);
+    let list = Rect::new(r.x, r.y, r.w, r.h - ROW - 12.0);
+    let entries = l.state.public_servers.clone();
+    for e in &entries {
+        l.state.ask_server(&e.url, 15.0);
+    }
+    // only show posts that answered /status (or are still being asked); drop dead/spam
+    let visible: Vec<&omsi_net::lobby::Entry> = entries
+        .iter()
+        .filter(|e| match l.state.server_info.get(&e.url) {
+            Some((_, Err(_))) => false,
+            _ => true,
+        })
+        .collect();
+    if visible.is_empty() {
+        l.ui.panel(Rect::new(list.x, list.y, list.w, 110.0));
+        if l.state.public_loading {
+            l.ui.icon("public", Vec2::new(list.x + 44.0, list.y + 55.0), 30.0, TEXT_FAINT);
+            l.ui.paragraph("Looking for public servers…", Vec2::new(list.x + 80.0, list.y + 40.0), list.w - 110.0, 13.0, Weight::Regular, TEXT_DIM);
+        } else if let Some(err) = l.state.public_error.clone() {
+            l.ui.icon("error", Vec2::new(list.x + 44.0, list.y + 55.0), 30.0, DANGER);
+            l.ui.paragraph(&format!("Could not load the public list: {err}"), Vec2::new(list.x + 80.0, list.y + 32.0), list.w - 110.0, 13.0, Weight::Regular, DANGER);
+        } else {
+            l.ui.icon("public", Vec2::new(list.x + 44.0, list.y + 55.0), 30.0, TEXT_FAINT);
+            l.ui.paragraph("No public servers online right now. Dedicated servers with public = auto appear here.", Vec2::new(list.x + 80.0, list.y + 32.0), list.w - 110.0, 13.0, Weight::Regular, TEXT_DIM);
+        }
+    }
+    let row_h = 84.0;
+    let mut join: Option<String> = None;
+    let mut remove: Option<usize> = None;
+    let mut fav: Option<(String, String)> = None;
+    for (k, e) in visible.iter().enumerate() {
+        let rr = Rect::new(list.x, list.y + k as f32 * (row_h + 8.0), list.w, row_h);
+        if rr.bottom() > list.bottom() {
+            break;
+        }
+        let sel = l.mp.selected == Some(k);
+        if l.ui.row(&format!("psrv-{}", e.url), rr, sel) {
+            l.mp.selected = Some(k);
+        }
+        draw_server_row(l, rr, &e.url, &e.name, k, false, &mut join, &mut remove);
+        if l.ui.icon_button(&format!("psrv-fav-{k}"), Vec2::new(rr.right() - 30.0, rr.y + 42.0), 16.0, "star", "Add to Favorites") {
+            fav = Some((e.url.clone(), e.name.clone()));
+        }
+    }
+    if let Some((addr, name)) = fav {
+        if l.state.servers.iter().any(|s| s.address.eq_ignore_ascii_case(&addr)) {
+            l.state.set_status("That server is in Favorites already", false);
+        } else {
+            l.state.servers.push(ServerEntry { name, address: addr });
+            l.state.save_servers();
+            l.state.set_status("Added to Favorites", false);
+        }
+    }
+    finish_join(l, join);
+    if l.ui.button("mp-pub-refresh", Rect::new(r.x, r.bottom() - ROW, 150.0, ROW), "Refresh", Some("refresh"), ButtonKind::Normal) {
+        l.state.fetch_public(0.0);
+        for e in &entries {
+            l.state.ask_server(&e.url, 0.0);
+        }
+    }
+    join_via(l, r);
+    let _ = remove;
+}
+
+fn draw_server_row(l: &mut Launcher, rr: Rect, address: &str, name: &str, k: usize, can_remove: bool, join: &mut Option<String>, remove: &mut Option<usize>) {
+    let info = l.state.server_info.get(address).map(|x| x.1.clone());
+    let ir = Rect::new(rr.x + 12.0, rr.y + 10.0, 64.0, 64.0);
+    match l.icons.get(address) {
+        Some(tex) => l.ui.image(ir, *tex, 8.0),
+        None => {
+            l.ui.p().rounded(ir, 8.0, FIELD);
+            let letter = name.chars().chain(info.as_ref().and_then(|i| i.as_ref().ok()).map(|i| i.name.clone()).unwrap_or_default().chars()).next().unwrap_or('S').to_uppercase().to_string();
+            l.ui.text_in(&letter, ir, 26.0, Weight::Bold, TEXT_DIM, Align::Center);
+        }
+    }
+    if let Some(Ok(i)) = info.as_ref() {
+        if !i.icon.is_empty() && !l.icons.contains_key(address) && !l.icons_pending.iter().any(|p| p.0 == address) {
+            if let Ok(img) = image::load_from_memory(&i.icon) {
+                l.icons_pending.push((address.to_string(), img.to_rgba8()));
+            }
+        }
+    }
+    let x = ir.right() + 14.0;
+    let title = if !name.is_empty() { name.to_string() } else { info.as_ref().and_then(|i| i.as_ref().ok()).map(|i| i.name.clone()).unwrap_or_else(|| address.to_string()) };
+    l.ui.text_in(&title, Rect::new(x, rr.y + 10.0, rr.w - 320.0, 22.0), 15.0, Weight::Medium, TEXT, Align::Left);
+    match info.as_ref() {
+        Some(Ok(i)) => {
+            l.ui.text_in(&i.motd, Rect::new(x, rr.y + 32.0, rr.w - 320.0, 18.0), 12.5, Weight::Regular, TEXT_SOFT, Align::Left);
+            let map = std::path::Path::new(&i.map.replace('\\', "/")).parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| i.map.clone());
+            l.ui.text_in(&format!("{map} · {} · {}", i.time, if i.weather.is_empty() { "the map's weather" } else { i.weather.as_str() }), Rect::new(x, rr.y + 52.0, rr.w - 320.0, 18.0), 11.5, Weight::Regular, TEXT_FAINT, Align::Left);
+            l.ui.text_in(&format!("{}/{}", i.players, i.max_players), Rect::new(rr.right() - 300.0, rr.y + 10.0, 80.0, 22.0), 14.0, Weight::Medium, OK, Align::Right);
+            l.ui.icon("signal_cellular_alt", Vec2::new(rr.right() - 206.0, rr.y + 21.0), 16.0, OK);
+        }
+        Some(Err(err)) => {
+            l.ui.text_in(&format!("Can't reach the server: {err}"), Rect::new(x, rr.y + 32.0, rr.w - 320.0, 18.0), 12.0, Weight::Regular, DANGER, Align::Left);
+            l.ui.text_in(address, Rect::new(x, rr.y + 52.0, rr.w - 320.0, 18.0), 11.5, Weight::Regular, TEXT_FAINT, Align::Left);
+        }
+        None => {
+            l.ui.text_in("Asking the server…", Rect::new(x, rr.y + 32.0, rr.w - 320.0, 18.0), 12.0, Weight::Regular, TEXT_DIM, Align::Left);
+        }
+    }
+    if l.ui.button(&format!("srv-join-{k}-{}", if can_remove { "f" } else { "p" }), Rect::new(rr.right() - 180.0, rr.y + 24.0, 120.0, 36.0), "Join", Some("exit_to_app"), ButtonKind::Primary) {
+        *join = Some(address.to_string());
+    }
+    if can_remove && l.ui.icon_button(&format!("srv-del-{k}"), Vec2::new(rr.right() - 30.0, rr.y + 42.0), 16.0, "delete", "Remove from the list") {
+        *remove = Some(k);
+    }
+}
+
+fn finish_join(l: &mut Launcher, join: Option<String>) {
     if let Some(a) = join {
         l.state.ask_server(&a, 5.0);
         let proto = [JoinProto::Auto, JoinProto::Udp, JoinProto::WebSocket][l.mp.proto.min(2)];
@@ -239,12 +335,9 @@ fn servers(l: &mut Launcher, r: Rect) {
             l.go(super::Page::Drive);
         }
     }
-    if l.ui.button("mp-refresh", Rect::new(r.x, r.bottom() - ROW, 150.0, ROW), "Refresh", Some("refresh"), ButtonKind::Normal) {
-        for e in &entries {
-            l.state.ask_server(&e.address, 0.0);
-        }
-    }
-    // how Join connects: UDP goes straight to the game port and needs no status answer
+}
+
+fn join_via(l: &mut Launcher, r: Rect) {
     l.ui.text_in("Join via", Rect::new(r.x + 170.0, r.bottom() - ROW, 70.0, ROW), 12.5, Weight::Regular, TEXT_DIM, Align::Left);
     let mut proto = l.mp.proto;
     if l.ui.segmented("mp-proto", Rect::new(r.x + 244.0, r.bottom() - ROW, 330.0, ROW), &mut proto, &["Auto", "UDP", "WebSocket"]) {

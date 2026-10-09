@@ -15,7 +15,7 @@ graphics card: the renderer runs on wgpu's no-op device, so the world, the AI tr
 timetable buses and the people are simulated exactly as a hosting player's game does, and
 nothing is drawn. `server.cfg` is written with commented defaults on the first start (name,
 motd, map, date, time, weather, traffic, timetable, passengers, port, web_port,
-max_players, tunnel, radius, the voice chat); `server-icon.png` beside it (64x64, like Minecraft's) is the
+max_players, tunnel, public, admin_password, dispatch, radius, the voice chat); `server-icon.png` beside it (64x64, like Minecraft's) is the
 icon the players' list shows.
 
 Players reach it two ways:
@@ -33,15 +33,25 @@ Players reach it two ways:
   max_players, time, weather, version, protocol, vehicles, and on a dedicated server `world`:
   its AI cars, buses, cars asleep, parked cars, people walking, waiting and aboard, the
   traffic density) and `GET /icon.png`, which the launcher's Multiplayer → Servers list
-  shows. `vehicles` is the server's `vehicles` list (else every bus it has): a joining
+  shows. With `public = auto` (the default) or `1`, the server also posts that tunnel
+  address to the public lobby every few minutes so Multiplayer → Servers → **Public** lists
+  it for every player; `public = 0` keeps it off the list (Favorites still work if someone
+  adds the address by hand). `vehicles` is the server's `vehicles` list (else every bus it has): a joining
   player's launcher offers only those, and so do the game menu's *Place a vehicle* and *Swap*
   once the game has joined. With an `admin_password` it also takes `POST /admin`
   from the machine itself: one admin command a line (`clock 30600`, `weather set
   Weather/#CAVOK.owt`, `say …`, `kick 3`, as the Administration menu sends them), the
-  password in `X-Admin-Password`; five wrong ones in two minutes close it for a while. A
-  tool beside the server (a dispatch page, a script) administers it that way without
-  joining. A reverse proxy on the same machine connects from 127.0.0.1 as well: do not let
-  it pass `/admin` on. With `share_positions = 1` it also answers
+  password in `X-Admin-Password`; five wrong ones in two minutes close it for a while. The
+  same door serves `GET /dispatch`: open `http://127.0.0.1:<web_port>/dispatch` on the
+  server machine for the local dispatch console (live status, call log, say / kick / clock /
+  weather / traffic / speed, Stop / Restart, and when `share_positions = 1` a player list
+  and live map). Clock, weather, traffic, speed, kick/ban and stop/restart also post a short
+  line to the players' chat as **Admin**. `stop` ends the process; `restart` exits with code
+  75 so `start.sh` / `start.cmd` launch it again. A script that posts to `/admin` works the
+  same way. Neither `/dispatch` nor `/admin` answers through a tunnel or reverse proxy -
+  only from the machine itself. A reverse proxy on the same machine connects from 127.0.0.1
+  as well: do not let it pass `/admin` or `/dispatch` on.
+  With `share_positions = 1` it also answers
   `GET /players`: a JSON array of the players (`id`, `name`, `bus`, `line`, `destination`,
   `tour`, `x`/`y` in world metres east/north, `heading` in degrees clockwise from north,
   `speed_kmh`, `on_foot` and `aboard` - a player on foot is where it walks (even with its
@@ -151,7 +161,10 @@ omsi-server --root "/path/to/OMSI 2" --config server.cfg
 | `port` | UDP port (27015) |
 | `max_players`, `password` | who may join (`REJECT` with a reason otherwise) |
 | `name`, `motd` | shown in the launcher's list and on joining |
-| `public` | post to the relay's lobby topic, so the launcher can list the server |
+| `public` | `auto` (default): post to the lobby when a tunnel URL exists; `1`: same when a join URL is known; `0`: never. The launcher's Multiplayer → Servers → Public tab lists fresh posts and checks `/status` before showing a server as online |
+| `admin_password` | chat `/admin <password>` and the local web dispatch / `POST /admin` (empty: neither) |
+| `dispatch` | `1` (default): serve `GET /dispatch` on the web port from this machine only; `0`: off. From another PC, SSH-forward the web port |
+| `share_positions` | `1`: `GET /players` and the dispatch live map; `0` (default): off |
 | `admins` | player names allowed to run `/kick`, `/time`, `/weather` in the chat |
 
 It needs the original OMSI 2 files like the game (same `missing_original_essentials`
@@ -165,6 +178,7 @@ check) and the same mods as the players: the server lists its content in `WELCOM
    renderer, compared with the game's positions for the same seed).
 3. `omsi-server` hosting a session from `server.cfg`; the launcher's Join accepts
    `host:port` and codes as today.
-4. Lobby: servers post `name/map/players/code` to the relay's lobby topic; the launcher
-   shows the list.
-5. Admin commands and a small status page (players, tick time, bandwidth).
+4. Lobby: done - dedicated servers with `public = auto`/`1` post to the relay's lobby
+   topic; Multiplayer → Servers → Public lists them (verified with `/status`).
+5. Tick time and bandwidth on the status / dispatch page (admin commands and a local
+   dispatch page are already there).

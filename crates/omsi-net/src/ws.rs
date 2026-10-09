@@ -13,7 +13,8 @@
 //!   who drives what and where, for a web map of the server. A dedicated server with an
 //!   admin password also takes `POST /admin`
 //!   from the machine it runs on (see [`local_admin`]): the administration a tool beside the
-//!   server uses, without joining the session.
+//!   server uses, without joining the session. The same door serves `GET /dispatch` - a small
+//!   local admin page that polls `/status` and posts commands to `/admin`.
 //! * [`WsClient`] (a joining game) connects to `wss://…/ws`, binds a UDP socket on
 //!   127.0.0.1 and gives its address to `LanSession::join`; whatever the game sends there
 //!   goes over the WebSocket and back.
@@ -52,6 +53,8 @@ pub struct ServerInfo {
     pub player_list: Vec<PlayerInfo>,
     /// `POST /admin` from this machine with this password (empty: no such door).
     pub local_admin_password: String,
+    /// Serve `GET /dispatch` (the local web console); off when `server.cfg` has `dispatch = 0`.
+    pub dispatch_page: bool,
     /// The admin commands that came in that way, for the host loop to run.
     pub local_admin_queue: Vec<String>,
     /// When wrong passwords came lately (they lock the door for a while).
@@ -450,6 +453,19 @@ fn same_secret(a: &str, b: &str) -> bool {
     d == 0
 }
 
+/// Whether this HTTP request is from the machine itself (loopback, not through a tunnel or
+/// reverse proxy). The server's own cloudflared tunnel connects from 127.0.0.1 too; the
+/// forwarded headers say so, and those requests stay out of `/admin` and `/dispatch`.
+fn from_this_machine(peer: Option<SocketAddr>, head: &str) -> Result<(), (&'static str, String)> {
+    if !peer.map(|p| p.ip().is_loopback()).unwrap_or(false) {
+        return Err(("403 Forbidden", "only from this machine".into()));
+    }
+    if ["cf-connecting-ip", "cf-ray", "x-forwarded-for", "forwarded", "x-real-ip"].iter().any(|h| header(head, h).is_some()) {
+        return Err(("403 Forbidden", "only from this machine, not through a tunnel or proxy".into()));
+    }
+    Ok(())
+}
+
 /// `POST /admin`: admin commands (one a line, as the Administration menu sends them:
 /// `clock 30600`, `weather next`, `say …`, `kick 3` …) for a dedicated server, from a tool on
 /// the same machine - a web dispatch page, a script. Only from the loopback, only with the
@@ -463,14 +479,8 @@ pub fn local_admin(request: &[u8], peer: Option<SocketAddr>, info: &Mutex<Server
     if i.local_admin_password.is_empty() {
         return ("404 Not Found", "no admin password on this server".into());
     }
-    if !peer.map(|p| p.ip().is_loopback()).unwrap_or(false) {
-        return ("403 Forbidden", "only from this machine".into());
-    }
-    // A tunnel or a proxy on this machine connects from the loopback as well: the server's
-    // own cloudflared tunnel (`tunnel --url http://127.0.0.1:<web_port>`) would have put the
-    // door on the internet behind the password alone. What came through one says so.
-    if ["cf-connecting-ip", "cf-ray", "x-forwarded-for", "forwarded", "x-real-ip"].iter().any(|h| header(head, h).is_some()) {
-        return ("403 Forbidden", "only from this machine, not through a tunnel or proxy".into());
+    if let Err(e) = from_this_machine(peer, head) {
+        return e;
     }
     if !head.starts_with("POST ") {
         return ("405 Method Not Allowed", "POST admin commands, one a line".into());
@@ -487,6 +497,24 @@ pub fn local_admin(request: &[u8], peer: Option<SocketAddr>, info: &Mutex<Server
     let n = commands.len();
     i.local_admin_queue.extend(commands);
     ("202 Accepted", format!("{n} command(s) taken"))
+}
+
+/// `GET /dispatch`: the small local admin page (polls `/status`, posts to `/admin`). Same
+/// door as [`local_admin`]: only from this machine, never through a tunnel or proxy. Off when
+/// `ServerInfo::dispatch_page` is false (`dispatch = 0` in `server.cfg`).
+pub fn local_dispatch(request: &[u8], peer: Option<SocketAddr>, info: &Mutex<ServerInfo>) -> (&'static str, &'static str, Vec<u8>) {
+    let text = String::from_utf8_lossy(request);
+    let head = text.split_once("\r\n\r\n").map(|(h, _)| h).unwrap_or(&text);
+    if !info.lock().unwrap_or_else(|e| e.into_inner()).dispatch_page {
+        return ("404 Not Found", "text/plain; charset=utf-8", b"dispatch is off (dispatch = 0 in server.cfg)".to_vec());
+    }
+    if let Err((status, msg)) = from_this_machine(peer, head) {
+        return (status, "text/plain; charset=utf-8", msg.into_bytes());
+    }
+    if !head.starts_with("GET ") {
+        return ("405 Method Not Allowed", "text/plain; charset=utf-8", b"GET the dispatch page".to_vec());
+    }
+    ("200 OK", "text/html; charset=utf-8", include_str!("dispatch.html").as_bytes().to_vec())
 }
 
 /// One TCP connection to the gateway: a status request, the icon, or a player's WebSocket.
@@ -510,6 +538,7 @@ fn serve(stream: TcpStream, target: SocketAddr, info: &Mutex<ServerInfo>, stop: 
                 let (status, text) = local_admin(&request, peer, info);
                 (status, "text/plain; charset=utf-8", text.into_bytes())
             }
+            "/dispatch" => local_dispatch(&request, peer, info),
             "/status" | "/status.json" => ("200 OK", "application/json", info.lock().unwrap_or_else(|e| e.into_inner()).to_json().into_bytes()),
             "/players" | "/players.json" => {
                 let i = info.lock().unwrap_or_else(|e| e.into_inner());
@@ -947,6 +976,26 @@ mod tests {
         }
         assert_eq!(local_admin(&post("s3cret", "say x"), here, &info).0, "429 Too Many Requests");
         assert!(same_secret("abc", "abc") && !same_secret("abc", "abd") && !same_secret("abc", "abcd") && !same_secret("", "a"));
+    }
+
+    #[test]
+    fn local_dispatch_door() {
+        let here = Some(SocketAddr::from(([127, 0, 0, 1], 5000)));
+        let get = b"GET /dispatch HTTP/1.1\r\nHost: x\r\n\r\n";
+        let info = Mutex::new(ServerInfo { dispatch_page: true, ..Default::default() });
+        let (st, ctype, body) = local_dispatch(get, here, &info);
+        assert_eq!(st, "200 OK");
+        assert!(ctype.starts_with("text/html"));
+        let page = String::from_utf8_lossy(&body);
+        assert!(page.contains("openOMSI") && page.contains("Call log") && page.contains("/admin") && page.contains("Live map"), "{page}");
+        // not from this machine
+        assert_eq!(local_dispatch(get, Some(SocketAddr::from(([10, 0, 0, 2], 5000))), &info).0, "403 Forbidden");
+        // through a tunnel on the loopback
+        let tunneled = b"GET /dispatch HTTP/1.1\r\nHost: x\r\nCf-Connecting-Ip: 203.0.113.9\r\n\r\n";
+        assert_eq!(local_dispatch(tunneled, here, &info).0, "403 Forbidden");
+        assert_eq!(local_dispatch(b"POST /dispatch HTTP/1.1\r\nHost: x\r\n\r\n", here, &info).0, "405 Method Not Allowed");
+        info.lock().unwrap().dispatch_page = false;
+        assert_eq!(local_dispatch(get, here, &info).0, "404 Not Found");
     }
 
     #[test]
