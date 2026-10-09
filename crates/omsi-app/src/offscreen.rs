@@ -228,6 +228,18 @@ impl RealTime {
     }
 }
 
+/// A dedicated server's traffic kept on the server's clock, `speed` times as fast as the real
+/// time and moved by `jump` s in this step (an admin's `time` or `clock`, the real-time sync).
+/// The timetable's buses, the street traffic's density by the hour and the trips due at the
+/// stops run on the traffic's clock (`day_time`), which goes on at its own `time_scale`: the
+/// window sets that every frame and moves the clock with its own (`frame_weather`,
+/// `shift_clock`), a server did neither. Its timetable ran on the real time from the start,
+/// whatever the clock the players were told.
+fn traffic_on_server_clock(t: &mut omsi_sim::ai_traffic::TrafficSim, speed: f64, jump: f64) {
+    t.time_scale = speed;
+    t.day_time += jump;
+}
+
 /// The tyres as they are drawn: the lowest point of each wheel mesh and how far it is over
 /// the road under it (negative: in the asphalt).
 fn tyre_lows(v: &omsi_sim::VehicleInstance, world: &World) -> Vec<(DVec3, f64)> {
@@ -286,7 +298,7 @@ fn vehicle_camera(player: &Player, camera: &mut Camera) {
 
 #[cfg(test)]
 mod tests {
-    use super::RealTime;
+    use super::{traffic_on_server_clock, RealTime};
     use std::time::{Duration, Instant};
 
     /// The waits `RealTime` asks for after steps of 1/30 s that take `work` each, and the
@@ -320,5 +332,61 @@ mod tests {
         let (waits, _) = run(&stalled);
         let steady = |w: &Duration| (w.as_secs_f64() - 0.0283).abs() < 0.001;
         assert!(waits[51..].iter().all(steady), "{:?}", &waits[50..60]);
+    }
+
+    #[test]
+    fn a_servers_timetable_runs_on_the_servers_clock() {
+        use omsi_sim::ai_traffic::{setup::RandomTypes, TrafficSim};
+        // (no lanes: only the traffic's clock is looked at)
+        let random = RandomTypes {
+            types: Vec::new(),
+            groups: Vec::new(),
+            group_curves: false,
+            group_uvg: Vec::new(),
+            uvg_defaults: Vec::new(),
+        };
+        let mut t = TrafficSim::assemble(
+            std::path::Path::new("."),
+            Default::default(),
+            random,
+            Vec::new(),
+            Default::default(),
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+            (1.0, 0),
+            0,
+        );
+        // a server started at 05:20 (its clock as `server_step` keeps it: the start, the
+        // seconds run at its speed, the admins' shift); x30 from its 10th second, an admin's
+        // `clock 08:19` in its 20th, `time -3600` in its 25th
+        let start = 5.0 * 3600.0 + 20.0 * 60.0;
+        t.day_time = start;
+        let (dt, mut run, mut shift) = (1.0f32 / 30.0, 0.0f64, 0.0f64);
+        for i in 0..900 {
+            let speed = if i < 300 { 1.0 } else { 30.0 };
+            run += dt as f64 * speed;
+            let was = shift;
+            if i == 600 {
+                shift += 8.0 * 3600.0 + 19.0 * 60.0 - (start + run + shift);
+            }
+            if i == 750 {
+                shift -= 3600.0;
+            }
+            traffic_on_server_clock(&mut t, speed, shift - was);
+            t.tick(dt, None);
+            let clock = start + run + shift;
+            assert!(
+                (t.day_time - clock).abs() < 1e-6,
+                "step {i}: the traffic's clock {:.1} s, the server's {clock:.1} s",
+                t.day_time
+            );
+        }
+        // 08:19, an hour back, and 299 steps of a game second each: 07:23:59 (the traffic's own
+        // clock ran 30 s of the real time: 05:20:30)
+        assert!(
+            (t.day_time - (7.0 * 3600.0 + 23.0 * 60.0 + 59.0)).abs() < 0.01,
+            "{}",
+            t.day_time
+        );
     }
 }
