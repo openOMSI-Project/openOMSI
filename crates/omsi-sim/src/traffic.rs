@@ -2627,6 +2627,14 @@ impl AiState {
                 }
                 return false; // dead end: despawn
             };
+            // A timetable may name a path whose intervening map piece is missing.
+            // Never move the vehicle directly to the next path across that gap.
+            if !self.route.is_empty()
+                && !l.next.contains(&next)
+                && (net.lanes[next].start() - l.end()).truncate().length() >= 2.0
+            {
+                return false;
+            }
             self.s -= l.length();
             self.prev_lane = Some(self.lane);
             self.lane = next;
@@ -2867,6 +2875,28 @@ mod tests {
         assert!(car.change.is_none(), "the move is over");
         assert_eq!(car.lane, 3, "on the lane beside's next piece");
         assert!((at.x + 3.5).abs() < 0.05, "over in the lane beside: {at:?}");
+    }
+
+    #[test]
+    fn timetable_route_does_not_jump_across_an_unbridged_gap() {
+        let lane = |y0, y1| LaneBuilder::polyline(
+            vec![DVec3::new(0.0, y0, 0.0), DVec3::new(0.0, y1, 0.0)],
+            LaneKind::Street,
+            3.0,
+        );
+        let mut net = Network { lanes: vec![lane(0.0, 10.0), lane(30.0, 40.0)], ..Default::default() };
+        net.link(1.5);
+        let mut car = AiState::new(0, 10.0, 7);
+        car.route = vec![0, 1];
+        car.plan_next(&net);
+        assert_eq!(car.planned_next, Some(1));
+        assert!(!car.advance(&net, 0.0, None, None));
+        assert_eq!(car.lane, 0);
+
+        net.lanes[1] = lane(10.0, 20.0);
+        net.link(1.5);
+        assert!(car.advance(&net, 0.0, None, None));
+        assert_eq!(car.lane, 1);
     }
 
     #[test]
