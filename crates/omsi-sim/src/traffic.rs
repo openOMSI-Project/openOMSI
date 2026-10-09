@@ -524,6 +524,48 @@ impl Network {
         self.beside(la, lb)
     }
 
+    /// A route can name two branches of the same junction as a lane change, even after
+    /// the branches have parted. Only begin the manoeuvre while their centres are still
+    /// beside one another at the vehicle and a little way ahead.
+    pub fn route_change_locally_possible(&self, a: usize, b: usize, s: f32) -> bool {
+        let (Some(la), Some(lb)) = (self.lanes.get(a), self.lanes.get(b)) else {
+            return false;
+        };
+        let end = la.length();
+        if s >= end - 3.0 {
+            return false;
+        }
+        for along in [s, (s + 6.0).min(end)] {
+            let (p, h) = la.at(along);
+            let Some((sb, distance)) = lb.nearest_point(p) else {
+                return false;
+            };
+            let (q, hb) = lb.at(sb);
+            if distance > 5.5 || (p.z - q.z).abs() > 1.0
+                || wrap_deg(hb - h).abs() > 30.0
+                || sb >= lb.length() - 1.0
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// If the target lane is occupied, wait before the two lanes part so the change
+    /// remains possible when a gap opens. Waiting at the end of the source lane is too
+    /// late for a junction fork or a bus lane that peels away before that end.
+    pub fn route_change_wait_distance(&self, a: usize, b: usize, s: f32) -> f32 {
+        let end = self.lanes[a].length();
+        let mut probe = s + 2.0;
+        while probe < end && probe < s + 100.0 {
+            if !self.route_change_locally_possible(a, b, probe) {
+                return (probe - s - 8.0).max(0.0);
+            }
+            probe += 2.0;
+        }
+        (end - s - 1.0).max(0.0)
+    }
+
     /// Does lane `b` run beside `a` (a lane's width or so to the side, the same way) along
     /// at least 8 m of it?
     fn beside(&self, la: &Lane, lb: &Lane) -> bool {
@@ -2825,6 +2867,24 @@ mod tests {
         assert!(car.change.is_none(), "the move is over");
         assert_eq!(car.lane, 3, "on the lane beside's next piece");
         assert!((at.x + 3.5).abs() < 0.05, "over in the lane beside: {at:?}");
+    }
+
+    #[test]
+    fn timetable_change_stops_at_a_diverged_junction_branch() {
+        let lane = |points| LaneBuilder::polyline(points, LaneKind::Street, 3.0);
+        let mut main = lane(vec![DVec3::new(0.0, 0.0, 0.0), DVec3::new(0.0, 60.0, 0.0)]);
+        let mut branch = lane(vec![DVec3::new(3.5, 0.0, 0.0), DVec3::new(3.5, 30.0, 0.0), DVec3::new(18.0, 60.0, 0.0)]);
+        main.key = Some(LaneKey { tile: (0, 0), id: 1, path: 0 });
+        branch.key = Some(LaneKey { tile: (0, 0), id: 1, path: 1 });
+        let net = Network { lanes: vec![main, branch], ..Default::default() };
+        assert!(net.parallel(0, 1), "the authored route treats the fork as a lane change");
+        assert!(net.route_change_locally_possible(0, 1, 10.0));
+        assert!(
+            !net.route_change_locally_possible(0, 1, 40.0),
+            "do not cut across the divided junction"
+        );
+        let wait = net.route_change_wait_distance(0, 1, 10.0);
+        assert!(wait > 0.0 && wait < 30.0, "wait before the branches part: {wait}");
     }
 
     #[test]

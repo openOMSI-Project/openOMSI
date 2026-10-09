@@ -331,9 +331,9 @@ impl TrafficSim {
     ) -> Option<f32> {
         let st = &self.cars[i].state;
         let (to, dir) = st.route_change_due(&self.net)?;
-        let len = self.net.lanes[st.lane].length();
         let s_to = self.net.beside_s(st.lane, to, st.s);
-        if self.can_merge(i, to, s_to, by_lane) {
+        if self.net.route_change_locally_possible(st.lane, to, st.s)
+            && self.can_merge(i, to, s_to, by_lane) {
             let net = &self.net;
             self.cars[i].state.start_route_change(net, to, dir);
             return None;
@@ -341,7 +341,7 @@ impl TrafficSim {
         let st = &mut self.cars[i].state;
         st.signal = dir;
         st.signal_time = 1.0;
-        Some(len - st.s - 1.0)
+        Some(self.net.route_change_wait_distance(st.lane, to, st.s))
     }
 
     /// Is what car `i` has stopped behind going to stand there for a while (a parked car, a
