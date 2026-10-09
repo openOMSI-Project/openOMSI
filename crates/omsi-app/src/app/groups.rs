@@ -446,6 +446,8 @@ pub(crate) struct SessionState {
     /// The current METAR receiver is a single manual fetch rather than the continuous sync.
     pub(crate) metar_once: bool,
     pub(crate) metar_next: f64,
+    /// Location-selected live weather and its background request.
+    pub(crate) tomorrow: crate::weather_tomorrow::Tomorrow,
 }
 
 /// The fuel pump or the bus wash running (`SessionState::pumping`).

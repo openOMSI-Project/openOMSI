@@ -532,6 +532,12 @@ and buses inside the archives.
 
 ## Season and weather
 
+**Tomorrow.io map weather** follows the nearest configured area while driving.
+Each player supplies a private API key; the map contains only areas and locations.
+See [setup and map-author instructions](WEATHER_REGIONS.md), including the
+[community config editor](https://openomsi.mxnticek.eu/weather/). This mode requires
+a build containing the feature; the website alone does not enable it in the game.
+
 The launcher's Departure card has a **Season** choice (spring / summer / autumn / winter,
 or by the date as in the original), and under a chosen season its **Early / Mid / Late**
 part. The phases are the meteorological season's three months (northern spring: March,

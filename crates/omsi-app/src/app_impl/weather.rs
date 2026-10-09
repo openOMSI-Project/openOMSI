@@ -153,7 +153,7 @@ impl App {
     /// The weather follows the METAR report and cannot be changed (the `metar_sync` setting).
     /// In a LAN session as a client the host's weather counts: the host syncs, not us.
     pub(crate) fn metar_locked(&self) -> bool {
-        self.settings.metar_sync && !self.net.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client)
+        self.settings.metar_sync && !crate::weather_tomorrow::selected(self.args.weather.as_deref()) && !self.net.lan.as_ref().is_some_and(|l| l.role == omsi_net::Role::Client)
     }
 
     /// The airport whose report the sync follows: the one chosen, else the one of the weather
@@ -210,6 +210,7 @@ impl App {
     /// The METAR sync: with it on, the report is downloaded in the background (at once, then
     /// every ten minutes) and the weather goes over to it; `dt` is real seconds.
     pub(crate) fn tick_metar(&mut self, dt: f32) {
+        if crate::weather_tomorrow::selected(self.args.weather.as_deref()) { return; }
         self.share_start_metar();
         if let Some(rx)=self.session.metar_rx.as_ref(){
             match rx.try_recv(){
@@ -269,17 +270,52 @@ impl App {
         let file = to.path.to_string_lossy().to_string();
         // (what the players are told: the report's values, which they make the weather from)
         let wire = crate::weather_setup::report_wire(&to).unwrap_or_else(|| file.clone());
+        self.apply_report_weather(to, Some(file), &wire);
+    }
+
+    /// The common apply step for measured providers. `selection` changes the
+    /// weather choice for METAR; Tomorrow.io keeps its provider mode selected.
+    pub(crate) fn apply_report_weather(&mut self, to: omsi_content::weather::Weather, selection: Option<String>, wire: &str) {
         let name = to.name.clone();
         let from = self.session.weather.clone().unwrap_or_default();
-        crate::scene::SNOW_WEATHER.store(to.snow, std::sync::atomic::Ordering::Relaxed);
-        omsi_sim::host::set_ambient_weather(to.temp.0, to.temp.1);
-        self.args.weather = Some(file.clone());
+        if let Some(file) = selection { self.args.weather = Some(file); }
         self.session.weather_cycle = None;
-        self.session.weather_blend = Some(crate::weather_cycle::Blend::new(from, to, 60.0));
+        self.session.weather_blend = Some(report_transition(from, to));
         if let Some(l) = self.net.lan.as_mut().filter(|l| l.role == omsi_net::Role::Host) {
-            l.set_weather(&wire);
+            l.set_weather(wire);
         }
-        log::info!("weather: METAR sync, going over to {file} ({name})");
+        log::info!("weather: applying report ({name})");
         self.service_msg = Some((format!("Weather: {name}"), 4.0));
+    }
+}
+
+fn report_transition(from: omsi_content::weather::Weather, to: omsi_content::weather::Weather) -> crate::weather_cycle::Blend {
+    // A natural model must not overwrite the provider after its blend finishes.
+    crate::weather_model::stop();
+    crate::scene::SNOW_WEATHER.store(to.snow, std::sync::atomic::Ordering::Relaxed);
+    omsi_sim::host::set_ambient_weather(to.temp.0, to.temp.1);
+    crate::weather_cycle::Blend::new(from, to, 60.0)
+}
+
+#[cfg(test)]
+mod report_tests {
+    #[test]
+    fn report_updates_vehicle_initial_temperature_snow_and_transition() {
+        use omsi_sim::host::VehicleHost;
+        let clock = omsi_sim::SimClock::default();
+        let previous = VehicleHost::new(clock.clone());
+        let previous_snow = crate::scene::SNOW_WEATHER.load(std::sync::atomic::Ordering::Relaxed);
+        let to = omsi_content::weather::Weather { temp: (-7.0, 2.1), snow: true, ..Default::default() };
+        let mut blend = super::report_transition(Default::default(), to.clone());
+        let host = VehicleHost::new(clock);
+        assert_eq!(host.temperature, -7.0);
+        assert_eq!(host.abs_humidity, 2.1);
+        assert!(crate::scene::SNOW_WEATHER.load(std::sync::atomic::Ordering::Relaxed));
+        let (weather, _, done) = blend.step(60.0);
+        assert!(done);
+        assert_eq!(weather.temp, to.temp);
+        assert!(weather.snow);
+        omsi_sim::host::set_ambient_weather(previous.temperature, previous.abs_humidity);
+        crate::scene::SNOW_WEATHER.store(previous_snow, std::sync::atomic::Ordering::Relaxed);
     }
 }

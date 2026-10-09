@@ -1,5 +1,9 @@
 # Modding beyond OMSI 2
 
+For map-selected Tomorrow.io weather, add an `openomsi_weather.cfg` beside
+`global.cfg`. See [weather areas](WEATHER_REGIONS.md) for the format, player setup
+and the [community config editor](https://openomsi.mxnticek.eu/weather/).
+
 openOMSI reads OMSI 2 content as it is: a bus, a map or an object made for OMSI 2 works
 without changes. It also lifts limits OMSI 2 put on modders. Everything on this page is an
 addition. A file that uses it still loads in OMSI 2, which ignores what it does not know.

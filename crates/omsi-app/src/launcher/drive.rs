@@ -635,6 +635,7 @@ fn start_line(l: &Launcher) -> String {
     let weather = match l.state.choice.weather.strip_prefix("metar:") {
         Some(code) => format!("at {code}"),
         None if l.state.choice.weather == "cycle" => omsi_ui::tr("Weather cycle").into_owned(),
+        None if l.state.choice.weather == "tomorrow" => "Tomorrow.io".into(),
         None if crate::weather_model::is_natural(Some(&l.state.choice.weather)) || l.state.choice.weather.is_empty() => omsi_ui::tr("Natural weather").into_owned(),
         None if crate::weather_setup::custom_weather(Some(&l.state.choice.weather)).is_some() => {
             let c = crate::weather_setup::custom_weather(Some(&l.state.choice.weather)).unwrap();
@@ -1244,6 +1245,7 @@ fn step_time(l: &mut Launcher, r: Rect) {
     items.push((format!("metar:{}", metar.clone().unwrap_or_else(|| home.clone())), "Current weather".into(), format!("METAR of {} (fetched at the start)", metar.clone().unwrap_or_else(|| home.clone())), "public".into(), false));
     // the weather going on from one to another through the day
     items.push(("cycle".into(), "Weather cycle".into(), "Changes every 25-60 minutes, as the month allows".into(), "autorenew".into(), false));
+    items.push(("tomorrow".into(), "Tomorrow.io".into(), "Live weather of the nearest map group".into(), "public".into(), false));
     for w in l.state.weathers.clone() {
         if !l.state.weather_fits(&w) {
             continue;

@@ -133,7 +133,7 @@ pub(crate) struct Args {
     #[arg(long)]
     pub(crate) setstr: Option<String>,
     /// Weather file (relative to root), e.g. Weather/Bodennebel.owt; `natural` (or none) is
-    /// the physical weather model, `cycle` the weather cycle.
+    /// the physical weather model, `cycle` the weather cycle, `tomorrow` map-group live weather.
     #[arg(long)]
     pub(crate) weather: Option<String>,
     /// Passengers at bus stops (window and offscreen).

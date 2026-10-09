@@ -114,6 +114,13 @@ pub(crate) fn custom_weather(text:Option<&str>)->Option<CustomWeather>{text.and_
 
 /// Weather from `--weather`, else the clear-sky default.
 pub(crate) fn load_weather(args: &Args) -> omsi_content::weather::Weather {
+    if crate::weather_tomorrow::selected(args.weather.as_deref()) {
+        crate::weather_model::stop();
+        scene::SNOW_WEATHER.store(false, std::sync::atomic::Ordering::Relaxed);
+        let w = CustomWeather::default().to_weather();
+        omsi_sim::host::set_ambient_weather(w.temp.0, w.temp.1);
+        return w;
+    }
     // no weather chosen, or `natural`: the physical model (weather_model.rs)
     if crate::weather_model::is_natural(args.weather.as_deref()) {
         let w = crate::weather_model::start(&crate::situation::start_clock(args));
@@ -537,11 +544,7 @@ pub(crate) fn vanilla_sky(w: &omsi_content::weather::Weather, drift: [f32; 4]) -
 /// How wet the roads are: rain soaks them in a few minutes, sunshine dries them in about
 /// twenty. `secs` is how long this weather has been running.
 pub(crate) fn road_wetness(rate: f32, secs: f64, start: f32) -> f32 {
-    if rate > 0.0 {
-        (start + secs as f32 * rate / 180.0).clamp(0.0, 1.0)
-    } else {
-        (start - secs as f32 / 1200.0).clamp(0.0, 1.0)
-    }
+    crate::weather_model::road_wetness(rate, secs, start)
 }
 
 /// The renderer's lighting for this weather at this moment: the daylight, then what the

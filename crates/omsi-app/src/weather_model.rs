@@ -32,6 +32,16 @@
 //!   is crystal clear with a pale sunset, and a sultry evening in a high ends in red.
 
 use omsi_content::weather::Weather;
+mod observations;
+pub(crate) use observations::{road_wetness, Observations};
+
+fn cloud_kind(total: f32, deck: f32) -> &'static str {
+    if deck > 0.85 { "Overcast 1" }
+    else if total > 0.6 { "Cumulus 3" }
+    else if total > 0.35 { "Cumulus 2" }
+    else if total > 0.08 { "Cumulus 1" }
+    else { "-1" }
+}
 
 /// The model's state at one moment.
 #[derive(Debug, Clone)]
@@ -420,17 +430,7 @@ impl WeatherModel {
         let vis = (clear / falling).min(50_000.0);
         let vis = (vis.ln() * (1.0 - self.fog) + 150f32.ln() * self.fog).exp();
         let total = self.cumulus.max(self.deck);
-        let kind = if self.deck > 0.85 {
-            "Overcast 1"
-        } else if total > 0.6 {
-            "Cumulus 3"
-        } else if total > 0.35 {
-            "Cumulus 2"
-        } else if total > 0.08 {
-            "Cumulus 1"
-        } else {
-            "-1"
-        };
+        let kind = cloud_kind(total, self.deck);
         let lcl = 125.0 * (self.temp - dew_point(self.q)).max(0.0);
         let (p, dp) = self.synoptic(self.hours, 0.5);
         let wind_speed = 2.0 + 0.55 * dp.abs() + 0.12 * p.abs();
