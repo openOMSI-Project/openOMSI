@@ -962,3 +962,27 @@ Reverse engineered from Omsi.exe and put in place of our own guesses:
   (share - 1/21) x 21/20 (Schlick's mean), for masked/transmap paint and for glass; the
   photo's structure is laid on in full (clamped 0.12..3.5 of its mean). Checked on the EN92
   (transmap + mask body, Fenster panes) against vanilla, and the driver's windscreen.
+* **Running for the bus** (`omsi-sim::people::runners`, not Omsi.exe's): a bus on its way
+  to a stop near the player and still 150 m off or more has one roll (`OMSI_RUNNER_CHANCE`,
+  0.05; 0 off), and somebody is put out on the pavement of the stop's street (within 12 m of
+  the line of the pavement at the stop: no paths into yards, buildings or side streets) out of the
+  player's sight, walking along to the stop through the pavement network
+  (`route_to_stop`): from before it, or from beyond it, coming towards the bus - put out as
+  far along as they walk until the bus gets there (taken to come at 6 m/s; there first, they wait at the stop as anybody), to be 35-60 m
+  before the stop or 25-45 m beyond it then. Somebody before the stop starts to run as the
+  bus overtakes them, somebody beyond it once the bus stands; they run along the pavement
+  and only the last 15 m straight to the doors (passengers walk straight to their target,
+  through whatever is in the way). Nobody appears in sight, and nobody put out is taken
+  away for room or for being far off until the bus has been. With them gone, somebody
+  else walking within 50 m runs; a timetable bus with nobody near gets somebody from
+  behind it out of sight; the player's bus does not - whoever runs for it was there to be
+  seen. (Earlier tries: rolled as the bus pulled in, nobody could be put out of sight;
+  placed once it stood, everybody came from behind out of sight; put out 320-450 m off only
+  on the stop's own path, nobody came from beyond, and the ones before it stood waiting,
+  too close, and were taken away beyond 400 m.) A run is a gait of its own above 2 m/s
+  (`human_omsi`: longer strides, the knees a little higher - at most 100 degrees, they had
+  folded through the thighs - a lean, the elbows bent; the walk below is Omsi.exe's as
+  ever), at 3.0-3.6 m/s; a timetable bus waits for them up to 12 s (`holds_bus`). The
+  player's bus is never held. A bus that leaves without them once it has stood: they stand
+  2 s, then walk back to wait. `OMSI_DEBUG_PAX` logs who was put out where, when they ran
+  and why, and why nobody could be put out.

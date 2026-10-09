@@ -70,6 +70,7 @@ pub mod pax_stops;
 pub mod pax_tick;
 pub mod pax_task;
 pub mod pax_driver;
+pub mod runners;
 // What the renderer has to follow, the money on the desk and what the people need of the map.
 pub mod bodies;
 pub mod money;
@@ -84,6 +85,7 @@ use cabin::*;
 use model::*;
 use pax::*;
 use pednet::*;
+use runners::*;
 
 // The module's API, at the paths it always had in omsi-app (some only returned, never named
 // outside).

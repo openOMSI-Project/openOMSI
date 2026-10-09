@@ -177,6 +177,7 @@ impl PeopleSim {
                 None => p.discomfort = 0.0,
             }
         }
+        self.runner_step(i, dt, world, buses, bus_ix);
         self.pax_move(i, dt, dt_ms, world, buses, bus_ix);
         self.pax_task(i, dt, world, buses, bus_ix, at_stops, player_bus, taken_ticket, remove);
         // (got off: a pedestrian now)

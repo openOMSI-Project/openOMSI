@@ -98,6 +98,9 @@ impl PeopleSim {
             served_stop: None,
             ai_visits: HashMap::new(),
             last_door_open: HashMap::new(),
+            runner_rolls: HashMap::new(),
+            runner_why: HashMap::new(),
+            runner_kept: HashMap::new(),
             holds: Vec::new(),
             ai_requests: Vec::new(),
             tickets: None,
@@ -303,7 +306,8 @@ impl PeopleSim {
         }
         let free = (0..self.people.len()).find(|&i| {
             let p = &self.people[i];
-            p.puppet.is_none() && !p.remote && matches!(p.state, State::Strolling(_) | State::Standing) && !self.seen(p.position)
+            // (not somebody put out to run for a bus, see `runners`)
+            p.puppet.is_none() && !p.remote && matches!(p.state, State::Strolling(_) | State::Standing) && !self.seen(p.position) && !self.put_out(p.id)
         });
         match free {
             Some(i) => {

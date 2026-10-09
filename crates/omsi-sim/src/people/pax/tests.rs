@@ -147,6 +147,39 @@ fn who_keeps_a_timetable_bus_at_its_stop() {
     assert_eq!(holds_bus(&x, bus), None);
 }
 
+/// Somebody late keeps a timetable bus at the stop while hurrying for it, from the street
+/// and at its doors - for `RUNNER_HOLD_MAX` at most - but not on the way up before the bus
+/// stands, nor once it has left them behind.
+#[test]
+fn somebody_late_keeps_a_timetable_bus_for_a_while() {
+    let bus = BusId::Ai(7);
+    let mut x = Pax::new(1.1, 0.5);
+    x.bus = Some(bus);
+    x.stop = Some(42);
+    x.task = Task::WalkingToBusstop;
+    let late = Late { phase: LatePhase::Approach, walk: 1.1, run: 3.3, hurried: 0.0, stood: false };
+    x.late = Some(late);
+    assert_eq!(holds_bus(&x, bus), None, "still on the way, the bus not standing yet");
+    x.late = Some(Late { phase: LatePhase::Hurry, ..late });
+    assert_eq!(holds_bus(&x, bus), Some(Some(42)));
+    x.task = Task::ToBus;
+    assert_eq!(holds_bus(&x, bus), Some(Some(42)), "hurrying to the gather point");
+    assert_eq!(holds_bus(&x, BusId::Ai(8)), None, "not another bus");
+    x.task = Task::WalkingToBus;
+    assert_eq!(holds_bus(&x, bus), Some(Some(42)));
+    x.late = Some(Late { phase: LatePhase::Hurry, hurried: RUNNER_HOLD_MAX + 0.1, ..late });
+    assert_eq!(holds_bus(&x, bus), None, "hurried longer than a bus waits");
+    x.task = Task::ToBus;
+    assert_eq!(holds_bus(&x, bus), None);
+    x.late = Some(Late { phase: LatePhase::Missed(1.0), ..late });
+    assert_eq!(holds_bus(&x, bus), None, "left behind");
+    // anybody else as ever
+    x.late = None;
+    assert_eq!(holds_bus(&x, bus), None);
+    x.task = Task::WalkingToBus;
+    assert_eq!(holds_bus(&x, bus), Some(Some(42)));
+}
+
 /// Smooth driving upsets nobody; a hard stop, a fast bend and a jerky foot do, as in
 /// Omsi.exe (#862).
 #[test]

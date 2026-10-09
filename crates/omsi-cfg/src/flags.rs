@@ -407,6 +407,7 @@ flags! {
     OMSI_ROAD_PHOTO_SLANT: Num, Test, Use, "-", "With OMSI_ROAD_PHOTO: from a driver's eye this far back instead of from above.";
     OMSI_ROOT: Text, Setup, Use, "found", "The OMSI 2 installation folder (also the content root for tests that need real content).";
     OMSI_RT_REFL_HALF: Bool, Switch, Use, "off", "Trace reflections at half size.";
+    OMSI_RUNNER_CHANCE: Num, Tuning, Use, "0.05", "Chance a late passenger runs for a bus standing at a stop (0: never, 1: every bus).";
     OMSI_SAFE_GPU: Num, Setup, Use, "0", "Restarts after a lost graphics device: lighter on the card each time. Set at runtime on Android and by the restart.";
     OMSI_SCREEN_AT: Text, Setup, Once, "-", "x,y: the screen (a point on the desktop, pixels) the game window opens on; the launcher sets it to where it stands.";
     OMSI_SEED: Num, Test, Use, "random", "Seed of the scripts' random numbers (repeat a session).";
