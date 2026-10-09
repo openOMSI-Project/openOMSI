@@ -289,73 +289,14 @@ pub fn find_texture(name: &str, dirs: &[&Path]) -> Option<PathBuf> {
 }
 
 fn find_texture_uncached(name: &str, dirs: &[&Path]) -> Option<PathBuf> {
-    find_texture_in_season(name, dirs, season_folder().as_deref()).or_else(|| find_texture_elsewhere(name, dirs))
-}
-
-/// A spline's or object's texture missing from its folders: the nearest same-named file under `Splines`/`Sceneryobjects`.
-fn find_texture_elsewhere(name: &str, dirs: &[&Path]) -> Option<PathBuf> {
-    let name = name.trim();
-    if name.is_empty() || name.contains(['/', '\\']) {
-        return None;
-    }
-    let first = dirs.first()?;
-    let top = first.ancestors().find_map(|a| {
-        a.file_name().and_then(|f| f.to_str()).filter(|f| f.eq_ignore_ascii_case("Splines") || f.eq_ignore_ascii_case("Sceneryobjects")).map(|f| f.to_ascii_lowercase())
-    })?;
-    static INDEX: std::sync::OnceLock<Mutex<HashMap<String, (u64, Arc<HashMap<String, Vec<PathBuf>>>)>>> = std::sync::OnceLock::new();
-    let generation = omsi_cfg::content_generation();
-    let index = {
-        let mut all = INDEX.get_or_init(|| Mutex::new(HashMap::new())).lock();
-        match all.get(&top) {
-            Some((g, i)) if *g == generation => i.clone(),
-            _ => {
-                let i = Arc::new(texture_index(&top));
-                all.insert(top.clone(), (generation, i.clone()));
-                i
-            }
-        }
-    };
-    let key = |p: &Path| p.file_stem().and_then(|s| s.to_str()).map(|s| s.to_ascii_lowercase());
-    let want = Path::new(name);
-    if !want.extension().and_then(|x| x.to_str()).is_some_and(|x| ["dds", "bmp", "jpg", "jpeg", "png", "tga"].iter().any(|t| x.eq_ignore_ascii_case(t))) {
-        return None;
-    }
-    let candidates = index.get(&key(want)?)?;
-    let shared = |p: &Path| p.components().zip(first.components()).take_while(|(a, b)| a == b).count();
-    let in_texture = |p: &Path| p.parent().and_then(|d| d.file_name()).and_then(|f| f.to_str()).is_some_and(|f| f.eq_ignore_ascii_case("texture"));
-    let same_ext = |p: &Path| p.extension().zip(want.extension()).is_some_and(|(a, b)| a.eq_ignore_ascii_case(b));
-    let found = candidates.iter().max_by_key(|p| (in_texture(p), shared(p), same_ext(p)))?.clone();
-    static SAID: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
-    if SAID.get_or_init(Default::default).lock().insert(name.to_ascii_lowercase()) {
-        log::info!("texture {name} is not in its folders ({}); taken from {}", first.display(), found.display());
-    }
-    Some(found)
-}
-
-/// Image files under `top` (`splines`/`sceneryobjects`) of every content root and mounted archive, by stem.
-fn texture_index(top: &str) -> HashMap<String, Vec<PathBuf>> {
-    let mut out: HashMap<String, Vec<PathBuf>> = HashMap::new();
-    let mut stack: Vec<PathBuf> = omsi_cfg::content_roots()
-        .into_iter()
-        .filter_map(|r| {
-            let (name, _) = omsi_cfg::vfs::list_dir(&r)?.into_iter().find(|(n, d)| *d && n.to_str().is_some_and(|n| n.eq_ignore_ascii_case(top)))?;
-            Some(r.join(name))
-        })
-        .collect();
-    while let Some(dir) = stack.pop() {
-        let Some(entries) = omsi_cfg::vfs::list_dir(&dir) else { continue };
-        for (name, is_dir) in entries {
-            let p = dir.join(name);
-            if is_dir {
-                stack.push(p);
-            } else if p.extension().and_then(|x| x.to_str()).is_some_and(|x| ["dds", "bmp", "jpg", "png", "tga"].iter().any(|t| x.eq_ignore_ascii_case(t))) {
-                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                    out.entry(stem.to_ascii_lowercase()).or_default().push(p);
-                }
-            }
-        }
-    }
-    out
+    // A name is looked for in the folders the model asks it from and the OMSI `Texture`
+    // folder, as Omsi.exe looks for it: one that is nowhere there is missing and its slot is
+    // drawn bare. Searching a same-named file in *another* folder (675f3d90, St-Servan's
+    // white pavements) painted signs and crossings with pictures the original leaves blank -
+    // the GG2 gantries with the pack's stock sign, the Grundorf Island `Sign` plates and
+    // tunnel signs with the `Road` folder's road textures, the `Generic` objects with a
+    // London bus stop's `text.bmp` - so it is not done.
+    find_texture_in_season(name, dirs, season_folder().as_deref())
 }
 
 fn find_texture_in_season(name: &str, dirs: &[&Path], season: Option<&str>) -> Option<PathBuf> {
@@ -746,21 +687,37 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// A texture that is nowhere in the model's own folders is missing, as in Omsi.exe: it is
+    /// not taken from another folder, however near - the GG2 gantries' `[matl_freetex]`
+    /// placeholder `gantry_m1_2_1.tga` used to draw the pack's `texture\gantry\...png` sign,
+    /// and the Grundorf Island `Sign` plates and tunnel signs the `Road` folder's
+    /// `hks_bridge_concrete.bmp`, `hw1.bmp`, `str_asphdrk_*.bmp` and `bysign.png`, which the
+    /// original leaves bare.
     #[test]
-    fn a_spline_texture_missing_from_its_folders_comes_from_another_spline_folder() {
-        let dir = std::env::temp_dir().join(format!("omsi-elsewhere-{}", std::process::id()));
-        let (own, other) = (dir.join("Splines/Pack/Roads/texture"), dir.join("Splines/Pack/Paths/texture"));
-        std::fs::create_dir_all(&own).unwrap();
-        std::fs::create_dir_all(&other).unwrap();
-        std::fs::write(other.join("gehweg.bmp"), b"x").unwrap();
-        std::fs::write(other.join("0.png"), b"x").unwrap();
+    fn a_missing_texture_is_not_taken_from_another_folder() {
+        let dir = std::env::temp_dir().join(format!("omsi-elsewhere-none-{}", std::process::id()));
+        let own = dir.join("Sceneryobjects/GG2/texture");
+        let nested = own.join("gantry");
+        let sibling = dir.join("Sceneryobjects/Other/texture");
+        let spline = dir.join("Splines/Pack/Roads/texture");
+        let spline_deep = spline.join("sub");
+        let spline_sibling = dir.join("Splines/Pack/Paths/texture");
+        for d in [&nested, &sibling, &spline_deep, &spline_sibling] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        for d in [&nested, &sibling] {
+            std::fs::write(d.join("gantry_m1_2_1.png"), b"x").unwrap();
+        }
+        for d in [&spline_deep, &spline_sibling] {
+            std::fs::write(d.join("gehweg.bmp"), b"x").unwrap();
+        }
         omsi_cfg::add_content_root(dir.clone());
-        assert_eq!(find_texture_uncached("gehweg.bmp", &[&own]), Some(other.join("gehweg.bmp")));
-        assert_eq!(find_texture_uncached("0", &[&own]), None);
-        // content installed while the game runs is indexed again
-        std::fs::write(other.join("late.bmp"), b"x").unwrap();
+        assert_eq!(find_texture_uncached("gantry_m1_2_1.tga", &[&own]), None);
+        assert_eq!(find_texture_uncached("gehweg.bmp", &[&spline]), None);
+        // and a picture installed while the game runs stays missing too
+        std::fs::write(nested.join("late.bmp"), b"x").unwrap();
         omsi_cfg::content_changed();
-        assert_eq!(find_texture_uncached("late.bmp", &[&own]), Some(other.join("late.bmp")));
+        assert_eq!(find_texture_uncached("late.bmp", &[&own]), None);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

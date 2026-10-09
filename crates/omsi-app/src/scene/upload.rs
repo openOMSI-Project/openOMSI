@@ -396,10 +396,25 @@ impl World {
                     omsi_scenery::sco::RenderType::Surface | omsi_scenery::sco::RenderType::OnSurface
                 );
                 let faded = slot_ov.iter().any(|o| o.alphascale.as_ref().is_some_and(|v| !v.trim().is_empty()));
-                let alpha = if alpha == AlphaMode::Blend && surface_phase && tex.is_some() && transmap.is_none() && !faded && {
+                // A blend with no alpha to take it from is opaque, whatever the picture is
+                // made of: one with no alpha channel, one whose alpha channel has no
+                // transparent texel at all (the GG2 signs' `directions\*.png` pictures are
+                // fully opaque), and one whose texture is missing altogether (the fallback
+                // there is the opaque white). Omsi.exe's blend writes depth in all of them;
+                // left a no-write blend, the surface phases drawn after the slot came over
+                // it and ate it - the signs' blue faded away into the background, and so did
+                // the bare gantry panel. (Not a slot that has no texture on purpose:
+                // `[useTextTexture]` / `[useScriptTexture]` draw their own picture, which
+                // blends by its alpha.)
+                let opaque_blend = if !surface_phase || transmap.is_some() || faded || generated || is_null_texture(&m.texture) {
+                    false
+                } else if tex.is_none() {
+                    true
+                } else {
                     let dirs_ref: Vec<&Path> = dirs.iter().map(|p| p.as_path()).collect();
-                    omsi_texture::find_texture(&m.texture, &dirs_ref).is_some_and(|p| gpu.textures.get(&p).is_some_and(|e| !e.alpha))
-                } {
+                    omsi_texture::find_texture(&m.texture, &dirs_ref).is_some_and(|p| super::staging::picture_is_opaque(&p))
+                };
+                let alpha = if alpha == AlphaMode::Blend && opaque_blend {
                     AlphaMode::Opaque
                 } else {
                     alpha

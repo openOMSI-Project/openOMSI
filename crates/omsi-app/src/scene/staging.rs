@@ -196,6 +196,25 @@ pub(super) fn is_white_lightmap(rgba: &[u8]) -> bool {
     !rgba.is_empty() && rgba.chunks_exact(4).all(|p| p[0] >= 242 && p[1] >= 242 && p[2] >= 242)
 }
 
+/// Whether the picture at `path` has no transparent texel at all (no alpha channel, or one
+/// that is 255 throughout), read once per file. A `[matl_alpha] 2` slot that names one has
+/// nothing to blend by, so its fragments are drawn opaque (`World::type_gpu`): the GG2 signs'
+/// pictures (`directions\temp_1.png`, `terminal_east_2.tga`) are like that - an alpha channel
+/// that never goes below 255 - and left a no-write blend, the surface phases drawn after them
+/// ate the signs' blue and the gantries' bare panels.
+pub(super) fn picture_is_opaque(path: &Path) -> bool {
+    static MEMO: std::sync::OnceLock<Mutex<HashMap<PathBuf, bool>>> = std::sync::OnceLock::new();
+    let memo = MEMO.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(v) = memo.lock().get(path) {
+        return *v;
+    }
+    let v = omsi_texture::decode_file(path)
+        .map(|i| !i.has_alpha || i.rgba.chunks_exact(4).all(|p| p[3] == 255))
+        .unwrap_or(false);
+    memo.lock().insert(path.to_path_buf(), v);
+    v
+}
+
 /// [`is_white_lightmap`] of the light map `name` (found in `dirs`, read once per file);
 /// `None` when the file is not there.
 pub(super) fn lightmap_is_white(name: &str, dirs: &[&Path]) -> Option<bool> {
