@@ -27492,3 +27492,15 @@ _version: 2
 
 "the host's season ({}) differs from the one loaded here ({}) - start the game again to see it":
   fr: "la saison de l'hôte ({}) diffère de celle chargée ici ({}) - relancez le jeu pour la voir"
+
+"Standing passengers":
+  pl: "Pasażerowie stojący"
+
+"The chance a passenger stands although a seat is free":
+  pl: "Szansa, że pasażer stanie, choć jest wolne miejsce siedzące"
+
+"Never":
+  pl: "Nigdy"
+
+"Always":
+  pl: "Zawsze"

@@ -300,7 +300,7 @@ impl PeopleSim {
                 let Some(stop) = p.stop else { return };
                 if let Some(bn) = bn {
                     if bn.speed.abs() < 3.0 && self.in_stop_box(stop, bn.id) {
-                        if let Some(k) = self.reserve_place(bn.id, bn.cabin.seats.len(), &bn.places_off) {
+                        if let Some(k) = self.reserve_place(bn.id, &bn.cabin.seats, &bn.places_off) {
                             let (tk, id) = self.decide_pax_ticket(i, bn);
                             let price = self.tickets.as_ref().and_then(|t| t.tickets.get(id.saturating_sub(1) as usize)).map(|t| t.value).unwrap_or(0.0);
                             let pp = self.pax_mut(i).unwrap();

@@ -685,11 +685,24 @@ fn places_follow_their_own_variables() {
     assert_eq!(off, [true, false, false, false], "only the place whose variable is 0 is off");
     let mut h = PeopleSim::new(Path::new("/nonexistent"), 200);
     for _ in 0..40 {
-        let k = h.reserve_place(BusId::Player, 4, &off).expect("a free place");
+        let k = h.reserve_place(BusId::Player, &cabin.seats, &off).expect("a free place");
         assert_ne!(k, 0, "nobody takes a place that is switched off");
         h.free_seat(BusId::Player, k);
     }
-    assert_eq!(h.reserve_place(BusId::Player, 4, &[true; 4]), None, "all off: nobody gets on");
+    assert_eq!(h.reserve_place(BusId::Player, &cabin.seats, &[true; 4]), None, "all off: nobody gets on");
+    // a free seat comes first (places 0, 1 seats; 2, 3 standing), standing once they are full
+    h.stand_chance = 0.0;
+    let mut got: Vec<usize> = (0..4).filter_map(|_| h.reserve_place(BusId::Player, &cabin.seats, &[false; 4])).collect();
+    got[..2].sort();
+    assert_eq!(&got[..2], [0, 1], "the seats first");
+    assert!(got[2..].iter().all(|k| *k >= 2), "then the standing places");
+    for k in 0..4 {
+        h.free_seat(BusId::Player, k);
+    }
+    h.stand_chance = 1.0;
+    let k = h.reserve_place(BusId::Player, &cabin.seats, &[false; 4]).unwrap();
+    assert!(k >= 2, "one who wants to stand stands");
+    h.free_seat(BusId::Player, k);
     v.set_var("layout_long", 1.0);
     assert_eq!(places_off(&v, &cabin), [false; 4]);
     // somebody sits on the tip-up seat (place 1) of this bus, somebody on place 1 of another

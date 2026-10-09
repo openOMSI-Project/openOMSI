@@ -1127,6 +1127,7 @@ fn radio_stations(ui: &mut Ui, r: Rect) -> f32 {
 fn gameplay_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, cols: [Rect; 2]) -> [f32; 2] {
     let mut c = Col::new(ui, cols[0], "Passengers");
     sel_setting(ui, s, dirty, "s-board", c.row(), "Boarding", "boarding", &[("auto", "Pay and take the ticket"), ("pay", "The driver sells the ticket"), ("walk", "Just walk in")]);
+    sel_setting(ui, s, dirty, "s-stand", c.row(), "Standing passengers", "standing_chance", &[("0", "Never"), ("5", "5%"), ("10", "10%"), ("25", "25%"), ("50", "50%"), ("100", "Always")]);
     toggle_setting(ui, s, dirty, c.row(), "Passengers pay the exact fare", "exact_fare");
     let mut pd = get(s, "pax_density").as_f64().unwrap_or(1.0) as f32;
     if ui.slider("s-pax", c.row(), &mut pd, 0.0, 2.0, 0.1, "How many passengers", &|v| format!("{:.0}%", v * 100.0)) {
@@ -2996,7 +2997,7 @@ mod settings_tests {
         // (the radio stations: one, see `frame`)
         let sound = vec!["s-vol", "s-volai", "s-volsc", "set-doppler", "s-voices", "radio-name-0", "radio-url-0", "radio-del-0", "radio-add"];
         let gameplay = vec![
-            "s-board", "set-exact_fare", "s-pax", "set-get_up", "s-unsched", "s-maxsched", "s-maxpark", "set-ai_wait_timed_stops_only",
+            "s-board", "s-stand", "set-exact_fare", "s-pax", "set-get_up", "s-unsched", "s-maxsched", "s-maxpark", "set-ai_wait_timed_stops_only",
             "s-maint", "set-collision_vehicles", "set-collision_objects", "set-collision_pedestrians", "set-use_real_time", "set-use_real_date", "set-time_sync", "set-metar_sync", "s-timespeed",
         ];
         let general = vec![

@@ -2249,6 +2249,7 @@ fn select_options(key: &str) -> Vec<(&'static str, &'static str)> {
         "resolution" => crate::launcher::pages::RESOLUTIONS.to_vec(),
         "navigator_corner" => vec![("top-left", "Top left"), ("top-right", "Top right"), ("bottom-left", "Bottom left"), ("bottom-right", "Bottom right")],
         "boarding" => vec![("auto", "Pay and take the ticket"), ("pay", "The driver sells the ticket"), ("walk", "Just walk in")],
+        "standing_chance" => vec![("0", "Never"), ("5", "5%"), ("10", "10%"), ("25", "25%"), ("50", "50%"), ("100", "Always")],
         "pax_voices" => vec![("all", "Greetings and tickets"), ("tickets", "Only the ticket asked for"), ("off", "Silent")],
         "maintenance" => vec![("0", "Infinite (no wear)"), ("1", "Very bad"), ("2", "Bad"), ("3", "Normal"), ("4", "Good")],
         "ai_unsched_factor" => vec![("25", "25%"), ("50", "50%"), ("75", "75%"), ("100", "100%"), ("150", "150%"), ("200", "200%")],
@@ -2326,6 +2327,7 @@ fn sync_live(app: &mut App) {
     if let Some(h) = app.session.humans.as_mut() {
         h.exact_fare = s.exact_fare;
         h.boarding = s.boarding.clone();
+        h.stand_chance = s.standing_chance;
         h.voices = match s.pax_voices.as_str() {
             "off" => 2,
             "tickets" => 1,
@@ -2354,6 +2356,7 @@ fn options_pages(app: &App) -> Vec<Page> {
         switch_row(app, "info_bar", "Information bar (Shift+Y)", "Displays information such as the time, speed, and other details at the top of the screen"),
         switch_row(app, "exact_fare", "Passengers pay the exact fare", "No change is given at the cash desk"),
         pick("boarding", "Boarding", "How passengers get their tickets"),
+        pick("standing_chance", "Standing passengers", "The chance a passenger stands although a seat is free"),
         pick("maintenance", "Maintenance", later),
         pick("ai_unsched_factor", "Random traffic", later),
         pick("ai_max_scheduled", "Timetable vehicles", later),

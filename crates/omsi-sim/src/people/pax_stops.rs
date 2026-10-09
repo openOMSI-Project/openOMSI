@@ -124,14 +124,19 @@ impl PeopleSim {
         self.stops.get(&stop).is_some_and(|s| s.buses.iter().any(|b| b.0 == bus))
     }
 
-    /// sub_7e910c: a free place of the bus, at random (none free: nobody gets on). `off`:
-    /// the places its scripts have switched off (#721), which nobody takes.
-    pub fn reserve_place(&mut self, bus: BusId, n: usize, off: &[bool]) -> Option<usize> {
+    /// sub_7e910c: a free place of the bus (none free: nobody gets on). `off`: the places
+    /// its scripts have switched off (#721), which nobody takes. Unlike OMSI's pick among
+    /// all the free places, a seat comes first: a standing place only by `stand_chance`
+    /// or once the seats are full.
+    pub fn reserve_place(&mut self, bus: BusId, places: &[Seat], off: &[bool]) -> Option<usize> {
+        let n = places.len();
         let seats = self.seats.entry(bus).or_insert_with(|| vec![false; n]);
         if seats.len() < n {
             seats.resize(n, false);
         }
-        let free: Vec<usize> = (0..n).filter(|k| !seats[*k] && !off.get(*k).copied().unwrap_or(false)).collect();
+        let (sit, stand): (Vec<usize>, Vec<usize>) =
+            (0..n).filter(|k| !seats[*k] && !off.get(*k).copied().unwrap_or(false)).partition(|k| places[*k].seated);
+        let free = if stand.is_empty() || (!sit.is_empty() && self.rand_f() as f32 >= self.stand_chance) { sit } else { stand };
         if free.is_empty() {
             return None;
         }
