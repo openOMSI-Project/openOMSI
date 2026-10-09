@@ -501,6 +501,10 @@ fn assemble_app(args: Args, settings: settings::Settings) -> App {
     let is_server = args.server.is_some();
     // What loads, starts or reads the clock, made one after the other in a fixed order before
     // the App and its groups are put together (their logs and threads come in this order).
+    // Steam must be initialized before the graphics instance and window so its overlay can
+    // hook the rendering process before the first surface is created.
+    #[cfg(steam)]
+    let steam = crate::steam::Steam::start();
     let instance = graphics_instance();
     let vr_nav_profiles = crate::vr_navigator::Profiles::load();
     let ui = ui::Ui::new();
@@ -724,7 +728,7 @@ fn assemble_app(args: Args, settings: settings::Settings) -> App {
             discord: None,
             discord_t: 0.0,
             #[cfg(steam)]
-            steam: None,
+            steam,
             update_watch,
             presence,
             plugins: None,
