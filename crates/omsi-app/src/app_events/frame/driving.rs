@@ -59,6 +59,7 @@ impl App {
                 self.cam.in_cab,
                 !matches!(self.view.as_str(), "free" | "foot"),
             );
+            crate::plugins::plugin_impacts(&p.vehicle, &mut self.integrations);
             steps::deliver_player_impacts(p, self.session.traffic.as_mut());
             // After scripts: zero-movement `_drag` for a held switch. Running this
             // *before* `tick` cleared Aachen ibox momentary flags (incl. digit 0 /
@@ -66,7 +67,13 @@ impl App {
             // not already consumed them (#744).
             if self.input.dragging {
                 let (dx, dy) = std::mem::take(&mut self.input.drag_delta);
-                p.drag(dx, dy);
+                if let Some((map_id, ref ev)) = self.input.pressed_scenery_object {
+                    if let Some(w) = self.world.as_ref() {
+                        w.scenery_object_drag(map_id, ev, dx, dy);
+                    }
+                } else {
+                    p.drag(dx, dy);
+                }
             }
             // (not in the headset: the player's own head moves there, and a head
             // thrown about by the bus on top of it made the whole cab sway and
@@ -99,7 +106,13 @@ impl App {
         } else if self.input.dragging {
             // paused / no ground: still deliver held-switch `_drag` (was unconditional before)
             let (dx, dy) = std::mem::take(&mut self.input.drag_delta);
-            p.drag(dx, dy);
+            if let Some((map_id, ref ev)) = self.input.pressed_scenery_object {
+                if let Some(w) = self.world.as_ref() {
+                    w.scenery_object_drag(map_id, ev, dx, dy);
+                }
+            } else {
+                p.drag(dx, dy);
+            }
         }
         // a script that set the time of day (`(S.S.Time)`) moves the game's clock
         if let Some(t) = p.vehicle.host.time_written.take() {

@@ -103,6 +103,11 @@ impl App {
     /// The cursor's new place in the window, as the window reported it or as the mouse
     /// steering's point stands in it.
     pub(super) fn cursor_moved_to(&mut self, x: f32, y: f32) {
+        // a plugin's slider or panel being dragged follows the cursor
+        if self.plugin_drag_move(x, y) {
+            self.input.cursor = (x, y);
+            return;
+        }
         // a mirror panel being dragged follows the cursor (nothing else of the cursor's
         // work is done meanwhile, and outside a drag none of it is touched)
         if self.gfx.mirror_hud.dragging() {
@@ -424,6 +429,9 @@ impl App {
         if self.html_object_click(pressed) {
             return;
         }
+        if self.scenery_object_click_event(pressed) {
+            return;
+        }
         // on foot: the own bus's switches, doors and flaps from inside it or standing by it
         if self.view == "foot" && !self.foot_reaches_bus() {
             return;
@@ -522,8 +530,44 @@ impl App {
         true
     }
 
+    /// A left click (or let go) over a scenery object carrying a `[mouseevent]`.
+    fn scenery_object_click_event(&mut self, pressed: bool) -> bool {
+        let Some(w) = self.world.as_ref() else { return false };
+        if !pressed {
+            if let Some((map_id, ev)) = self.input.pressed_scenery_object.take() {
+                w.scenery_object_release(map_id, &ev);
+                self.input.dragging = false;
+                return true;
+            }
+            return false;
+        }
+        let Some((o, d, spread)) = self.cursor_ray_now() else { return false };
+        let veh_has_control = if self.view == "foot" && !self.foot_reaches_bus() {
+            false
+        } else {
+            self.player.as_ref().is_some_and(|p| {
+                p.pick(o, d, spread).is_some() || p.pick_trailer(o, d, spread).is_some()
+            })
+        };
+        if veh_has_control {
+            return false;
+        }
+        let Some(hit) = w.scenery_object_hit(o, d, crate::input_script::SCENERY_OBJECT_REACH, spread) else { return false };
+        if self.player.as_ref().and_then(|p| p.opaque_body_hit(o, d)).is_some_and(|t| t < hit.t) {
+            return false;
+        }
+        if let Some(p) = self.player.as_mut() {
+            p.release();
+        }
+        self.input.drag_delta = (0.0, 0.0);
+        w.scenery_object_click(hit.map_id, &hit.event);
+        self.input.pressed_scenery_object = Some((hit.map_id, hit.event));
+        self.input.dragging = true;
+        true
+    }
+
     /// The ray under the cursor now (see [`Self::cockpit_cursor_ray`]).
-    fn cursor_ray_now(&self) -> Option<(glam::DVec3, glam::Vec3, f32)> {
+    pub(crate) fn cursor_ray_now(&self) -> Option<(glam::DVec3, glam::Vec3, f32)> {
         let (cam, s) = self.camera.as_ref().zip(self.gfx.surface.as_ref())?;
         Some(self.cockpit_cursor_ray(cam, (s.config.width, s.config.height)))
     }
@@ -543,7 +587,11 @@ impl App {
             return;
         }
         let (dx, dy) = std::mem::take(&mut self.input.drag_delta);
-        if let Some(p) = self.player.as_mut() {
+        if let Some((map_id, ref ev)) = self.input.pressed_scenery_object {
+            if let Some(w) = self.world.as_ref() {
+                w.scenery_object_drag(map_id, ev, dx, dy);
+            }
+        } else if let Some(p) = self.player.as_mut() {
             p.drag(dx, dy);
         }
     }

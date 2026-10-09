@@ -15,6 +15,7 @@ struct MainTargets<'t> {
     depth_first: wgpu::LoadOp<f32>,
     depth_store: wgpu::StoreOp,
     parts: usize,
+    presurface_prefill: bool,
     /// the bundles of the last part (all of them when the pass is not split)
     bundles: &'t [wgpu::RenderBundle],
 }
@@ -48,27 +49,13 @@ impl Renderer {
         // Apple's hidden-surface removal already handles ordinary opaque draws.
         // Preserve that fast path. In the measured mixed views, prefilling MSAA
         // depth before cutouts/blends saved more hidden shading than the pass cost.
-        let needs_msaa_prepass = !cfg!(target_vendor = "apple")
-            || plan.main_batches.iter().chain(&plan.cab_batches).any(|batch| {
-                matches!(
-                    batch.pipe / 4,
-                    PIPE_ALPHA_TEST | PIPE_BLEND | PIPE_BLEND_NO_WRITE
-                )
-            });
-        let msaa_prepass = enhanced
-            && !has_presurface
-            && (with_overlays || f.xr_view)
-            && !single
-            && prepass_on
-            && needs_msaa_prepass
-            && !f.env.no_msaa_prepass;
-        let parts = if !cfg!(any(target_os = "macos", target_os = "ios")) && main_bundles.len() >= 2 && !f.env.no_main_split {
+        let msaa_prepass = plan.msaa_prepass(self, f);
+        let presurface_prefill = plan.presurface_prefill(self, f);
+        let parts = if presurface_prefill { 1 } else if !cfg!(any(target_os = "macos", target_os = "ios")) && main_bundles.len() >= 2 && !f.env.no_main_split {
             main_bundles.len().min(2)
-        } else {
-            1
-        };
+        } else { 1 };
         let mut lead = (parts > 1).then(|| self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("main part") }));
-        if msaa_prepass {
+        if msaa_prepass && !presurface_prefill {
             if let (Some(pipes), Some(t)) = (self.prepass_msaa_pipelines.as_ref(), targets.as_ref()) {
                 self.encode_msaa_prepass(lead.as_mut().unwrap_or(&mut *encoder), scene, &t.1, pipes, &plan.prepass_batches, timers);
             }
@@ -120,7 +107,7 @@ impl Renderer {
             };
             let per_part = main_bundles.len().div_ceil(parts.max(1));
             let sky_clear = wgpu::LoadOp::Clear(wgpu::Color { r: sky.x as f64, g: sky.y as f64, b: sky.z as f64, a: 1.0 });
-            let depth_first = if share_depth || msaa_prepass { wgpu::LoadOp::Load } else { wgpu::LoadOp::Clear(0.0) };
+            let depth_first = if share_depth || (msaa_prepass && !presurface_prefill) { wgpu::LoadOp::Load } else { wgpu::LoadOp::Clear(0.0) };
             let tail = (parts - 1) * per_part;
             let mt = MainTargets {
                 draw_view,
@@ -141,6 +128,7 @@ impl Renderer {
                     wgpu::StoreOp::Discard
                 },
                 parts,
+                presurface_prefill,
                 bundles: &main_bundles[tail..],
             };
             for g in 0..parts.saturating_sub(1) {
@@ -176,6 +164,10 @@ impl Renderer {
         // can hide the opaque geometry behind samples the colour pass leaves
         // uncovered (the sky then shows through buildings/terrain behind foliage).
         // The main alpha-tested pass writes matching depth as it draws the colour.
+        if self.profiling {
+            *self.counts.borrow_mut().entry("msaa prepass batches").or_default() +=
+                prepass_batches.iter().filter(|b| b.pipe / 2 != PIPE_ALPHA_TEST).count() as f64;
+        }
         encode_batches_filtered(
             &mut pass,
             scene,
@@ -241,7 +233,7 @@ impl Renderer {
 
     /// The main pass (the last part of a split one).
     fn encode_main(&self, encoder: &mut wgpu::CommandEncoder, scene: &Scene, f: &FrameCtx, plan: &DrawPlan, mt: &MainTargets, timers: &mut PassTimers) {
-        let MainTargets { draw_view, resolve_view, depth_view, hdr, pp, sky_pipe, sky_clear, depth_first, depth_store, parts, bundles } = *mt;
+        let MainTargets { draw_view, resolve_view, depth_view, hdr, pp, sky_pipe, sky_clear, depth_first, depth_store, parts, presurface_prefill, bundles } = *mt;
         // the enhanced pass's screen mask beside the picture (see `MASK_FORMAT`)
         let mask_attachment = hdr.map(|h| wgpu::RenderPassColorAttachment {
             view: h.mask_msaa.as_ref().unwrap_or(&h.mask),
@@ -310,9 +302,22 @@ impl Renderer {
             pass.set_index_buffer(self.sky_mesh.1.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..self.sky_mesh.2, 0, 0..1);
         }
+        if presurface_prefill {
+            // Colour and seal the excavation first; prefill ordinary scenery without
+            // storing and reloading the colour attachments in a separate pass.
+            encode_batches(&mut pass, scene, &plan.main_batches[..plan.presurface_batch_end], |pipe| main_pipeline(pp, pipe));
+            let pipes = self.presurface_msaa_pipelines.as_ref().unwrap();
+            if self.profiling && f.with_overlays {
+                *self.counts.borrow_mut().entry("msaa prepass batches").or_default() +=
+                    plan.msaa_safe_batches.iter().filter(|b| b.pipe / 2 != PIPE_ALPHA_TEST).count() as f64;
+            }
+            encode_batches_filtered(&mut pass, scene, &plan.msaa_safe_batches,
+                |b| b.pipe / 2 != PIPE_ALPHA_TEST,
+                |pipe| &pipes[if pipe >= 4 { pipe as usize - 2 } else { pipe as usize }]);
+        }
         if bundles.is_empty() {
             pass.set_bind_group(0, scene.camera_bind_group.as_ref().unwrap(), &[]);
-            encode_batches(&mut pass, scene, &plan.main_batches, |pipe| {
+            encode_batches(&mut pass, scene, if presurface_prefill { &plan.main_batches[plan.presurface_batch_end..] } else { &plan.main_batches }, |pipe| {
                 main_pipeline(pp, pipe)
             });
         } else {

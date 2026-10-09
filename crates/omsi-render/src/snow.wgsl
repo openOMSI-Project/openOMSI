@@ -37,6 +37,9 @@ struct Camera {
     lamp_view_proj: array<mat4x4<f32>, 4>,
     lamp_shadow: vec4<f32>,
     tree_wind: vec4<f32>,
+    inside2_a: vec4<f32>,
+    inside2_b: vec4<f32>,
+    inside2_c: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
@@ -76,17 +79,20 @@ fn hash4(n: u32) -> vec4<f32> {
 
 // 1 inside the player's own vehicle (its box, a little wider): no snow falls in the cab
 fn in_own_vehicle(p: vec3<f32>) -> bool {
-    if (camera.inside_c.w < 0.5) {
-        return false;
-    }
-    let d = p - camera.inside_a.xyz;
-    let sh = camera.inside_a.w;
-    let ch = camera.inside_b.x;
-    let x = d.x * ch - d.y * sh - camera.inside_c.x;
-    let y = d.x * sh + d.y * ch - camera.inside_c.y;
-    let z = d.z - camera.inside_c.z;
-    let h = camera.inside_b.yzw + vec3<f32>(0.3);
-    return abs(x) < h.x && abs(y) < h.y && abs(z) < h.z;
+    // (the front and, of an articulated bus, the rear section: it snowed in the back, #1967;
+    // without branches - two boxes tested with early returns and short-circuits brought
+    // Apple's M4 shader compiler service down, XPC_ERROR_CONNECTION_INTERRUPTED, and the
+    // game fell back to no snowfall)
+    return any(vec2<bool>(in_box(p, camera.inside_a, camera.inside_b, camera.inside_c), in_box(p, camera.inside2_a, camera.inside2_b, camera.inside2_c)));
+}
+
+fn in_box(p: vec3<f32>, a: vec4<f32>, b: vec4<f32>, c: vec4<f32>) -> bool {
+    let d = p - a.xyz;
+    let sh = a.w;
+    let ch = b.x;
+    let q = vec3<f32>(d.x * ch - d.y * sh - c.x, d.x * sh + d.y * ch - c.y, d.z - c.z);
+    let h = b.yzw + vec3<f32>(0.3);
+    return select(false, all(abs(q) < h), c.w >= 0.5);
 }
 
 @vertex

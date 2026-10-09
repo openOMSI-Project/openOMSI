@@ -1,4 +1,4 @@
-//! Updates from the project's GitHub releases (github.com/openOMSI-Project/openOMSI).
+//! Updates from the project's GitHub releases (github.com/openOMSI-org/openOMSI).
 //!
 //! Every push to main publishes a release `v<MAJOR.MINOR.COMMIT>` with one archive per
 //! platform (see .github/workflows/release.yml). The launcher asks the GitHub API for the
@@ -43,9 +43,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// The project on GitHub.
-pub const REPO: &str = "openOMSI-Project/openOMSI";
-pub const REPO_URL: &str = "https://github.com/openOMSI-Project/openOMSI";
-const LATEST_API: &str = "https://api.github.com/repos/openOMSI-Project/openOMSI/releases/latest";
+pub const REPO: &str = "openOMSI-org/openOMSI";
+pub const REPO_URL: &str = "https://github.com/openOMSI-org/openOMSI";
+const LATEST_API: &str = "https://api.github.com/repos/openOMSI-org/openOMSI/releases/latest";
 
 /// A release newer than this build, with the file for this platform.
 #[derive(Clone, Debug, PartialEq)]
@@ -898,7 +898,7 @@ mod tests {
     fn the_platform_file_of_a_github_release() {
         let name = asset_name("0.1.9").unwrap();
         let v = serde_json::json!({
-            "tag_name": "v0.1.9", "html_url": "https://github.com/openOMSI-Project/openOMSI/releases/tag/v0.1.9", "body": "notes",
+            "tag_name": "v0.1.9", "html_url": "https://github.com/openOMSI-org/openOMSI/releases/tag/v0.1.9", "body": "notes",
             "assets": [
                 {"name": "openOMSI-0.1.9-server-linux-x64.zip", "browser_download_url": "https://x/server", "size": 5},
                 {"name": name, "browser_download_url": "https://x/mine", "size": 42, "digest": "sha256:ABCDEF"}

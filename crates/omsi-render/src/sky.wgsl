@@ -33,6 +33,9 @@ struct Camera {
     lamp_view_proj: array<mat4x4<f32>, 4>,
     lamp_shadow: vec4<f32>,
     tree_wind: vec4<f32>,
+    inside2_a: vec4<f32>,
+    inside2_b: vec4<f32>,
+    inside2_c: vec4<f32>,
 };
 
 // A hash of a lattice point, from its integer bits.
@@ -137,47 +140,129 @@ fn vs_main(@location(0) pos: vec3<f32>) -> VsOut {
     return out;
 }
 
+// The classic sky's weather (lib.rs `VanillaSky`): the cloud type's own texture and
+// cloud: x height H (m over the map's zero), y the type's size (m a tile; 0: no clouds),
+// zw the wind's drift (m); haze: x the weather's fog range (m), y the visibility (m),
+// z 1 for an overcast type, w the render origin's height.
+struct VanillaSkyUniform {
+    cloud: vec4<f32>,
+    haze: vec4<f32>,
+};
+@group(1) @binding(9) var t_vclouds: texture_2d<f32>;
+@group(1) @binding(10) var<uniform> vsky: VanillaSkyUniform;
+
+// The v of the sky textures towards elevation `e` (rad), as Omsi.exe's dome
+// (helper\skybox.x) has it: rings at the horizon, at 45 degrees and at the zenith with v
+// 0.9833, 0.4868 and 0.0236, flat bands between them along which v runs linearly - along
+// the chord, not with the angle - and the horizon's v all the way down below it.
+fn dome_v(e: f32) -> f32 {
+    if (e <= 0.0) {
+        return 0.9833;
+    }
+    let upper = e > 0.7853982;
+    let e0 = select(0.0, 0.7853982, upper);
+    let e1 = select(0.7853982, 1.5707963, upper);
+    let v0 = select(0.9833, 0.4868, upper);
+    let v1 = select(0.4868, 0.0236, upper);
+    // (where the ray at e meets the chord from the ring at e0 to the one at e1)
+    let t = sin(e - e0) / ((sin(e1) - sin(e0)) * cos(e) - (cos(e1) - cos(e0)) * sin(e));
+    return mix(v0, v1, clamp(t, 0.0, 1.0));
+}
+
+// The haze Omsi.exe lays over its sky (0x5d8e98): the dome again with Texture\nebel.tga,
+// white with an alpha running linearly over its 32 rows from 0 at the zenith to 1 at the
+// horizon, in the fog colour, its alpha moved by the fog range f and the cloud height H:
+// down by 1 - 4 asin(H/f)/pi where f > H sqrt 2 (no haze at all under a clear sky, H 0),
+// up by 1 - 4 acos(H/f)/pi below that, and the whole sky fog where f <= H.
+fn vanilla_haze(v: f32) -> f32 {
+    let f = vsky.haze.x;
+    let h = vsky.cloud.x;
+    if (f <= 0.0) {
+        return 0.0;
+    }
+    if (f <= h) {
+        return 1.0;
+    }
+    let tex_a = clamp((v * 32.0 - 0.5) / 31.0, 0.0, 1.0);
+    let q = h / f;
+    if (q < 0.70710678) {
+        return clamp(tex_a - (1.0 - 4.0 * asin(q) / 3.14159265), 0.0, 1.0);
+    }
+    return clamp(tex_a + (1.0 - 4.0 * acos(q) / 3.14159265), 0.0, 1.0);
+}
+
+// The classic cloud layer towards d: rgb (in the sky's own terms, `fog` its fog colour) and
+// how much it covers. Omsi.exe (0x754e44) draws helper\clouds.o3d, a flat cone over the
+// camera - its apex H over the map's zero, its rim on the zero 9.363 H away - with the cloud
+// type's texture laid on the ground plan, one tile every `size` metres, moved by the wind;
+// its colour is the texture times the fog colour, its alpha the texture's (an `ovc` deck is
+// opaque), and the fixed-function fog takes it into the fog colour by its depth in the
+// view over the visibility.
+fn vanilla_clouds(d: vec3<f32>, fog: vec3<f32>, tex: vec4<f32>, r: f32, encoded: bool) -> vec4<f32> {
+    let hl = max(length(d.xy), 1e-4);
+    // (the hit point lies along d, r / hl from the camera; its depth along the view's axis)
+    let fwd = normalize(cross(camera.cam_up.xyz, camera.cam_right.xyz));
+    let depth = r / hl * dot(d, fwd);
+    let vis = max(vsky.haze.y, 1.0);
+    let k = clamp(1.0 - depth / vis, 0.0, 1.0);
+    var rgb = select(tex.rgb, srgb_encode(tex.rgb), encoded) * fog;
+    rgb = mix(fog, rgb, k);
+    return vec4<f32>(rgb, select(tex.a, 1.0, vsky.haze.z > 0.5));
+}
+
+// How far (over the ground plan) the ray d meets the cloud cone, and whether it does.
+fn vanilla_cloud_reach(d: vec3<f32>) -> vec2<f32> {
+    let h = vsky.cloud.x;
+    let h0 = camera.cam_pos.z + vsky.haze.w;
+    let hl = max(length(d.xy), 1e-4);
+    let rim = 9.363 * h;
+    let den = d.z / hl + 1.0 / 9.363;
+    if (vsky.cloud.y <= 0.0 || h <= h0 || h <= 0.0) {
+        return vec2<f32>(rim, 0.0);
+    }
+    // (below the rim the cone's skirt runs down under the horizon, behind the ground: its
+    // rim stands in for it)
+    var r = rim;
+    if (den > 0.0) {
+        r = min((h - h0) / den, rim);
+    }
+    return vec2<f32>(r, 1.0);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let d = normalize(in.dir);
+    // the dome turned so that the texture's column 0.5036 faces the sun, u growing
+    // anticlockwise (from above) away from it (0x5d92a0: the dome rotated by the sun's
+    // azimuth)
     let az = atan2(d.x, d.y);
-    let u = fract((az - camera.sky.x) / 6.2831853 + 0.5);
+    let u = 0.503645 + (camera.sky.x - az) / 6.2831853;
     let elev = asin(clamp(d.z, -1.0, 1.0));
-    // horizon row at the bottom; below the horizon keep the horizon colour
-    let v = clamp(1.0 - elev / 1.5707963, 0.0, 0.995);
+    let v = dome_v(elev);
     let uv = vec2<f32>(u, v);
-    let c = textureSample(t_day, s_sky, uv).rgb * camera.sky.y + textureSample(t_twilight, s_sky, uv).rgb * camera.sky.z * 0.8 + textureSample(t_night, s_sky, uv).rgb * camera.sky.w * 0.6;
-    var col = c;
-    if (camera.clouds.x > 0.001 && d.z > 0.01) {
-        // a flat layer 1500 m up drawn from the cloud field (weather_setup::cloud_field)
-        let t = 1500.0 / d.z;
-        let p = cloud_ground(d, t);
-        // how many texels of the field a pixel covers there: the far clouds are drawn from a
-        // smaller mip (no shimmering, no grain)
-        let lod = log2(max(t * length(fwidth(d)) / max(d.z, 0.05) / CLOUD_FIELD_TILE * 512.0, 1.0));
-        let c = cloud_cover_at(p, lod);
-        // a closing cover (Overcast: a sky that rains) is one grey deck, no blue between
-        let closed = smoothstep(0.8, 1.0, camera.clouds.x);
-        let cover = mix(smoothstep(0.0, 1.0, c.x), 1.0, closed) * clamp((d.z - 0.01) * 7.0, 0.0, 1.0);
-        // lit by the same light as the scene (envir.cfg's sun and ambient at this sun
-        // height): white by day, warm at sunrise, and at night barely lighter than the night
-        // sky - never the pale blots a fixed twilight colour made at night; a little grey in
-        // the thick middle of a big cloud
-        let core = 1.0 - 0.2 * smoothstep(0.45, 1.0, c.x) * (0.5 + 0.5 * c.y);
-        let sun_up = clamp(camera.sun_dir.z * 4.0 + 0.3, 0.0, 1.0);
-        let lit = camera.sun_color.rgb * 1.1 * sun_up + camera.ambient.rgb * mix(0.5, 1.5, sun_up) + camera.sky_color.rgb * 0.3;
-        var cloud_col = max(min(lit, vec3<f32>(0.97)) * core, col * 1.12);
-        // the deck greys over
-        cloud_col = cloud_col * (1.0 - 0.3 * closed) * mix(1.0, 0.85 + 0.3 * c.x, closed);
-        col = mix(col, cloud_col, cover);
+    // (Omsi.exe blends two of its pictures by the sun's height, see `Daylight::sky_weights`;
+    // the sky textures have no mip levels, so the seam of u behind the sun is not seen)
+    let sky = textureSample(t_day, s_sky, uv).rgb * camera.sky.y + textureSample(t_twilight, s_sky, uv).rgb * camera.sky.z + textureSample(t_night, s_sky, uv).rgb * camera.sky.w;
+    // the cloud texture on the ground plan where the ray meets the cone, sampled outside
+    // any branch (its mip levels by the screen's derivatives)
+    let reach = vanilla_cloud_reach(d);
+    let hl = max(length(d.xy), 1e-4);
+    let ground = camera.cam_pos.xy + camera.world_origin.zw + d.xy / hl * reach.x;
+    let size = max(vsky.cloud.y, 1.0);
+    let cuv = (ground + vsky.cloud.zw) / size + vec2<f32>(0.5, -0.5) * (vsky.cloud.x / size);
+    let ctex = textureSample(t_vclouds, s_repeat, vec2<f32>(cuv.x, cuv.y));
+    // Vanilla blends in the 8-bit sRGB terms of Omsi.exe's fixed-function stages,
+    // Vanilla+ in linear light
+    let encoded = camera.sky_color.w > 0.5;
+    let fog = camera.fog.xyz;
+    var col = select(sky, srgb_encode(sky), encoded);
+    col = mix(col, fog, vanilla_haze(v));
+    if (reach.y > 0.5) {
+        let c = vanilla_clouds(d, fog, ctex, reach.x, encoded);
+        col = mix(col, c.rgb, c.a);
     }
-    // fog swallows the horizon, and a thick fog (a few hundred metres of sight) the whole
-    // sky: the blue does not show through ground fog
-    let horizon = clamp(1.0 - elev / 0.12, 0.0, 1.0) * clamp(camera.fog.w * 1500.0, 0.0, 1.0);
-    let whole = clamp(camera.fog.w * 150.0 - 0.15, 0.0, 1.0) * clamp(1.0 - elev / 1.2, 0.35, 1.0);
-    let f = max(horizon, whole);
-    if (camera.sky_color.w > 0.5) {
-        return vec4<f32>(srgb_decode(mix(srgb_encode(col), camera.fog.xyz, f)), 1.0);
+    if (encoded) {
+        return vec4<f32>(srgb_decode(col), 1.0);
     }
-    return vec4<f32>(mix(col, camera.fog.xyz, f), 1.0);
+    return vec4<f32>(col, 1.0);
 }

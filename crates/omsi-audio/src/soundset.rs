@@ -424,6 +424,16 @@ impl SoundSet {
                 None
             };
             let fired = fired_by.is_some();
+            // A voice that starts now is a buffer played anew, at DirectSound's full volume:
+            // a request over 0 dB keeps that, not whatever an entry that was not playing had
+            // been given in the frames before (a door's end sound, a parking brake or a
+            // blinker with `[volume] 2` and a curve low at rest played at that low level, or
+            // not at all - #1851, #611, #1268, #1311, #1515, #1900, #1418).
+            let looping = !triggered && !s.def.no_loop;
+            let idle = s.voice.is_none_or(|id| !engine.is_playing(id));
+            if fired || rising || (looping && idle) {
+                s.last_gain = 1.0;
+            }
             let e = match fired_by {
                 Some(t) => ctx.eval(s, &|n| at_fire(t, n).or_else(|| var(n)), object_to_world),
                 None => ctx.eval(s, var, object_to_world),

@@ -451,6 +451,14 @@ fn sync_table(game: &mut LanGame, v: &omsi_sim::VehicleInstance) -> Arc<SyncTabl
 
 /// Another player's bus as we draw and hear it: their vehicle type run as an AI vehicle
 /// whose pose comes off the network instead of a lane.
+impl RemoteVehicle {
+    /// The figure they are drawn as: the one at their wheel, which their avatar on foot
+    /// wears too (`sync_remote_walkers`).
+    pub(crate) fn figure_type(&self) -> Option<Arc<omsi_sim::human::HumanType>> {
+        self.driver.as_ref().map(|d| d.human_type())
+    }
+}
+
 pub struct RemoteVehicle {
     vehicle: omsi_sim::VehicleInstance,
     render: scene::VehicleRender,
@@ -486,7 +494,10 @@ pub struct RemoteVehicle {
     made_as: (String, String),
     /// The driver at the wheel (their bus stood empty here), hidden while they walk about.
     driver: Option<crate::driver::DriverFigure>,
-    driver_tried: bool,
+    /// The figure (`Pose::figure`) the driver was made for: made again when another comes.
+    /// (Made once, it kept the figure guessed before their INFO named theirs - one of the
+    /// map's drivers -, and on foot they were a passenger picked by their id.)
+    driver_for: Option<String>,
     /// Their states by their clock (s), oldest first, and how far our clock (`lan_now`) is
     /// ahead of theirs as the quickest state showed it: the bus is drawn where their states
     /// put it a little in the past, between two of them - never pulled towards the newest
@@ -597,6 +608,8 @@ pub enum WorldUpdate {
 pub struct LanGame {
     pub remotes: hashbrown::HashMap<u32, RemoteVehicle>,
     pub chat: Chat,
+    /// The chat's lines (name, text) not yet handed to the plugins (`lan_chat`).
+    pub plugin_chat: Vec<(String, String)>,
     /// The shared world: the host's traffic and people (`lan_world`).
     pub world: crate::lan_world::LanWorld,
     tables: hashbrown::HashMap<PathBuf, Arc<SyncTable>>,
@@ -2576,10 +2589,14 @@ fn new_remote(
     let mut trailer_renders = Vec::new();
     let mut lead = ty.clone();
     let mut lead_rev = false;
-    for _ in 0..8 {
+    let mut seen = vec![lead.def.path.clone()];
+    for _ in 0..crate::spawn::MAX_COUPLED_PARTS {
         let Some((path, rev)) = crate::spawn::next_coupled(&lead.def, lead_rev, true) else {
             break;
         };
+        if crate::spawn::chain_has_part(&seen, &path) {
+            break;
+        }
         match omsi_sim::VehicleType::load(&args.root, &path) {
             Ok(t) => {
                 let t = Arc::new(t);
@@ -2591,6 +2608,7 @@ fn new_remote(
                     Some(&render),
                 ));
                 vehicle.attach_trailer_ex(t.clone(), rev);
+                seen.push(path);
                 lead = t;
                 lead_rev = rev;
             }
@@ -2656,7 +2674,7 @@ fn new_remote(
         last: pose.clone(),
         made_as: (pose.bus.clone(), pose.paint.clone()),
         driver: None,
-        driver_tried: false,
+        driver_for: None,
         samples: std::collections::VecDeque::new(),
         offset: None,
         play: Default::default(),
@@ -3123,6 +3141,10 @@ fn sound_remote(
             ss.set_inside(true);
             ss.set_muffled(true);
             ss.set_listener_vehicle(true);
+            // its own outside sounds come in through what this bus has open - its
+            // `Snd_OutsideVol`, not the walker's own bus's (or 1 without one): riding along
+            // the exterior engine drowned the cab (#1759)
+            omsi_audio::soundset::set_outside_open(Some(v.var("Snd_OutsideVol").unwrap_or(0.0)));
             ss.update(audio, &|n| v.var(n), &xf, &fired);
             for (t, f) in &fired_files {
                 ss.play_file_trigger(audio, t, f, &|n| v.var(n), &xf);
@@ -3318,6 +3340,12 @@ pub fn tick(
         }
     }
     for e in lan.take_events() {
+        if let LanEvent::Chat { name, text, .. } = &e {
+            // (for the plugins' `lan_chat`, a few kept while nobody takes them)
+            if game.plugin_chat.len() < 32 {
+                game.plugin_chat.push((name.clone(), crate::ui::filter_chat(text)));
+            }
+        }
         game.chat.push(match e {
             LanEvent::Chat { name, text, .. } => format!("{name}: {}", crate::ui::filter_chat(&text)),
             LanEvent::Notice(n) => format!("* {n}"),
@@ -3448,8 +3476,11 @@ pub fn tick(
     }
     // draw them like AI traffic
     for (id, rv) in game.remotes.iter_mut() {
-        if !rv.driver_tried && !rv.stand_in {
-            rv.driver_tried = true;
+        if rv.driver_for.as_deref() != Some(rv.last.figure.as_str()) && !rv.stand_in {
+            rv.driver_for = Some(rv.last.figure.clone());
+            if let Some(mut d) = rv.driver.take() {
+                d.hide(r, scene);
+            }
             // their own figure at the wheel (a figure picked by their id otherwise)
             rv.driver = crate::driver::DriverFigure::new_named(w, r, scene, &rv.vehicle, &rv.last.figure, 1000 + *id as u64);
         }

@@ -84,7 +84,7 @@ jobs:
           Get-ChildItem dist/windows
       # Google's ANGLE (OpenGL ES over Direct3D 11) for the "ANGLE (DirectX 11)" graphics API:
       # libEGL.dll and libGLESv2.dll built from ANGLE's own source by
-      # openOMSI-Project/angle-openomsi, taken by its release tag and checked against the
+      # openOMSI-org/angle-openomsi, taken by its release tag and checked against the
       # SHA-256 recorded here (and the DLLs against the release's own SHA256SUMS). x64 only:
       # there is no ARM64 build, and the game skips the option without the DLLs.
       - name: ANGLE (DirectX 11)
@@ -95,7 +95,7 @@ jobs:
           ANGLE_TAG: angle-8091-36b74e4dd4
           ANGLE_SHA256: 1c0086155a17445110dd97400018ca6e72ea245ef178989b457720ee1fba3af5
         run: |
-          gh release download $env:ANGLE_TAG -R openOMSI-Project/angle-openomsi --pattern "*-windows-x64.zip" -D angle
+          gh release download $env:ANGLE_TAG -R openOMSI-org/angle-openomsi --pattern "*-windows-x64.zip" -D angle
           $zip = Get-ChildItem angle/*.zip | Select-Object -First 1
           $have = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
           if ($have -ne $env:ANGLE_SHA256) { throw "ANGLE zip: SHA-256 $have, expected $env:ANGLE_SHA256" }

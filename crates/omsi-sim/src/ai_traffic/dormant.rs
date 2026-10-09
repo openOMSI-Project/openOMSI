@@ -110,7 +110,8 @@ impl TrafficSim {
             return;
         }
         let map_target = ((street_target as f64 * self.street_weight / near).min(street_target as f64 * MAP_POPULATION_FACTOR as f64)) as usize;
-        let present = self.cars.iter().filter(|c| !c.is_bus() && !c.gone).count() + self.dormant.len();
+        // (a car that gave up counts while it is on the road: see omsi-app's `populate_kind`)
+        let present = self.cars.iter().filter(|c| !c.is_bus()).count() + self.dormant.len();
         if present >= map_target {
             return;
         }

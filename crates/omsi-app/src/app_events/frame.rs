@@ -60,6 +60,9 @@ impl App {
         let daylight = self.frame_weather(dt);
         self.frame_lights(dt, daylight);
         self.frame_scripted(dt, daylight);
+        if let (Some(w), Some(p)) = (self.world.as_deref(), self.player.as_mut()) {
+            crate::wheel_surface::tell_scripts(w, &mut p.vehicle);
+        }
         let vr_nav_display = self.frame_ui(dt);
         let lighting = self.frame_lighting(dt, daylight);
         self.frame_render(event_loop, &time, &lighting, vr_nav_display);

@@ -7,6 +7,24 @@ use omsi_render::{Corona, Scene};
 
 const HALF_WIDTH: f32 = 16.0;
 
+/// The `rain_quality` setting in force: 2 high, 1 medium, 0 low (see [`set_quality`]).
+static QUALITY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// Take the `rain_quality` setting (`high`, `medium`, `low`).
+pub fn set_quality(q: &str) {
+    let v = match q {
+        "low" => 0,
+        "medium" => 1,
+        _ => 2,
+    };
+    QUALITY.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The rain's quality: 2 high, 1 medium, 0 low.
+pub fn quality() -> u8 {
+    QUALITY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn weather_wind(weather: &omsi_content::weather::Weather) -> Vec3 {
     let heading = weather.wind.0.to_radians();
     Vec3::new(heading.sin(), heading.cos(), 0.0) * weather.wind.1
@@ -60,7 +78,9 @@ impl Rain {
         let n = if kind == 0 || kind == 2 || self.rate == 0.0 {
             0
         } else {
-            (400.0 + 2600.0 * self.rate) as usize
+            // (fewer streaks at a lower rain quality: they are drawn as sprites each frame)
+            let share = [0.25, 0.5, 1.0][quality() as usize];
+            ((400.0 + 2600.0 * self.rate) * share) as usize
         };
         while self.particles.len() < n {
             let p = Vec3::new(

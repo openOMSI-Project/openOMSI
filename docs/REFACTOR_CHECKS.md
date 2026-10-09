@@ -65,6 +65,17 @@ identical or within their allowance, every run.
 Worth comparing too: the end of the logs (`drove ... in 12 s, now ... km/h`, `traffic: ...`)
 of `grundorf_drive_traffic`; they carry no wall-clock figures.
 
+## Frame time
+
+A change meant to make the game faster is measured on the window's own frame, without a
+window on the screen: `scripts/bench-window.sh <binary> <out prefix> [plain|enhanced]` runs
+Spandau with traffic, passengers and the timetable in a window that is never shown
+(`OMSI_HIDDEN_WINDOW`), drives off, and writes `OMSI_PROFILE`'s exit summary (frame-time
+percentiles, every stage of the frame in milliseconds, the process's CPU time per frame).
+`scripts/compare-performance.py before.json after.json` compares two of them. The stages'
+times hold still from run to run far better than the frame times; take several runs of
+each binary and their medians all the same.
+
 ## Tests that need the original install
 
 Tests that read the original OMSI 2 install are `#[ignore]`d, so CI shows them as ignored

@@ -87,3 +87,52 @@ mod tests {
         assert_eq!(parse_wav(&wav(3, 32, &f)).unwrap().samples, vec![16384, -32768, 32767]);
     }
 }
+
+/// An Ogg Vorbis or FLAC file decoded whole (the ambience's recordings ship as FLAC: half
+/// the size of the WAV, nothing lost).
+pub fn parse_compressed(bytes: &[u8]) -> Result<WavData> {
+    use symphonia::core::audio::SampleBuffer;
+    use symphonia::core::codecs::DecoderOptions;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+    use symphonia::core::probe::Hint;
+    let mss = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes.to_vec())), Default::default());
+    let mut hint = Hint::new();
+    hint.with_extension(if bytes.starts_with(b"fLaC") { "flac" } else { "ogg" });
+    let mut format = symphonia::default::get_probe().format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())?.format;
+    let track = format.default_track().ok_or_else(|| anyhow!("no audio track"))?.clone();
+    let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
+    let mut rate = track.codec_params.sample_rate.unwrap_or(0);
+    let mut channels = track.codec_params.channels.map(|c| c.count() as u16).unwrap_or(0);
+    let mut samples = Vec::new();
+    let mut buf: Option<SampleBuffer<f32>> = None;
+    loop {
+        let packet = match format.next_packet() {
+            Ok(p) => p,
+            Err(symphonia::core::errors::Error::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e.into()),
+        };
+        if packet.track_id() != track.id {
+            continue;
+        }
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
+            Err(symphonia::core::errors::Error::DecodeError(_)) => continue,
+            Err(e) => return Err(e.into()),
+        };
+        let spec = *decoded.spec();
+        rate = spec.rate;
+        channels = spec.channels.count() as u16;
+        let b = buf.get_or_insert_with(|| SampleBuffer::new(decoded.capacity() as u64, spec));
+        if b.capacity() < decoded.capacity() * spec.channels.count() {
+            *b = SampleBuffer::new(decoded.capacity() as u64, spec);
+        }
+        b.copy_interleaved_ref(decoded);
+        samples.extend(b.samples().iter().map(|x| quantize(*x)));
+    }
+    if rate == 0 || channels == 0 {
+        return Err(anyhow!("no sound in the file"));
+    }
+    Ok(WavData { sample_rate: rate, channels, samples })
+}

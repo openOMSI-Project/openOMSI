@@ -227,7 +227,7 @@ impl RayTracer {
                 module: &module,
                 entry_point: Some(entry),
                 compilation_options: wgpu::PipelineCompilationOptions { constants: &constants, ..Default::default() },
-                cache: None,
+                cache: crate::pipeline_cache::get(device).as_ref(),
             })
         };
         let trace = pipeline("cs_trace", None);
@@ -249,7 +249,7 @@ impl RayTracer {
             module: &avg_module,
             entry_point: Some("cs_tex_avg"),
             compilation_options: Default::default(),
-            cache: None,
+            cache: crate::pipeline_cache::get(device).as_ref(),
         });
         let vis = wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT;
         let tex = |binding, sample_type, view_dimension, visibility| wgpu::BindGroupLayoutEntry {
@@ -299,7 +299,7 @@ impl RayTracer {
                 module: &refl_module,
                 entry_point: Some(entry),
                 compilation_options: wgpu::PipelineCompilationOptions { constants: &div, ..Default::default() },
-                cache: None,
+                cache: crate::pipeline_cache::get(device).as_ref(),
             })
         };
         let reflect = refl_compute("cs_reflect");
@@ -318,7 +318,7 @@ impl RayTracer {
                 compilation_options: wgpu::PipelineCompilationOptions { constants: &div, ..Default::default() },
             }),
             multiview_mask: None,
-            cache: None,
+            cache: crate::pipeline_cache::get(device).as_ref(),
         });
         let tlas_cap = 8192;
         RayTracer {

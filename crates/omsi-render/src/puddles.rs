@@ -155,7 +155,7 @@ impl Pipelines {
                     compilation_options: Default::default(),
                 }),
                 multiview_mask: None,
-                cache: None,
+                cache: crate::pipeline_cache::get(device).as_ref(),
             })
         };
         let glass_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -193,7 +193,7 @@ impl Pipelines {
                     compilation_options: Default::default(),
                 }),
                 multiview_mask: None,
-                cache: None,
+                cache: crate::pipeline_cache::get(device).as_ref(),
             })
         });
         let vehicle_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -274,7 +274,7 @@ impl Pipelines {
                             compilation_options: Default::default(),
                         }),
                         multiview_mask: None,
-                        cache: None,
+                        cache: crate::pipeline_cache::get(device).as_ref(),
                     }));
                 }
             }
@@ -311,7 +311,7 @@ impl Pipelines {
                 compilation_options: Default::default(),
             }),
             multiview_mask: None,
-            cache: None,
+            cache: crate::pipeline_cache::get(device).as_ref(),
         });
         Self {
             trace: pipeline("fs_trace"),

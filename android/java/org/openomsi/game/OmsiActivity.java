@@ -249,7 +249,7 @@ public class OmsiActivity extends NativeActivity {
             case PackageInstaller.STATUS_FAILURE_CONFLICT:
             case PackageInstaller.STATUS_FAILURE_INCOMPATIBLE:
                 // signed with another key than the installed app (a build of one's own)
-                installMessage = "this openOMSI was installed from a build with another signature than the GitHub releases. Uninstall it once and install the APK from github.com/openOMSI-Project/openOMSI - updates work from then on.";
+                installMessage = "this openOMSI was installed from a build with another signature than the GitHub releases. Uninstall it once and install the APK from github.com/openOMSI-org/openOMSI - updates work from then on.";
                 installStatus = 4;
                 break;
             default: {

@@ -43,25 +43,22 @@ impl App {
             steam.client.run_callbacks();
         }
         // the plugins' frame, with the bus's scripts done
-        let plugins = self.integrations.plugins.get_or_insert_with(crate::plugins::load);
+        let mut plugins = self.integrations.plugins.take().unwrap_or_else(crate::plugins::load);
+        if !plugins.is_empty() {
+            self.plugin_watch(&mut plugins);
+        }
         if !plugins.is_empty() && !self.paused {
-            let info = crate::plugins::game_info(self);
             let keys = std::mem::take(&mut self.integrations.plugin_keys);
             let events = std::mem::take(&mut self.integrations.plugin_events);
-            let plugins = self.integrations.plugins.as_mut().unwrap();
-            // the vehicles around it: the AI traffic and the other players' buses
-            let mut others: Vec<(u64, &'static str, &mut omsi_sim::VehicleInstance)> = Vec::new();
-            if let Some(t) = self.session.traffic.as_mut() {
-                others.extend(t.cars.iter_mut().map(|c| (c.id, "ai", &mut c.vehicle)));
-            }
-            others.extend(self.net.remotes.remotes.iter_mut().map(|(id, r)| ((1u64 << 48) | *id as u64, "player", r.vehicle_mut())));
-            let mut io = crate::plugins::Io { vehicle: self.player.as_mut().map(|p| &mut p.vehicle), others, dt, message: None, info, commands: Vec::new(), keys, events };
+            let events_ex = std::mem::take(&mut self.integrations.plugin_events_ex);
+            // (the plugins see the whole game; they are out of it for their frame)
+            let mut io = crate::plugins::Io::new(self, dt, keys, events, events_ex);
             plugins.frame(&mut io);
             let commands = std::mem::take(&mut io.commands);
-            if let Some(m) = io.message {
-                self.service_msg = Some(m);
-            }
+            drop(io);
+            crate::plugin_io::world::follow_sounds(self);
             // what the plugins asked the game to do: lines of the game menu
+            self.integrations.plugin_command = true;
             for c in commands {
                 if let Some(k) = self.game_menu_items().iter().position(|m| m.0 == c) {
                     let was = self.menus.game_menu;
@@ -77,13 +74,16 @@ impl App {
                     self.page_action(&c);
                 }
             }
+            self.integrations.plugin_command = false;
         } else {
             self.integrations.plugin_keys.clear();
             // (while the game is paused they wait for the next frame)
-            if self.integrations.plugins.as_ref().is_none_or(|p| p.is_empty()) {
+            if plugins.is_empty() {
                 self.integrations.plugin_events.clear();
+                self.integrations.plugin_events_ex.clear();
             }
         }
+        self.integrations.plugins = Some(plugins);
         // OMSI_WATCH_VARS=a,b: every change of those variables of the player's bus
         if let (Some(p), Some(list)) = (self.player.as_ref(), omsi_cfg::flags::OMSI_WATCH_VARS.var()) {
             thread_local!(static LAST: std::cell::RefCell<std::collections::HashMap<String, f32>> = Default::default());
@@ -100,6 +100,10 @@ impl App {
         }
         if let (Some(h), Some(p)) = (self.session.humans.as_mut(), self.player.as_ref()) {
             let hurt = steps::people_in_career(&mut self.session.career, h, p, self.settings.collision_pedestrians);
+            for (name, price) in h.take_sales() {
+                let args = vec![omsi_plugin::InfoValue::Text(name.trim().to_string()), crate::plugins::num_f32(price)];
+                crate::plugins::queue_event(&mut self.integrations.plugin_events, "ticket_sold", args);
+            }
             if hurt > 0 {
                 self.service_msg = Some(("Pedestrian knocked down!".into(), 6.0));
                 crate::plugins::queue_event(&mut self.integrations.plugin_events, "pedestrian", vec![omsi_plugin::InfoValue::Num(hurt as f64)]);

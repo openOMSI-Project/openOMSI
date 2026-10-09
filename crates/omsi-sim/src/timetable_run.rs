@@ -127,6 +127,38 @@ pub const EARLY_START: f64 = 300.0;
 
 pub const LEFT_STOP: f64 = 35.0;
 
+/// How a trip of the player's duty ended (`Finished`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TripEnd {
+    /// Its last stop reached, or the next trip's first stop from its last leg.
+    Arrived,
+    /// Its last stop skipped.
+    Skipped,
+    /// Begun, and over half an hour past its end: the duty went on.
+    GivenUp,
+}
+
+impl TripEnd {
+    /// As Lua plugins' `trip_done` names it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TripEnd::Arrived => "arrived",
+            TripEnd::Skipped => "skipped",
+            TripEnd::GivenUp => "given_up",
+        }
+    }
+}
+
+/// A trip of the player's duty that ended (`PlayerDuty::take_finished`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Finished {
+    /// Its index in the duty's `trips`.
+    pub index: usize,
+    pub how: TripEnd,
+    /// Its run (`PlayerDuty::trip_run`).
+    pub run: u64,
+}
+
 /// The player's tour: its trips with planned stop times, and the progress along them.
 pub struct PlayerDuty {
     pub line: String,
@@ -158,6 +190,13 @@ pub struct PlayerDuty {
     trip_changed: bool,
     /// Stops the bus passed without stopping since the last `take_skipped` (see `catch_up`).
     skipped: Option<(usize, usize, usize)>,
+    /// The current trip's run: a number no other trip of this game had (a trip taken again
+    /// is another run), for rating a trip on its own (`trip_run`).
+    run: u64,
+    /// A trip ended since the last `take_finished` (see there).
+    finished: Option<Finished>,
+    /// A page reopened this run's trip after its end was taken (`take_reopened`).
+    reopened: Option<u64>,
     /// The player picked the current trip: the duty does not move on past it before it is
     /// driven (or given up), however late the bus is for it.
     picked: bool,
@@ -167,6 +206,9 @@ pub struct PlayerDuty {
     /// The way the bus faces (degrees clockwise from north), from the last update: it says
     /// which of two stops a few metres apart the bus is at (see `StopDir`).
     heading: f64,
+    /// Where the bus was at the last update: how far along the way to the next stop it
+    /// is, for the delay on the way (`delay`).
+    position: Option<glam::DVec3>,
 }
 
 pub const DAY: f64 = 86_400.0;

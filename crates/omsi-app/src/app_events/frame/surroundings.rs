@@ -87,6 +87,7 @@ impl App {
             }
             if let Some(wt) = &self.session.weather {
                 let (kind, rate) = precip_of(wt);
+                crate::rain::set_quality(&self.settings.rain_quality);
                 self.session.rain.set(kind, rate);
                 // [wind] direction (deg) speed (m/s)
                 let wind = crate::rain::weather_wind(wt);
@@ -123,6 +124,7 @@ impl App {
                         spray_wind,
                         w,
                         wetness,
+                        crate::rain::quality(),
                     );
                     self.session.spray.sprites(cam.position, &mut scene.smoke);
                     *self.perf.profile.entry("lights.spray").or_default() += __ts.elapsed().as_secs_f64();

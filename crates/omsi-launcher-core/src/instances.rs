@@ -268,6 +268,15 @@ pub struct Started {
     pub others: usize,
 }
 
+/// Where the launcher's window is (the middle of it, physical pixels on the desktop): the
+/// game opens on that screen rather than the main one (#1959).
+static SCREEN_AT: std::sync::Mutex<Option<(i32, i32)>> = std::sync::Mutex::new(None);
+
+/// Tell the games started from now on which screen the launcher stands on.
+pub fn set_screen_at(at: Option<(i32, i32)>) {
+    *SCREEN_AT.lock().unwrap_or_else(|e| e.into_inner()) = at;
+}
+
 /// Start the game with `args`; games already running keep running.
 pub fn start(game: &Path, args: &[String], d: &crate::Duty, profile: &str) -> Result<Started> {
     let running: Vec<Instance> = list().into_iter().filter(|i| i.running).collect();
@@ -275,7 +284,12 @@ pub fn start(game: &Path, args: &[String], d: &crate::Duty, profile: &str) -> Re
     let file = std::fs::File::create(&log).with_context(|| format!("creating {}", log.display()))?;
     let err = file.try_clone()?;
     let id = format!("{}-{}-{}", now_secs(), std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-    let child = std::process::Command::new(game).args(args).env("OMSI_INSTANCE", &id).stdout(file).stderr(err).spawn().with_context(|| format!("starting {}", game.display()))?;
+    let mut cmd = std::process::Command::new(game);
+    cmd.args(args).env("OMSI_INSTANCE", &id).stdout(file).stderr(err);
+    if let Some((x, y)) = *SCREEN_AT.lock().unwrap_or_else(|e| e.into_inner()) {
+        cmd.env("OMSI_SCREEN_AT", format!("{x},{y}"));
+    }
+    let child = cmd.spawn().with_context(|| format!("starting {}", game.display()))?;
     let pid = child.id();
     let process_started = process_start(pid);
     CHILDREN.lock().unwrap_or_else(|e| e.into_inner()).push((id.clone(), child));

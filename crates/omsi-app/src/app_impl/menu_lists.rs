@@ -282,7 +282,7 @@ impl App {
             Some(ListKind::Vehicle(_)) => ListKind::Vehicle(i),
             Some(ListKind::World(_)) => ListKind::World(i),
             Some(ListKind::Keyboard(_)) => ListKind::Keyboard(i.min(1)),
-            Some(ListKind::ControllerDevices(_)) => ListKind::ControllerDevices(i.min(2)),
+            Some(ListKind::ControllerDevices(_)) => ListKind::ControllerDevices(i.min(crate::game_controller_menu::COMMON_TABS.len() - 1)),
             Some(ListKind::Controller(name, _)) => ListKind::Controller(name.clone(), i.min(3)),
             _ => return,
         };

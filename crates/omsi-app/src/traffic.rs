@@ -47,6 +47,9 @@ pub struct Traffic {
     sounds: HashMap<u64, omsi_audio::SoundSet>,
     /// Sound sets of despawned cars, stopped at the next audio update.
     orphan_sounds: Vec<omsi_audio::SoundSet>,
+    /// The bus the player rides in on foot, heard from inside: its whole `[sound]` set as
+    /// the player's own bus is heard from its cab (#1286).
+    riding_sounds: Option<(u64, omsi_audio::SoundSet)>,
     /// `[sound_ai]` configurations by file.
     sound_cfgs: HashMap<std::path::PathBuf, Option<Arc<omsi_vehicle::SoundCfg>>>,
 }
@@ -72,6 +75,7 @@ impl Traffic {
             sim,
             sounds: HashMap::new(),
             orphan_sounds: Vec::new(),
+            riding_sounds: None,
             sound_cfgs: HashMap::new(),
         }
     }

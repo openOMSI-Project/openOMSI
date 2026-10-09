@@ -28,6 +28,8 @@ pub enum Msg {
     Stopped { pid: u32, result: Result<bool, String> },
     LogTail { pid: u32, lines: Vec<String> },
     Mods(Result<core::ModsStatus, String>),
+    /// A mod switched on or off, or removed (its name), or why not.
+    ModChanged { result: Result<String, String>, done: &'static str },
     ModInfo(Result<core::install::SourceInfo, String>),
     Installed(Result<core::install::Progress, String>),
     Join(serde_json::Value),
@@ -249,6 +251,10 @@ pub struct State {
     pub jobs: Vec<core::install::Progress>,
     pub mods: Option<core::ModsStatus>,
     pub mods_asked: bool,
+    /// The mod being switched or removed (its id).
+    pub mod_busy: Option<String>,
+    /// Installs finished when the Mods page last asked for the mods.
+    pub mods_jobs_seen: usize,
     pub mod_info: Option<Result<core::install::SourceInfo, String>>,
     pub mod_path: String,
     pub mod_mode: usize,
@@ -320,6 +326,8 @@ impl State {
             jobs: Vec::new(),
             mods: None,
             mods_asked: false,
+            mod_busy: None,
+            mods_jobs_seen: 0,
             mod_info: None,
             mod_path: String::new(),
             mod_mode: 0,
@@ -489,6 +497,18 @@ impl State {
     pub fn load_mods(&mut self) {
         self.mods_asked = true;
         self.spawn(|| Msg::Mods(core::mods_status().map_err(|e| format!("{e:#}"))));
+    }
+
+    /// Switch the mod `id` on or off, in the background (its folders move).
+    pub fn mod_toggle(&mut self, id: String, on: bool) {
+        self.mod_busy = Some(id.clone());
+        self.spawn(move || Msg::ModChanged { result: core::mod_set_enabled(&id, on).map_err(|e| format!("{e:#}")), done: if on { "switched on" } else { "switched off" } });
+    }
+
+    /// Delete the mod `id`, in the background.
+    pub fn mod_remove(&mut self, id: String) {
+        self.mod_busy = Some(id.clone());
+        self.spawn(move || Msg::ModChanged { result: core::mod_remove(&id).map_err(|e| format!("{e:#}")), done: "deleted" });
     }
 
     pub fn check_join(&mut self) {
@@ -1090,6 +1110,16 @@ impl State {
                 self.mods = Some(m);
             }
             Msg::Mods(Err(e)) => self.set_status(e, true),
+            Msg::ModChanged { result, done } => {
+                self.mod_busy = None;
+                match result {
+                    Ok(name) => self.set_status(format!("{name} {done}"), false),
+                    Err(e) => self.set_status(format!("Not done: {e}"), true),
+                }
+                // (the lists without it, or with it again)
+                self.load_mods();
+                self.load_content();
+            }
             Msg::ModInfo(r) => {
                 if let Ok(i) = &r {
                     // a big archive that does not fit is used in place

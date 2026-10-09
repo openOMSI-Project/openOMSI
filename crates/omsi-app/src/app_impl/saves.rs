@@ -93,6 +93,9 @@ impl App {
         let sit = build_situation(&self.args, w, &self.clock, self.args.weather.as_deref(), self.player.as_ref(), &self.session.placed, cam, self.session.duty.as_ref(), "Last situation");
         match sit.save(&out) {
             Ok(()) => {
+                if let Some(p) = self.player.as_ref() {
+                    crate::situation::save_script_textures(&out, &p.vehicle);
+                }
                 log::info!("saved the last situation {}", out.display());
                 Some(out)
             }
@@ -154,6 +157,9 @@ impl App {
         let sit = build_situation(&self.args, w, &self.clock, self.args.weather.as_deref(), self.player.as_ref(), &self.session.placed, cam, self.session.duty.as_ref(), "Quicksave");
         match save_or_fallback(&sit, &out, Path::new("Situations").join("quicksave.osn").as_path()) {
             Ok(out) => {
+                if let Some(p) = self.player.as_ref() {
+                    crate::situation::save_script_textures(&out, &p.vehicle);
+                }
                 log::info!("saved situation {} ({} vehicles)", out.display(), sit.vehicles.len());
                 self.service_msg = Some(("Situation saved (quicksave)".into(), 3.0));
             }
@@ -195,6 +201,9 @@ impl App {
         let sit = build_situation(&self.args, w, &self.clock, self.args.weather.as_deref(), self.player.as_ref(), &self.session.placed, cam, self.session.duty.as_ref(), &name);
         match save_or_fallback(&sit, &out, rel_dir.join(format!("Slot {n}.osn")).as_path()) {
             Ok(out) => {
+                if let Some(p) = self.player.as_ref() {
+                    crate::situation::save_script_textures(&out, &p.vehicle);
+                }
                 log::info!("saved situation {} ({} vehicles)", out.display(), sit.vehicles.len());
                 self.service_msg = Some((format!("Saved as slot {n}: the launcher continues from it"), 4.0));
             }

@@ -109,6 +109,7 @@ impl PeopleSim {
             stop_request: false,
             tickets_sold: 0,
             ticket_cash: 0.0,
+            sales: Vec::new(),
             boarded: 0,
             served: 0,
             stepped_in: 0,

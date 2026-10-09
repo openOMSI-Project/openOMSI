@@ -1,9 +1,9 @@
 //! OMSI_PROFILE's exit summary (`--exit-after`) measured from the end of the warm-up (15 s
-//! after the start, where the CPU mark is taken): frame-time percentiles and the frames
-//! over 16.7/33.3/50/100 ms in the log, and with OMSI_PROFILE_JSON=<file> the same summary
-//! with the stages and the GPU passes as a file, for `scripts/compare-performance.py` to
-//! compare two runs of the same scene. Nothing of it runs without OMSI_PROFILE: the frame
-//! times are kept only while profiling.
+//! of play after the map has loaded, where the CPU mark is taken): frame-time percentiles
+//! and the frames over 16.7/33.3/50/100 ms in the log, and with OMSI_PROFILE_JSON=<file>
+//! the same summary with the stages and the GPU passes as a file, for
+//! `scripts/compare-performance.py` to compare two runs of the same scene. Nothing of it
+//! runs without OMSI_PROFILE: the frame times are kept only while profiling.
 
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -110,6 +110,12 @@ pub(crate) fn report(run: Run, r: &omsi_render::Renderer, window: (u32, u32), sc
         let frames = perf.total_frames.saturating_sub(f0).max(1) as f64;
         summary["cpu_ms_per_frame"] = json!((c1 - c0) / frames * 1000.0);
         summary["cores_busy"] = json!((c1 - c0) / t0.elapsed().as_secs_f64().max(1e-3));
+        if let (Some(m0), Some(m1)) = (perf.thread_cpu_mark, crate::startup::thread_cpu_seconds()) {
+            summary["main_thread_cpu_ms_per_frame"] = json!((m1 - m0) / frames * 1000.0);
+        }
+        if let (Some(i0), Some(i1)) = (perf.instructions_mark, crate::startup::process_instructions()) {
+            summary["million_instructions_per_frame"] = json!(i1.saturating_sub(i0) as f64 / frames / 1e6);
+        }
     }
     json!({
         "schema_version": 1,

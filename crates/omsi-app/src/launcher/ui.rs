@@ -1105,18 +1105,26 @@ impl Ui {
         self.draw_popup();
         self.draw_date_popup();
         if let Some((t, at)) = self.tooltip.take() {
-            let w = (self.width(&t, 12.5, Weight::Medium) + 20.0).min(360.0);
-            let h = self.paragraph_height(&t, w - 20.0, 12.5, Weight::Medium) + 12.0;
-            let mut r = Rect::new(at.x + 14.0, at.y + 18.0, w, h);
-            if r.right() > self.size.x - 8.0 {
-                r.x = self.size.x - 8.0 - r.w;
-            }
-            if r.bottom() > self.size.y - 8.0 {
-                r.y = at.y - 12.0 - r.h;
-            }
+            let w = (self.width(&t, 12.5, Weight::Medium) + 20.0).min(360.0).min((self.size.x - 16.0).max(1.0));
+            let text_w = (w - 20.0).max(1.0);
+            let max_h = (self.size.y - 16.0).clamp(1.0, 280.0);
+            let h = (self.paragraph_height(&t, text_w, 12.5, Weight::Medium) + 12.0).min(max_h);
+            let x = (at.x + 14.0).clamp(8.0, (self.size.x - w - 8.0).max(8.0));
+            let below = at.y + 18.0;
+            let above = at.y - 12.0 - h;
+            let y = if below + h <= self.size.y - 8.0 {
+                below
+            } else if above >= 8.0 {
+                above
+            } else {
+                (self.size.y - h - 8.0).max(8.0)
+            };
+            let r = Rect::new(x, y, w, h);
             self.p().rounded(r, 6.0, Color::rgba(34, 34, 34, 1.0));
             self.p().rounded_border(r, 7.0, 1.0, Color::WHITE.alpha(0.1));
-            self.paragraph(&t, Vec2::new(r.x + 10.0, r.y + 4.0), w - 20.0, 12.5, Weight::Medium, TEXT_SOFT);
+            self.push_clip(Rect::new(r.x + 10.0, r.y + 4.0, text_w, (h - 8.0).max(0.0)), 2.0);
+            self.paragraph(&t, Vec2::new(r.x + 10.0, r.y + 4.0), text_w, 12.5, Weight::Medium, TEXT_SOFT);
+            self.pop_clip();
         }
         let mut layers = Vec::new();
         let mut verts = Vec::new();

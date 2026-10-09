@@ -51,7 +51,11 @@ impl App {
             && self.window.is_some()
         {
             if let Some(shot) = shot {
+                let file = shot.0.to_string_lossy().into_owned();
                 self.frame_shot(shot, lighting);
+                if self.integrations.plugins.as_ref().is_some_and(|p| !p.is_empty()) {
+                    crate::plugins::queue_event(&mut self.integrations.plugin_events, "screenshot", vec![omsi_plugin::InfoValue::Text(file)]);
+                }
             }
             let (frame, view, shown_nothing) = self.frame_acquire(&mut reconfigure);
             match view {
@@ -165,7 +169,7 @@ impl App {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (Some(frame), None),
             wgpu::CurrentSurfaceTexture::Occluded
-            if omsi_cfg::flags::OMSI_RENDER_OCCLUDED.is_set() =>
+            if omsi_cfg::flags::OMSI_RENDER_OCCLUDED.is_set() || omsi_cfg::flags::OMSI_HIDDEN_WINDOW.is_set() =>
                 {
                     let (w, h) = (s.config.width, s.config.height);
                     if self
@@ -273,15 +277,6 @@ impl App {
                     log::error!("OpenXR rendering stopped: {e:#}");
                     self.xr.vr = None;
                 }
-            }
-        }
-        if self.cam.in_cab {
-            if let Some(w) = self.world.as_ref() {
-                self.gfx.mirror_hud.ensure_frame(r, scene);
-                let hud = self
-                    .settings
-                    .hud_viewport((s.config.width, s.config.height));
-                steps::push_mirror_hud(&self.gfx.mirror_hud, scene, w, hud, (self.input.cursor.0 - hud[0], self.input.cursor.1));
             }
         }
         if !mirrored
@@ -521,18 +516,23 @@ impl App {
         let mut finish = false;
         self.perf.frames += 1;
         let profiling = omsi_cfg::flags::OMSI_PROFILE.is_set();
+        // (the warm-up: 15 s of play, not of the process - a big map's loading took most of
+        // 15 s, and the summary then held the first heavy frames of play)
+        let playing = *self.perf.play_started.get_or_insert_with(Instant::now);
         if profiling
             && self.perf.cpu_mark.is_none()
-            && self.started.elapsed().as_secs_f32() > 15.0
+            && playing.elapsed().as_secs_f32() > 15.0
         {
             self.perf.cpu_mark =
                 process_cpu_seconds().map(|c| (c, Instant::now(), self.perf.total_frames));
+            self.perf.thread_cpu_mark = crate::startup::thread_cpu_seconds();
+            self.perf.instructions_mark = crate::startup::process_instructions();
             self.perf.profile_mark = Some(crate::perf_report::ProfileMark::take(&self.perf.profile, r));
         }
         if let (Some(limit), false) = (self.args.exit_after, self.exiting) {
             if self.started.elapsed().as_secs_f32() > limit {
                 self.exiting = true;
-                log::info!("exit after {limit} s: {} frames total ({} with the window hidden{}), {:.1} fps average, {} frames over 50 ms, worst {:.0} ms", self.perf.total_frames, self.gfx.hidden_frames, if omsi_cfg::flags::OMSI_RENDER_OCCLUDED.is_set() { ", drawn off-screen" } else { ", not drawn" }, self.perf.total_frames as f32 / self.started.elapsed().as_secs_f32(), self.perf.spikes, self.perf.worst_ms);
+                log::info!("exit after {limit} s: {} frames total ({} with the window hidden{}), {:.1} fps average, {} frames over 50 ms, worst {:.0} ms", self.perf.total_frames, self.gfx.hidden_frames, if omsi_cfg::flags::OMSI_RENDER_OCCLUDED.is_set() || omsi_cfg::flags::OMSI_HIDDEN_WINDOW.is_set() { ", drawn off-screen" } else { ", not drawn" }, self.perf.total_frames as f32 / self.started.elapsed().as_secs_f32(), self.perf.spikes, self.perf.worst_ms);
                 if let (Some(st), Some(w)) =
                     (self.gfx.streamer.as_ref(), self.world.as_ref())
                 {
@@ -567,7 +567,8 @@ impl App {
                         (self.perf.cpu_mark, process_cpu_seconds())
                     {
                         let frames = self.perf.total_frames.saturating_sub(f0).max(1) as f64;
-                        log::info!("profile: since 15 s {:.1} ms wall and {:.1} ms CPU (all threads) per frame, {:.1} cores busy", t0.elapsed().as_secs_f64() / frames * 1000.0, (c1 - c0) / frames * 1000.0, (c1 - c0) / t0.elapsed().as_secs_f64().max(1e-3));
+                        let main = self.perf.thread_cpu_mark.zip(crate::startup::thread_cpu_seconds()).map(|(m0, m1)| format!(", {:.2} ms CPU of the frame's own thread", (m1 - m0) / frames * 1000.0)).unwrap_or_default();
+                        log::info!("profile: since 15 s {:.1} ms wall and {:.1} ms CPU (all threads) per frame{main}, {:.1} cores busy", t0.elapsed().as_secs_f64() / frames * 1000.0, (c1 - c0) / frames * 1000.0, (c1 - c0) / t0.elapsed().as_secs_f64().max(1e-3));
                     }
                     let (sw, sh) = r.scene_size(s.config.width, s.config.height);
                     log::info!(

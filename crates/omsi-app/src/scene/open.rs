@@ -327,27 +327,10 @@ impl World {
                 }
             }
             let paint_scheme_count = paint_schemes.len();
-            // scripts (or an empty program) for objects that are scripted or animated
-            let animated = mesh_def_index.iter().any(|d| {
-                !model.meshes[*d].animations.is_empty() || model.meshes[*d].visible.is_some()
+            let has_mouse_events = mesh_def_index.iter().any(|d| {
+                model.meshes.get(*d).and_then(|m| m.mouse_event.as_ref()).is_some()
             });
-            let has_freetex = mesh_def_index.iter().any(|d| {
-                model.meshes[*d].materials.iter().any(|o| !o.item && o.freetex.is_some())
-            });
-            let program = if !sco.scripts.scripts.is_empty()
-                || !sco.scripts.stringvarlists.is_empty()
-                || !sco.scripts.varlists.is_empty()
-                || has_freetex
-                || animated
-                || sco.sound.is_some()
-            {
-                Some(Arc::new(omsi_sim::scenery::compile_scenery(
-                    &self.root,
-                    &sco.scripts,
-                )))
-            } else {
-                None
-            };
+            let program = object_program(&self.root, &sco, &model, &mesh_def_index, has_mouse_events);
             let mesh_shadow = mesh_def_index
                 .iter()
                 .map(|d| model.meshes[*d].is_shadow)
@@ -434,6 +417,7 @@ impl World {
                 mesh_pivots,
                 mesh_shadow,
                 mesh_casts,
+                has_mouse_events,
                 program,
                 lower_lods,
                 lod0_min,
@@ -443,8 +427,8 @@ impl World {
                 deform,
                 collision,
                 paint,
-                camera: Default::default(),
-                collision_shape: Default::default(),
+                // (worked out on first use)
+                camera: Default::default(), collision_shape: Default::default(), embedded_lights: Default::default(),
             }))
         })();
         // the other season's look: its own copy of the type (its own textures on the GPU),
@@ -477,7 +461,8 @@ impl World {
                 let dirs = texture_dirs(&self.root, &dir);
                 let dirs: Vec<&Path> = dirs.iter().map(|p| p.as_path()).collect();
                 let surf = def.textures.iter().map(|t| surf_map(&t.file, &dirs)).collect();
-                Arc::new(SplineType { dir, def, surf })
+                let surface = def.textures.iter().map(|t| surface_id(&t.file, &dirs)).collect();
+                Arc::new(SplineType { dir, def, surf, surface })
             });
         self.spline_types
             .lock()
@@ -691,4 +676,34 @@ pub(super) fn is_street_sign(file: &str) -> bool {
     let f = file.to_ascii_lowercase().replace(['\\', '_', ' ', '-'], "");
     let name = f.rsplit('/').next().unwrap_or(&f);
     ["streetsign", "streetname", "strschild", "strassenschild", "straßenschild", "strassenname", "roadsignname", "roadname"].iter().any(|k| name.contains(k))
+}
+
+fn object_program(
+    root: &Path,
+    sco: &SceneryObject,
+    model: &Model,
+    mesh_def_index: &[usize],
+    has_mouse_events: bool,
+) -> Option<Arc<omsi_script::Program>> {
+    let animated = mesh_def_index.iter().any(|d| {
+        !model.meshes[*d].animations.is_empty() || model.meshes[*d].visible.is_some()
+    });
+    let has_freetex = mesh_def_index.iter().any(|d| {
+        model.meshes[*d].materials.iter().any(|o| !o.item && o.freetex.is_some())
+    });
+    if !sco.scripts.scripts.is_empty()
+        || !sco.scripts.stringvarlists.is_empty()
+        || !sco.scripts.varlists.is_empty()
+        || has_freetex
+        || animated
+        || has_mouse_events
+        || sco.sound.is_some()
+    {
+        Some(Arc::new(omsi_sim::scenery::compile_scenery(
+            root,
+            &sco.scripts,
+        )))
+    } else {
+        None
+    }
 }

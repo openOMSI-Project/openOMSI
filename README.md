@@ -6,20 +6,20 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/openOMSI-Project/openOMSI/releases/latest"><img alt="Version" src="https://img.shields.io/github/v/release/openOMSI-Project/openOMSI?label=version&color=f47f30&style=for-the-badge"></a>
-  <a href="https://openomsi-project.github.io/openOMSI/"><img alt="Playing now" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fopenomsi.savvabestbrother.workers.dev%2Fbadge&label=playing%20now&style=for-the-badge&logo=steam&logoColor=white"></a>
-  <a href="https://github.com/openOMSI-Project/openOMSI/actions/workflows/release.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/openOMSI-Project/openOMSI/release.yml?branch=main&style=for-the-badge&label=build"></a>
-  <a href="https://openomsi-project.github.io/openOMSI/"><img alt="Docs" src="https://img.shields.io/badge/docs-website-2d3138?style=for-the-badge"></a>
+  <a href="https://github.com/openOMSI-org/openOMSI/releases/latest"><img alt="Version" src="https://img.shields.io/github/v/release/openOMSI-org/openOMSI?label=version&color=f47f30&style=for-the-badge"></a>
+  <a href="https://openomsi.org/"><img alt="Playing now" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fopenomsi.savvabestbrother.workers.dev%2Fbadge&label=playing%20now&style=for-the-badge&logo=steam&logoColor=white"></a>
+  <a href="https://github.com/openOMSI-org/openOMSI/actions/workflows/release.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/openOMSI-org/openOMSI/release.yml?branch=main&style=for-the-badge&label=build"></a>
+  <a href="https://openomsi.org/"><img alt="Docs" src="https://img.shields.io/badge/docs-website-2d3138?style=for-the-badge"></a>
   <a href="https://discord.gg/VG2EKVafYG"><img alt="Discord" src="https://img.shields.io/badge/discord-join%20us-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
   <a href="https://buymeacoffee.com/usonskyyy"><img alt="Buy me a coffee" src="https://img.shields.io/badge/buy%20me%20a%20coffee-support-ffdd00?style=for-the-badge&logo=buymeacoffee&logoColor=black"></a>
   <a href="https://ko-fi.com/usonance"><img alt="Ko-fi" src="https://img.shields.io/badge/ko--fi-support-29abe0?style=for-the-badge&logo=kofi&logoColor=white"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/openOMSI-Project/openOMSI?style=for-the-badge"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/openOMSI-org/openOMSI?style=for-the-badge"></a>
 </p>
 
 > [!WARNING]
 > **Early release. Expect bugs.** openOMSI is in an early stage of development: things may be
 > missing, broken or change between versions. Please report problems in
-> [Issues](https://github.com/openOMSI-Project/openOMSI/issues) or on our
+> [Issues](https://github.com/openOMSI-org/openOMSI/issues) or on our
 > [Discord server](https://discord.gg/VG2EKVafYG).
 
 **openOMSI** is a from-scratch recreation of the bus simulator **OMSI 2**, written in Rust:
@@ -34,7 +34,7 @@ and fully compatible with the existing maps, buses, scenery and mods.
 ## Download
 
 Every commit to `main` is built by GitHub Actions and published on the
-[**Releases**](https://github.com/openOMSI-Project/openOMSI/releases) page:
+[**Releases**](https://github.com/openOMSI-org/openOMSI/releases) page:
 
 | Platform | File |
 | --- | --- |
@@ -60,7 +60,7 @@ the maps Grundorf and Berlin-Spandau and the stock buses (MAN SD200/SD202, NL). 
 brings no game content of its own; it plays the original's maps, buses and mods.
 
 1. **Download** the file for your system from
-   [Releases](https://github.com/openOMSI-Project/openOMSI/releases) (table above) and unpack it
+   [Releases](https://github.com/openOMSI-org/openOMSI/releases) (table above) and unpack it
    into a folder of its own that you can write to - your Documents, a games folder, or the
    OMSI 2 folder itself. Not `Program Files`: the launcher could not update itself there.
 2. **Start it.**
@@ -121,7 +121,7 @@ to.
 
 ## Documentation
 
-The full documentation is on the website: **https://openomsi-project.github.io/openOMSI/**. The same
+The full documentation is on the website: **https://openomsi.org/**. The same
 pages live in [`docs/`](docs):
 
 | Document | What is in it |
@@ -135,7 +135,8 @@ pages live in [`docs/`](docs):
 | [Content formats](docs/FORMATS.md) | every OMSI 2 file format |
 | [Architecture](docs/ARCHITECTURE.md) | crates, threading, renderer, roadmap |
 | [Routes](docs/ROUTES.md) | how the original runs timetables, chrono, HOF, IBIS |
-| [Plugins](docs/PLUGINS.md) | Lua plugins (API and examples), OMSI plugin DLLs and the 32-bit plugin host |
+| [Plugins](docs/PLUGINS.md) | Lua and WebAssembly plugins (the API of every group, examples), compiled `.oop` plugins, OMSI plugin DLLs and the 32-bit plugin host |
+| [Development Tools](https://github.com/openOMSI-org/openOMSI-Development-Tools) | the plugin workbench: projects, the API documentation, the `.oop` compiler and signing keys (Windows, Linux, macOS) |
 | [Dedicated server](docs/SERVER.md) | hosting a session without a window |
 | [Versioning & releases](docs/VERSIONING.md) | the `MAJOR.MINOR.COMMIT` scheme and the CI |
 | [Changelog](CHANGELOG.md) | what changed in each version |
@@ -143,7 +144,7 @@ pages live in [`docs/`](docs):
 ## Building from source
 
 ```sh
-git clone https://github.com/openOMSI-Project/openOMSI.git && cd openOMSI
+git clone https://github.com/openOMSI-org/openOMSI.git && cd openOMSI
 scripts/build-macos.sh        # macOS   → dist/macos/openOMSI.app
 scripts\build-windows.cmd     # Windows → dist\windows\openomsi.exe
 scripts/build-linux.sh        # Linux   → dist/linux/openomsi

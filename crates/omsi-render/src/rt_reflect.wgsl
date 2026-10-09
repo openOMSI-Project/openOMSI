@@ -85,9 +85,30 @@ fn on_screen(pt: vec3<f32>) -> vec3<f32> {
 fn hit_light(o: vec3<f32>, d: vec3<f32>, h: Hit, rough: f32) -> vec3<f32> {
     let pt = o + d * h.t;
     let sc = on_screen(pt);
-    if (sc.x == 1.0) {
-        return finite(textureSampleLevel(t_scene, s_lin, sc.yz, 0.0).rgb);
+    // (a cut-out mesh - leaves - seen through a gap shows what lies behind it there: the
+    // picture's colour all the same, the same for the rays beside it; deciding leaf or gap
+    // one ray at a time sprinkled the glass with light and dark specks, #1907)
+    let cut = (records[h.record].flags & 1u) != 0u;
+    if (sc.x == 1.0 || (cut && sc.x == 2.0)) {
+        let seen = finite(textureSampleLevel(t_scene, s_lin, sc.yz, 0.0).rgb);
+        // (towards the screen's edge the picture's colour hands over to the mesh's own,
+        // which is what the rays beyond the edge get: a hard seam ran across the windows
+        // where the reflected street left the screen)
+        let edge = min(min(sc.y, 1.0 - sc.y), min(sc.z, 1.0 - sc.z));
+        let k = smoothstep(0.0, 0.08, edge);
+        if (k >= 0.999) {
+            return seen;
+        }
+        return mix(mesh_light(pt, d, h), seen, k);
     }
+    return mesh_light(pt, d, h);
+}
+
+// What a ray finds off the screen or hidden there: the hit mesh's mean colour (its
+// texture's and its material's) lit by the sun (a shadow ray from there) and the sky, and
+// the air along the way.
+fn mesh_light(pt: vec3<f32>, d: vec3<f32>, h: Hit) -> vec3<f32> {
+    let o = pt - d * h.t;
     let r = records[h.record];
     var albedo = r.color.rgb;
     if (r.tex != 0xffffffffu) {
@@ -185,15 +206,11 @@ fn cs_reflect(@builtin(global_invocation_id) gid: vec3<u32>) {
             h.t = ch.t;
             h.record = ch.instance_custom_data + ch.geometry_index;
             let cut = (records[h.record].flags & 1u) != 0u;
-            if (cut && on_screen(o + d * h.t).x == 2.0) {
-                start = h.t + 0.01;
-                continue;
-            }
             l = hit_light(o, d, h, rough);
             if (cut) {
                 // (off the screen or hidden: as much of the sky through it as its texels leave)
                 let sc = on_screen(o + d * h.t).x;
-                if (sc != 1.0) {
+                if (sc != 1.0 && sc != 2.0) {
                     l = mix(sky_probe(d, rough), l, mix(coverage(records[h.record]), 1.0, 0.5));
                 }
             }
@@ -240,7 +257,9 @@ fn fs_composite(in: VsOut) -> @location(0) vec4<f32> {
     let base = vec2<i32>(floor(hq));
     let fr = hq - floor(hq);
     let gloss = glossy_rough(rough);
-    let reach = select(0, clamp(i32(round(1.5 + gloss * 4.0)), 2, 4), gloss > 0.0);
+    // (a mirror-smooth pane takes the rays of the pixels round it as well: one ray per
+    // pixel, the same every frame, left every odd one standing out as a speck, #1907)
+    let reach = select(1, clamp(i32(round(1.5 + gloss * 4.0)), 2, 4), gloss > 0.0);
     let tol = (0.02 + gloss * 0.06) * dist + 0.05;
     var sum = vec3<f32>(0.0);
     var wsum = 0.0;
@@ -251,7 +270,9 @@ fn fs_composite(in: VsOut) -> @location(0) vec4<f32> {
             let dx = abs(f32(i) - fr.x);
             let dy = abs(f32(j) - fr.y);
             let k = max(1.0 - dx / (f32(reach) + 1.0), 0.0) * max(1.0 - dy / (f32(reach) + 1.0), 0.0);
-            let w = k * select(0.0, 1.0, s.a > 0.0 && abs(s.a - dist) < tol);
+            // (weighed down by its brightness: a single bright ray among dark ones is a
+            // speck, not the light of the place)
+            let w = k * select(0.0, 1.0, s.a > 0.0 && abs(s.a - dist) < tol) / (1.0 + dot(s.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)));
             sum += s.rgb * w;
             wsum += w;
         }

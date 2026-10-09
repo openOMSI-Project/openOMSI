@@ -90,8 +90,9 @@ pub struct SceneryInstance {
     pub vm: Vm,
     pub host: VehicleHost,
     animators: Vec<MeshAnimator>,
-    /// `[visible] var value` per mesh.
-    visible_conds: Vec<Option<(omsi_script::VarId, f32)>>,
+    /// `[visible] var value` per mesh (no variable: one the object does not declare, which
+    /// reads 0 - Omsi.exe registers it as it reads the model).
+    visible_conds: Vec<Option<(Option<omsi_script::VarId>, f32)>>,
     pub mesh_transforms: Vec<Mat4>,
     pub mesh_visible: Vec<bool>,
     v_in_use: Option<omsi_script::VarId>,
@@ -123,7 +124,7 @@ impl SceneryInstance {
         vm.run_init(&program, &mut state, &mut host);
         let mut animators: Vec<MeshAnimator> = meshes.iter().map(|(d, pivot)| MeshAnimator::new(d, *pivot, |n| program.var(n))).collect();
         crate::anim::link_parents(&mut animators, &meshes.iter().map(|(d, _)| *d).collect::<Vec<_>>());
-        let visible_conds = meshes.iter().map(|(d, _)| d.visible.as_ref().and_then(|(v, x)| program.var(v).map(|id| (id, *x)))).collect();
+        let visible_conds = meshes.iter().map(|(d, _)| d.visible.as_ref().map(|(v, x)| (program.var(v), *x))).collect();
         let n = meshes.len();
         SceneryInstance {
             v_night: program.var("NightlightA"),
@@ -182,7 +183,7 @@ impl SceneryInstance {
         crate::anim::apply_parents(&self.animators, &mut self.mesh_transforms);
         for (i, c) in self.visible_conds.iter().enumerate() {
             self.mesh_visible[i] = match c {
-                Some((id, x)) => (self.state.vars[*id as usize] - x).abs() < 0.5,
+                Some((id, x)) => (id.map(|id| self.state.vars[id as usize]).unwrap_or(0.0) - x).abs() < 0.5,
                 None => true,
             };
         }

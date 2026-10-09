@@ -141,6 +141,7 @@ macro_rules! flags {
 flags! {
     OMSI_AI_MODEL_LOCK: Bool, Switch, Use, "off", "AI cars steer no further than their model's own steering lock (no 60 degree allowance for tight turns).";
     OMSI_AI_WAY_ONLY: Bool, Switch, Use, "off", "AI vehicles stand on their way with the plain ground sampler, as before (A/B).";
+    OMSI_API_BLESS: Bool, Test, Use, "off", "cargo test -p omsi-plugin api_manifest: write docs/plugin-api.json and the reference tables of docs/PLUGINS.md again from the plugin API registry.";
     OMSI_AUDIT_LINE: Num, Test, Test, "-", "bus_audit example: the line (number and letter code) the IBIS typist enters instead of the bus's own.";
     OMSI_AUTOPILOT: Num, Test, Use, "-", "Offscreen: the player's bus follows the lanes at this speed in km/h (finds where it falls through or leaves the road).";
     OMSI_BACKEND: Text, Setup, Use, "settings", "vulkan, dx12, metal, gl or angle (dx11, d3d11; Windows): the graphics API tried first (overrides the settings). Set at runtime by the launcher and on Android.";
@@ -284,9 +285,12 @@ flags! {
     OMSI_GROUND_LANES: Bool, Debug, Use, "off", "Along every street lane, every metre, how far the ground lies over or under the lane.";
     OMSI_GROUND_SAMPLE: Text, Test, Use, "-", "Offscreen CSV: what the wheels stand on every metre along the lanes near the start.";
     OMSI_HEIGHTPROFILE_GROUND: Bool, Switch, Once, "off", "The wheels stand on the splines' [heightprofile]s again (A/B).";
+    OMSI_HIDDEN_WINDOW: Bool, Test, Use, "off", "The game's window is made and never shown (no Dock icon on macOS): a run of the whole game (its frame, the plugins, --exit-after) beside whoever works at the screen; its frames are drawn into a texture, for benchmarks.";
     OMSI_HIDE_MESH: Text, Test, Use, "-", "a|b: leave out the meshes whose file names contain one of the parts.";
     OMSI_HIDE_WINDOW: Text, Test, Use, "-", "from,to: treat the window as hidden between these seconds.";
     OMSI_HOLE_PHOTO: Bool, Test, Use, "off", "With OMSI_ROAD_PHOTO: photograph from above down to 25 m under the lane (holes in the world).";
+    OMSI_HTML_FALLBACK_FONT: Text, Switch, Use, "-", "Font file for the html pages' characters Roboto lacks (Hangul, CJK); else Malgun Gothic (Windows) or AppleGothic (macOS).";
+    OMSI_HTML_FALLBACK_FONT_BOLD: Text, Switch, Use, "-", "With OMSI_HTML_FALLBACK_FONT: its bold face.";
     OMSI_IBIS_BUDGET: Num, Tuning, Use, "10", "Seconds the IBIS typist may take per entry.";
     OMSI_INPUT: Text, Test, Use, "-", "Scripted keyboard, mouse and camera input for window runs.";
     OMSI_INSTANCE: Text, Setup, Use, "-", "The id of a game instance started by the launcher (set for the child process).";
@@ -343,6 +347,7 @@ flags! {
     OMSI_NO_MODEL_ORDER: Bool, Switch, Use, "off", "Draw the opaque parts of ordered models first again (A/B).";
     OMSI_NO_MSAA_PREPASS: Bool, Switch, Frame, "off", "No depth prepass with multisampling.";
     OMSI_NO_PBR: Bool, Switch, Use, "off", "No PBR materials.";
+    OMSI_NO_PIPELINE_CACHE: Bool, Switch, Use, "off", "Compile every pipeline at each start (no ~/.openomsi/cache/pipelines-*.bin).";
     OMSI_NO_PLUGINS: Bool, Switch, Use, "off", "No plugins loaded.";
     OMSI_NO_POLL_THREAD: Bool, Switch, Use, "off", "No device poll thread.";
     OMSI_NO_PRESENCE: Bool, Switch, Use, "off", "No presence (\"playing now\") service.";
@@ -390,6 +395,8 @@ flags! {
     OMSI_PROFILE_JSON: Text, Debug, Use, "-", "With OMSI_PROFILE and --exit-after: the exit summary (after the 15 s warm-up) as JSON into this file, see scripts/compare-performance.py.";
     OMSI_PUDDLE_F0: Num, Tuning, Use, "0.08", "Puddle reflectance at normal incidence (0.02 to 0.2).";
     OMSI_PUDDLE_THICKNESS: Num, Tuning, Use, "0.12", "Puddle water film thickness.";
+    OMSI_RECORD: Num, Test, Use, "-", "Offscreen --drive: a picture every 1/this second into <out>_frames/ and the run's mixed sound into <out>.wav (films with sound).";
+    OMSI_RECORD_FROM: Num, Test, Use, "0", "With OMSI_RECORD: start the film this many seconds into the drive.";
     OMSI_RENDER_CLOCK: Num, Test, Use, "0", "Seconds the animation clock starts on (offscreen pictures).";
     OMSI_RENDER_OCCLUDED: Bool, Test, Use, "off", "Draw frames into a texture while the window is hidden (macOS gives none).";
     OMSI_REPAIR_BODY_DEPTH: Bool, Switch, Use, "off", "The old guess for [matl_alpha] 2 vehicle bodies (A/B).";
@@ -401,6 +408,7 @@ flags! {
     OMSI_ROOT: Text, Setup, Use, "found", "The OMSI 2 installation folder (also the content root for tests that need real content).";
     OMSI_RT_REFL_HALF: Bool, Switch, Use, "off", "Trace reflections at half size.";
     OMSI_SAFE_GPU: Num, Setup, Use, "0", "Restarts after a lost graphics device: lighter on the card each time. Set at runtime on Android and by the restart.";
+    OMSI_SCREEN_AT: Text, Setup, Once, "-", "x,y: the screen (a point on the desktop, pixels) the game window opens on; the launcher sets it to where it stands.";
     OMSI_SEED: Num, Test, Use, "random", "Seed of the scripts' random numbers (repeat a session).";
     OMSI_SHADOW_FAR_EVERY_FRAME: Bool, Switch, Frame, "off", "Redraw the far shadow map every frame.";
     OMSI_SHADOW_NEAR_EVERY_FRAME: Bool, Switch, Frame, "off", "Redraw the near shadow map every frame.";
@@ -427,6 +435,7 @@ flags! {
     OMSI_TRACE_VARS: Text, Debug, Use, "-", "a,b,$c: the listed variables every half second of the run.";
     OMSI_TRACKIR_NATIVE: Text, Switch, Use, "on", "0 turns the native TrackIR interface off.";
     OMSI_TRAFFIC_ALL_GROUPS: Bool, Switch, Use, "off", "Let restricted AI groups (aircraft, depot fleets) drive everywhere.";
+    OMSI_TRAFFIC_STATS: Text, Debug, Use, "-", "CSV: the traffic's flow every minute (standing cars, waits-for cycles, junction entries, red runs, overlaps), a summary at the end.";
     OMSI_TRIGGER_ALL: Bool, Test, Use, "off", "Check: fire every [mouseevent] of the model and compare the variables before and after.";
     OMSI_TYRE_SUSPENSION: Bool, Switch, Once, "off", "The old suspension with wheel mass, tyre and bump stops (A/B).";
     OMSI_UI_PREVIEW: Text, Test, Use, "target/ui-preview.png", "Plugin UI preview test: the picture's path.";

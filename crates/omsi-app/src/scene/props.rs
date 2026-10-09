@@ -268,7 +268,7 @@ impl World {
             self.drop_scripted(key, audio);
             return false;
         };
-        let _ = self.parked_live.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |n| Some(n.saturating_sub(state.parked_count)));
+        let _ = self.parked_live.try_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |n| Some(n.saturating_sub(state.parked_count)));
         self.help_arrows.lock().remove(&key);
         self.parked_objects.lock().retain(|_, p| p.tile != key);
             self.departed_objects.lock().retain(|_, (p, _, _)| p.tile != key);

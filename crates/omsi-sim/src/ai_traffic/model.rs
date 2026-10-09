@@ -84,6 +84,8 @@ pub struct AiCar {
     pub half_width: f32,
     /// Waiting at a junction for someone with the right of way this frame.
     pub yielding: bool,
+    /// It waited at its junction's line last frame for room on the exit.
+    pub exit_wait: bool,
     /// Stopped by a red light this frame.
     pub light_hold: bool,
     /// Junction lanes this car has claimed to drive through (`TPathInfo::reservePaths`).
@@ -139,6 +141,17 @@ pub struct AiCar {
     /// A train turned round as a whole (its last car leads now): what a trip's
     /// `[trainreverse]` is compared with (Omsi.exe's vehicle +0x4e1).
     pub consist_reversed: bool,
+    /// The vehicle (by id) it stands for this frame: the car ahead, the one it gives way
+    /// to at a junction (`stats::WAITS_ON_PLAYER` the player's or a LAN player's). The
+    /// waits-for graph of the traffic statistics.
+    pub waits_on: Option<u64>,
+    /// The vehicle (by id) it gave way to at its junction this frame.
+    pub yield_to: Option<u64>,
+    /// Chosen to break a ring of cars waiting on each other (`deadlock`): until this time
+    /// it goes through its junction whatever the rules say.
+    pub deadlock_pass: f32,
+    /// When it was last chosen so.
+    pub deadlock_tried: f32,
 }
 
 /// A free parking space beside a lane that a car means to park in: the space of parked car
@@ -592,6 +605,7 @@ impl TrafficSim {
             bus: bus.map(|b| Box::new(BusService::new(b.stops))),
             half_width,
             yielding: false,
+            exit_wait: false,
             light_hold: false,
             reserved: Vec::new(),
             amber: None,
@@ -614,6 +628,10 @@ impl TrafficSim {
             rail_trail: Default::default(),
             ai_secs: 0.0,
             consist_reversed: false,
+            waits_on: None,
+            yield_to: None,
+            deadlock_pass: f32::MIN,
+            deadlock_tried: f32::MIN,
             park: None,
             seed,
             scheme,

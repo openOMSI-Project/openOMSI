@@ -25,6 +25,9 @@ impl App {
         }
         if self.metar_locked(){self.service_msg=Some(("The weather cannot be changed while the METAR sync is on".into(),3.0));return;}
         custom.normalize();
+        // (the weather set by hand is the weather now: the physical model of the "natural"
+        // weather stops, or its next step put its own back at once)
+        crate::weather_model::stop();
         self.session.metar_rx=None;
         self.session.metar_once=false;
         let spec=custom.encode();
@@ -33,6 +36,7 @@ impl App {
         self.args.weather=Some(spec.clone()); self.session.weather_blend=None; self.session.weather_cycle=None; self.session.wetness=custom.road_wetness;
         crate::scene::SNOW_WEATHER.store(to.snow,std::sync::atomic::Ordering::Relaxed);
         omsi_sim::host::set_ambient_weather(to.temp.0,to.temp.1);
+        crate::weather_setup::publish_page_weather(&to);
         self.session.weather=Some(to);
         if clouds_changed{
             if let (Some(r),Some(scene))=(self.renderer.as_ref(),self.scene.as_mut()){
@@ -270,6 +274,7 @@ impl App {
         let from = self.session.weather.clone().unwrap_or_default();
         crate::scene::SNOW_WEATHER.store(to.snow, std::sync::atomic::Ordering::Relaxed);
         omsi_sim::host::set_ambient_weather(to.temp.0, to.temp.1);
+        crate::weather_setup::publish_page_weather(&to);
         self.args.weather = Some(file.clone());
         self.session.weather_cycle = None;
         self.session.weather_blend = Some(crate::weather_cycle::Blend::new(from, to, 60.0));

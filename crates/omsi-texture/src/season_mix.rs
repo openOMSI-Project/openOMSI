@@ -66,7 +66,7 @@ pub fn mixed_look(key: u64) -> Option<Option<String>> {
 /// A texture as it looks in the season `look` (`None`: summer), whatever season the map
 /// shows: the file [`crate::find_texture`] would find were that the map's season.
 pub fn find_texture_in_look(name: &str, dirs: &[&Path], look: Option<&str>) -> Option<PathBuf> {
-    crate::find_texture_in_season(name, dirs, look).or_else(|| crate::find_texture_elsewhere(name, dirs))
+    crate::find_texture_in_season(name, dirs, look)
 }
 
 #[cfg(test)]

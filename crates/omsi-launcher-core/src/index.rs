@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Increment when the cached catalog format or the logic that derives it changes.
-const INDEX_VERSION: u32 = 2;
+const INDEX_VERSION: u32 = 3;
 
 /// Modification time of `p`; a path inside an archive used in place has the archive's.
 pub fn mtime_ns(p: &Path) -> u64 {

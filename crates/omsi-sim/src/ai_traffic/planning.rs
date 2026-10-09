@@ -20,6 +20,35 @@ pub fn pass_time(dist: f32, creep: f32, st: &AiState, v_cap: f32) -> f32 {
     wait + arrival_time(first, st.speed, a0, v_cap) + arrival_time(dist - first, v1, accel, v_cap)
 }
 
+/// Seconds a car stands at a joint where two lanes become one before it takes its turn.
+pub const ZIP_WAIT: f32 = 3.0;
+
+/// Is car `c`, its front `dist` metres short of a joint, standing there waiting for its
+/// turn? `clear`: where it waits for the other lane's cars (`merge_clearance`).
+pub fn zip_waiting(c: &AiCar, dist: f32, clear: f32) -> bool {
+    c.state.speed < 0.5 && dist < clear + c.state.min_gap + 2.5 && c.stopped > ZIP_WAIT
+}
+
+/// How far before the joint where lane `b` runs into the lane `a` runs into a car on `b`
+/// (half width `hb`) keeps its front to be out of the way of a car on `a` (half width
+/// `ha`): where `b` has come within the two half widths and a margin of `a` (m, at least
+/// one). Waiting a metre short of the joint, a car at a merge of 45 degrees still stood
+/// with its nose in the other lane: the car it let go first could not get past it, and
+/// the two lanes took turns at a car every quarter of a minute.
+pub fn merge_clearance(net: &Network, b: usize, a: usize, ha: f32, hb: f32) -> f32 {
+    let (lb, la) = (&net.lanes[b], &net.lanes[a]);
+    let need = (ha + hb + 0.3) as f64;
+    let mut x = 1.0f32;
+    while x < 12.0 && x < lb.length() {
+        let (p, _) = lb.at(lb.length() - x);
+        if la.nearest_point(p).is_none_or(|(_, d)| d > need) {
+            return x;
+        }
+        x += 0.5;
+    }
+    x.min(12.0)
+}
+
 impl TrafficSim {
     /// Nearest vehicle ahead of position `s` on `lane` (following the lanes `plan` has
     /// chosen after it, else the first `next`, for up to `look` m): (distance from `s` to
@@ -178,20 +207,41 @@ impl TrafficSim {
                             dist_them / other.state.speed
                         };
                         let kept = self.cars[i].merge_after == Some(other.id);
-                        let first = t_them < t_me - 0.4
-                            || (kept && t_them < t_me + 1.0)
-                            || ((t_them - t_me).abs() <= 0.4
-                                && !kept
-                                && other.merge_after != Some(self.cars[i].id)
-                                && j < i);
+                        // Taking turns (the zip): a car that has stood at the joint for a
+                        // few seconds goes next, unless the other can no longer stop gently.
+                        // By arrival alone the one standing there never came first while
+                        // the other lane's queue kept rolling, and stood for minutes, the
+                        // lanes behind it and the junctions they come out of filling up.
+                        let my_dist = (before - me.front).max(0.0);
+                        let my_clear = merge_clearance(&self.net, from, f, other.half_width, self.cars[i].half_width);
+                        let their_clear = merge_clearance(&self.net, f, from, self.cars[i].half_width, other.half_width);
+                        let me_zip = zip_waiting(&self.cars[i], my_dist, my_clear);
+                        let them_zip = zip_waiting(other, dist_them, their_clear) && !other.yielding && !other.light_hold;
+                        let can_stop = |st: &AiState, d: f32| d > st.speed * st.speed / (2.0 * st.decel.max(1.0)) + 0.5;
+                        let first = if me_zip && them_zip {
+                            other.stopped > self.cars[i].stopped + 0.1
+                                || ((other.stopped - self.cars[i].stopped).abs() <= 0.1 && other.id < self.cars[i].id)
+                        } else if them_zip && can_stop(me, my_dist) {
+                            true
+                        } else if me_zip && can_stop(&other.state, dist_them) {
+                            false
+                        } else {
+                            t_them < t_me - 0.4
+                                || (kept && t_them < t_me + 1.0)
+                                || ((t_them - t_me).abs() <= 0.4
+                                    && !kept
+                                    && other.merge_after != Some(self.cars[i].id)
+                                    && j < i)
+                        };
                         if first {
-                            // behind it at the joint; while it is not past yet, wait at the
-                            // joint itself rather than behind a car that is still beside
+                            // behind it at the joint; while it is not past yet, wait short of
+                            // the joint, out of its way, rather than behind a car that is
+                            // still beside
                             let d = (before - theirs) - other.state.rear;
                             let (d, v) = if d >= 0.0 {
                                 (d, other.state.speed)
                             } else {
-                                ((before - 1.0).max(0.0), 0.0)
+                                ((before - my_clear).max(0.0), 0.0)
                             };
                             if best.map(|b| d < b.0).unwrap_or(true) {
                                 best = Some((d, v, j));
@@ -244,8 +294,60 @@ impl TrafficSim {
             .any(|&(j, os, _, _)| j != i && os > s - back && os < s + ahead)
     }
 
+    /// The vehicles the AI does not drive (the player's bus, the LAN players') that stand in
+    /// `lane` or on a lane just before or after it, going its way: (distance of their centre
+    /// along `lane` - negative on a lane before it -, speed, half length). A lane change
+    /// looks at these as at the cars there: they are not on the lanes, and a car moved over
+    /// into the lane the player's bus was driving in, beside it.
+    pub fn players_on(&self, lane: usize) -> Vec<(f32, f32, f32)> {
+        let mut out = Vec::new();
+        let Some(l) = self.net.lanes.get(lane) else { return out };
+        let boxes = self.player.iter().chain(self.others_now.iter()).copied();
+        for (centre, heading, half_len, half_w, speed) in boxes {
+            let far = |p: DVec3| (p - centre).truncate().length() > l.length() as f64 + 200.0;
+            if speed < -0.3 || (far(l.start()) && far(l.end())) {
+                continue;
+            }
+            // (on the lane itself or on one joining it at either end: inside it by some of
+            // its width, its heading within 50 degrees of the lane's)
+            let near = |k: usize, off: f32| -> Option<f32> {
+                let x = &self.net.lanes[k];
+                let (s, d) = x.nearest_point(centre)?;
+                let h = x.at(s).1 as f64;
+                let turn = ((h - heading + 540.0).rem_euclid(360.0) - 180.0).abs();
+                (d < (x.width * 0.5 + half_w - 0.3).max(1.2) as f64 && turn < 50.0 && s > 0.01 && s < x.length() - 0.01).then_some(s + off)
+            };
+            let at = near(lane, 0.0)
+                .or_else(|| self.net.prev.get(lane).into_iter().flatten().find_map(|&p| near(p, -self.net.lanes[p].length())))
+                .or_else(|| l.next.iter().find_map(|&n| near(n, l.length())));
+            if let Some(s) = at {
+                out.push((s, speed.max(0.0), half_len));
+            }
+        }
+        out
+    }
+
+    /// May car `i` move over into `lane` at `s` as far as the vehicles the AI does not
+    /// drive are concerned? They do not brake for it: nothing of theirs beside it, room
+    /// ahead, and one coming up from behind far enough back to stay there without braking
+    /// hard (its speed over a second and a fifth, and the closing speed at a gentle 1.5 m/s²).
+    pub fn players_let_in(&self, i: usize, lane: usize, s: f32) -> bool {
+        if self.player.is_none() && self.others_now.is_empty() {
+            return true;
+        }
+        let me = &self.cars[i].state;
+        self.players_on(lane).iter().all(|&(ps, pv, hl)| {
+            if ps >= s {
+                ps - hl - s - me.front > 3.0 + (me.speed - pv).max(0.0) * 1.5
+            } else {
+                s - me.rear - (ps + hl) > 3.0 + pv * 1.2 + (pv - me.speed).max(0.0).powi(2) / (2.0 * 1.5)
+            }
+        })
+    }
+
     /// May car `i` move over into `lane` at `s` now? Nothing may be beside it or just ahead,
-    /// and every car coming up behind must be able to stop comfortably behind it.
+    /// and every car coming up behind must be able to stop comfortably behind it - the
+    /// player's bus and the LAN players' included (`players_let_in`).
     pub fn can_merge(
         &self,
         i: usize,
@@ -253,6 +355,9 @@ impl TrafficSim {
         s: f32,
         by_lane: &HashMap<usize, Vec<(usize, f32, f32, bool)>>,
     ) -> bool {
+        if !self.players_let_in(i, lane, s) {
+            return false;
+        }
         let me = &self.cars[i].state;
         if !parked_lane_clear(
             self.parked.get(&lane).map(Vec::as_slice).unwrap_or(&[]),

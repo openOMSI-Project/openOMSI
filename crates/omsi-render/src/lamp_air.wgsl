@@ -223,8 +223,12 @@ fn precip_light(x: vec3<f32>, to_eye: vec3<f32>, snow: bool) -> vec3<f32> {
                     k = k * (0.05 + 0.95 * smoothstep(-0.1, 0.3, ld.z));
                 }
                 // (the scattering towards the eye relative to an even one: a drop's light
-                // goes on forwards, a flake's every way)
-                let c = dot(-ld, -to_eye);
+                // goes on forwards, a flake's every way. The angle is the one between the
+                // light's way from the lamp, -ld, and on to the eye: taken against -to_eye
+                // it put the forward peak behind the drop, and the drops in a bus's own
+                // beams, seen from behind the lamps, shone a hundred times too bright as
+                // white streaks down the road ahead)
+                let c = dot(-ld, to_eye);
                 let lobe = select(fog_phase(c), 0.7 * hg_phase(c, 0.3) + 0.3 / (4.0 * PI), snow) * 4.0 * PI;
                 e = e + l.color.rgb * l.color.w * enh.lights.y * k * lobe;
             }

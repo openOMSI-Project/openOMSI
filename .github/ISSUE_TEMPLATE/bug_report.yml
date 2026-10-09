@@ -19,7 +19,7 @@ body:
       options:
         - label: I wrote this report in English.
           required: true
-        - label: I searched the [open and closed issues](https://github.com/openOMSI-Project/openOMSI/issues?q=is%3Aissue) and this is not a duplicate.
+        - label: I searched the [open and closed issues](https://github.com/openOMSI-org/openOMSI/issues?q=is%3Aissue) and this is not a duplicate.
           required: true
         - label: It still happens on the latest release.
           required: true

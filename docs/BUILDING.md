@@ -1,6 +1,6 @@
 # Building from source
 
-Releases for every commit are on the [Releases](https://github.com/openOMSI-Project/openOMSI/releases)
+Releases for every commit are on the [Releases](https://github.com/openOMSI-org/openOMSI/releases)
 page; build from source only to work on openOMSI itself.
 
 All scripts live in `scripts/`, run from any folder (paths with spaces are fine) and put the

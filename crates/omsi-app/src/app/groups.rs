@@ -32,8 +32,8 @@ pub(crate) struct VrState {
 
 /// The multiplayer session: the LAN or server connection and the other players seen in it.
 pub(crate) struct NetState {
-    /// Other players on foot whose avatars are drawn (their ids).
-    pub(crate) remote_walkers: Vec<u32>,
+    /// Other players on foot whose avatars are drawn: their ids and figures (`kind`).
+    pub(crate) remote_walkers: Vec<(u32, u64)>,
     /// The player on foot is in this other player's bus (see `lan`: drawn from inside).
     pub(crate) inside_remote: Option<u32>,
     /// A dedicated server said we administer it (`admin`).
@@ -50,8 +50,18 @@ pub(crate) struct Integrations {
     /// Keys pressed (true) and let go since the Lua plugins' last frame.
     pub(crate) plugin_keys: Vec<(String, bool)>,
     /// What happened since the Lua plugins' last frame: crashes, people knocked down,
-    /// stops skipped (see `plugins::queue_event`).
+    /// stops skipped, services and moves of the bus, trips ended, jolts, tickets sold (see
+    /// `plugins::queue_event`).
     pub(crate) plugin_events: Vec<omsi_plugin::GameEvent>,
+    /// The same for events whose values are tables (see `plugins::queue_event_ex`).
+    pub(crate) plugin_events_ex: Vec<(&'static str, Vec<omsi_plugin::api::Value>)>,
+    /// The plugins' sounds playing, and whether each moves with the player's bus.
+    pub(crate) plugin_voices: Vec<(u64, bool)>,
+    /// What the plugins' events last saw of the game (see `plugins::Seen`).
+    pub(crate) plugin_seen: crate::plugins::Seen,
+    /// A plugin's `omsi.command` is running: what it does is the plugin's (the `service`
+    /// event's `by`).
+    pub(crate) plugin_command: bool,
     /// The Lua plugins' panels and notifications on the screen (`omsi.ui`).
     pub(crate) plugin_panels: crate::plugin_ui::PluginPanels,
     /// Discord's "Playing openOMSI" status, and when it was last brought up to date.
@@ -98,9 +108,16 @@ pub(crate) struct PerfState {
     pub(crate) governor_low: u32,
     /// Cumulative presentation wait at the previous frame, independent of OMSI_PROFILE.
     pub(crate) governor_wait_prev: f64,
+    /// OMSI_PROFILE: the first frame of play (the map loaded), which the warm-up counts from.
+    pub(crate) play_started: Option<Instant>,
     /// OMSI_PROFILE: process CPU seconds, time and frame count once the start-up is over,
     /// for the CPU time a frame costs (the wall time says little on a busy machine).
     pub(crate) cpu_mark: Option<(f64, Instant, u32)>,
+    /// OMSI_PROFILE: the CPU time of the thread that runs the frames when `cpu_mark` was
+    /// taken (s), for the CPU time the frame's own steps cost.
+    pub(crate) thread_cpu_mark: Option<f64>,
+    /// OMSI_PROFILE: the process's retired instructions then (macOS).
+    pub(crate) instructions_mark: Option<u64>,
     /// OMSI_PROFILE: the stages when `cpu_mark` was taken, and every frame's time since
     /// then (s), for the exit summary's percentiles (see `perf_report`).
     pub(crate) profile_mark: Option<crate::perf_report::ProfileMark>,
@@ -267,6 +284,8 @@ pub(crate) struct InputState {
     pub(crate) html_pressed: Option<(usize, f32, f32)>,
     /// The same for a page of a scenery object: its map id, script texture index and place.
     pub(crate) html_object_pressed: Option<(i64, usize, f32, f32)>,
+    /// The currently held scenery object switch: its map id and event name.
+    pub(crate) pressed_scenery_object: Option<(i64, String)>,
     /// Cursor movement (logical pixels) while dragging a switch, not yet handed to the
     /// script: `<event>_drag` fires once a frame with it (see `Player::drag`).
     pub(crate) drag_delta: (f32, f32),
@@ -407,9 +426,8 @@ pub(crate) struct SessionState {
     pub(crate) pending_time: Option<f64>,
     /// The play time (`clock.run_time`) the last situation was saved at.
     pub(crate) autosave_t: f64,
-    /// The fuel pump or the bus wash running (`run_service`): which, and the seconds the
-    /// tank or the dirt has not changed (it ends after `SERVICE_SETTLE`).
-    pub(crate) pumping: Option<(&'static str, f32)>,
+    /// The fuel pump or the bus wash running (`run_service`).
+    pub(crate) pumping: Option<Pumping>,
     /// The driver's personnel file and this session's statistics.
     pub(crate) career: career::Career,
     /// The duty's stops with their times as driven, kept in a file (`journey`).
@@ -418,7 +436,7 @@ pub(crate) struct SessionState {
     pub(crate) wetness: f32,
     /// How far the cloud cover has drifted with the wind (fractions of its tiling), summed
     /// up frame by frame so that a change of wind does not throw the sky around.
-    pub(crate) cloud_drift: [f32; 2],
+    pub(crate) cloud_drift: [f32; 4],
     /// A change of weather coming in (see `weather_cycle`).
     pub(crate) weather_blend: Option<crate::weather_cycle::Blend>,
     /// The weather cycle, when the weather chosen is `cycle`.
@@ -428,4 +446,17 @@ pub(crate) struct SessionState {
     /// The current METAR receiver is a single manual fetch rather than the continuous sync.
     pub(crate) metar_once: bool,
     pub(crate) metar_next: f64,
+}
+
+/// The fuel pump or the bus wash running (`SessionState::pumping`).
+#[derive(Clone, Copy)]
+pub(crate) struct Pumping {
+    /// "refuel" or "wash".
+    pub(crate) kind: &'static str,
+    /// The seconds the tank or the dirt has not changed (it ends after `SERVICE_SETTLE`).
+    pub(crate) idle: f32,
+    /// The litres in the tank when the pump started (the `service` event's amount).
+    pub(crate) from: f32,
+    /// Who started it (the `service` event's `by`).
+    pub(crate) by: &'static str,
 }

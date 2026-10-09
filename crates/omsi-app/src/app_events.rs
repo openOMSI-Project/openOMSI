@@ -65,6 +65,8 @@ impl ApplicationHandler for App {
         self.input.touch.drop_gpu();
         self.input_lost();
         self.save_last_situation();
+        // (a phone's app in the background is often ended without `exiting`)
+        omsi_render::pipeline_cache::save();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -122,7 +124,26 @@ impl ApplicationHandler for App {
             // back count only when pressed anew)
             WindowEvent::KeyboardInput { is_synthetic, ref event, .. } if self.input.input_away || (is_synthetic && event.state == ElementState::Pressed) => {}
             WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. } if self.input.input_away => {}
+            WindowEvent::ModifiersChanged(modifiers) => {
+                for code in input_script::release_inactive_modifiers(&mut self.input.keys, modifiers.state()) {
+                    self.on_key(event_loop, code, false, false);
+                }
+            }
+            // (a modifier's key-up that `ModifiersChanged` let go of already: Windows tells
+            // the new modifier state before the key-up itself, and the release ran twice)
+            WindowEvent::KeyboardInput { ref event, .. }
+                if event.state == ElementState::Released
+                    && matches!(event.physical_key, PhysicalKey::Code(c) if input_script::is_modifier(c) && !self.input.keys.contains(&c)) => {}
             WindowEvent::KeyboardInput { event, .. } => {
+                // a plugin's text field being typed into takes the keys pressed (their
+                // releases go on, so that nothing held stays held)
+                if event.state == ElementState::Pressed {
+                    if let PhysicalKey::Code(code) = event.physical_key {
+                        if self.plugin_typing_key(code, event.text.as_deref()) {
+                            return;
+                        }
+                    }
+                }
                 if event.state == ElementState::Pressed && self.menus.menu_edit_icao {
                     if let Some(text)=event.text.as_deref(){ self.icao_edit_text(text); }
                 }
@@ -378,6 +399,8 @@ impl ApplicationHandler for App {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         crate::game_lists::flush_settings(true);
         self.finish_session();
+        // (with the pipelines made since the start: puddles, Enhanced+)
+        omsi_render::pipeline_cache::save();
         // ("playing now" ends with the game)
         self.integrations.presence = None;
         if let Some(lan) = self.net.lan.take() {
@@ -468,6 +491,13 @@ impl App {
                     // the movement by 10 (the ignition key), 200 (the parking brake)
                     // or 500 (the driver's window), so a few pixels would do nothing
                     p.wheel(o, d, spread, -amount * 40.0);
+                    return;
+                }
+            }
+            if let (Some(w), Some((o, d, spread))) = (self.world.as_ref(), self.cursor_ray_now()) {
+                let blocked = self.player.as_ref().and_then(|p| p.opaque_body_hit(o, d));
+                if let Some(hit) = w.scenery_object_hit(o, d, crate::input_script::SCENERY_OBJECT_REACH, spread).filter(|h| blocked.map_or(true, |t| t >= h.t)) {
+                    w.scenery_object_wheel(hit.map_id, &hit.event, -amount * 40.0);
                     return;
                 }
             }

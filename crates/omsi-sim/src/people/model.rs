@@ -302,6 +302,8 @@ pub struct PeopleSim {
     /// Tickets sold at the cash desk this session and what they were worth.
     pub tickets_sold: u32,
     pub ticket_cash: f32,
+    /// The tickets sold since the last `take_sales`: name and value.
+    pub sales: Vec<(String, f32)>,
     /// Passengers that reached the cash desk, and those the driver served there.
     pub boarded: u32,
     pub served: u32,

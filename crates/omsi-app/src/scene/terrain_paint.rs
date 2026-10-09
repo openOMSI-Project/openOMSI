@@ -356,3 +356,49 @@ pub fn surf_map(texture: &str, dirs: &[&Path]) -> Option<Arc<omsi_geometry::Heig
     memo.lock().insert(path, map.clone());
     map
 }
+
+/// OMSI's `[surface]` id of a texture (0 asphalt, 1 concrete, 2 cobblestone, 3 dirt,
+/// 4 grass, 5 gravel, 6 snow, 7 deep snow): what its `.cfg` says, as Omsi.exe hands it to
+/// the scripts (`Axle_SurfaceID_`), and the ambience's tyres roll on. Few textures have
+/// one - the stock ones of the roads and crossings mostly do, a map's ground textures and
+/// most add-ons' not - so a texture without is told by its name (`gras`, `schotter`,
+/// `kopfstein` …); a name that says nothing is asphalt, OMSI's own default. Memoised.
+pub fn surface_id(texture: &str, dirs: &[&Path]) -> u8 {
+    static MEMO: std::sync::OnceLock<Mutex<HashMap<PathBuf, u8>>> = std::sync::OnceLock::new();
+    let Some(found) = omsi_texture::find_texture(texture, dirs) else {
+        return surface_by_name(texture);
+    };
+    let memo = MEMO.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(id) = memo.lock().get(&found) {
+        return *id;
+    }
+    let cfg = omsi_texture::cfg_path(texture, &found).map(|c| omsi_texture::TextureCfg::load(&c));
+    let id = match cfg {
+        Some(c) if c.surface_given => c.surface.clamp(0, 255) as u8,
+        _ => surface_by_name(texture),
+    };
+    memo.lock().insert(found, id);
+    id
+}
+
+/// The `[surface]` a texture's file name suggests (German and English names of the stock
+/// and the common add-on textures).
+pub fn surface_by_name(texture: &str) -> u8 {
+    let n = texture.replace('\\', "/").rsplit('/').next().unwrap_or("").to_ascii_lowercase();
+    let has = |keys: &[&str]| keys.iter().any(|k| n.contains(k));
+    if has(&["schnee", "snow"]) {
+        6
+    } else if has(&["kopfstein", "kopfgr", "cobble", "pflaster", "sett", "waschpfl"]) {
+        2
+    } else if has(&["schotter", "kies", "gravel", "splitt", "ballast", "gleisbett"]) {
+        5
+    } else if has(&["gras", "rasen", "wiese", "meadow", "lawn", "gruen"]) {
+        4
+    } else if has(&["sand", "erde", "dirt", "mud", "matsch", "feld", "acker", "field", "soil", "lehm", "waldweg", "forest"]) {
+        3
+    } else if has(&["beton", "concrete", "platte", "gehweg", "verbund", "pavement", "sidewalk", "wabenst", "gw_"]) {
+        1
+    } else {
+        0
+    }
+}

@@ -112,7 +112,7 @@ that camera sees from the rear section.
 ## Passenger doors: sixteen entries and sixteen exits
 
 OMSI 2 has the door variables of eight `[entry]` and eight `[exit]` paths a vehicle
-(`PAX_Entry0_Open` to `PAX_Entry7_Open`, the same with `_Req` and for `PAX_Exit`). openOMSI
+has (`PAX_Entry0_Open` to `PAX_Entry7_Open`, the same with `_Req` and for `PAX_Exit`). openOMSI
 has them for sixteen of each: `PAX_Entry8_Open` ... `PAX_Entry15_Open`, `PAX_Entry8_Req` ...
 and the same for the exits. An entry or exit past the eighth is a door of its own once the
 script sets its `_Open` variable (or lists it in a varlist); then its passengers wait for that

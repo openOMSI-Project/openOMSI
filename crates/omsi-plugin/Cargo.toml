@@ -10,6 +10,8 @@ omsi-cfg = { path = "../omsi-cfg" }
 libloading = "0.9"
 log.workspace = true
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
+wasmi = "2"
+oop-format = { git = "https://github.com/openOMSI-org/openOMSI-Development-Tools", rev = "496d9bd" }
 
 [[bin]]
 name = "omsi-plugin-host"

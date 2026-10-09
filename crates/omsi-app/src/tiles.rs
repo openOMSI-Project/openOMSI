@@ -47,9 +47,12 @@ impl IndexedSpline {
 #[derive(Default)]
 pub struct MapIndex {
     pub splines: HashMap<i64, IndexedSpline>,
-    /// (tile index in global.cfg, attachment id) → (spline id, distance of the row's first
-    /// object from the start of that spline - negative when it lies before it).
-    pub masters: HashMap<(usize, i64), (i64, f64)>,
+    /// (tile index in global.cfg, attachment id) → the `[splineAttachement]` rows: (spline id,
+    /// where the row's start lies on that spline - its own start distance less the spline's
+    /// chain offset, negative when the row begins before the spline, the distance between two
+    /// objects). The index's own check of the chain model against the object counts the editor
+    /// writes into the repeaters reads it.
+    pub masters: HashMap<(usize, i64), (i64, f64, f64)>,
     /// Object id → (tile, world position with the ground under it, rotation).
     pub objects: HashMap<i64, ((i32, i32), DVec3, [f64; 3])>,
     /// The objects whose id another tile uses as well, by (tile, id): a map joined from two
@@ -165,11 +168,12 @@ impl MapIndex {
     /// a tile by that index, which a missing tile file must not shift.
     pub fn build(tiles: &[(usize, i32, i32, PathBuf)], chrono_dirs: &[PathBuf], root: &Path) -> MapIndex {
         /// What one tile adds besides its own index part: its rows (key, spline, start
-        /// distance, interval), its repeaters (master key, spline, first object index),
-        /// and parent attachments to place after the spline rows.
+        /// distance, interval), its repeaters (id, spline, the first object of the row on that
+        /// spline, their own copy of the row's start distance and of its interval), and parent
+        /// attachments to place after the spline rows.
         type RowParts = (
             Vec<((usize, i64), i64, f64, f64, IndexedSpline)>,
-            Vec<((usize, i64), i64, usize)>,
+            Vec<(i64, i64, usize, f64, f64)>,
             Vec<((i32, i32), MapSpline, SplineAttachment)>,
             Vec<omsi_map::MapObject>,
         );
@@ -233,7 +237,7 @@ impl MapIndex {
                                 }));
                             }
                         }
-                        Some((master_tile, first)) => rows.1.push(((master_tile, a.id), s.id, first)),
+                        Some((_master_tile, first)) => rows.1.push((a.id, s.id, first, a.offset[2], a.interval)),
                     }
                 }
                 let terrain = omsi_map::Terrain::load(&terrain_file(&tile, path)).ok();
@@ -347,27 +351,25 @@ impl MapIndex {
                 None => index.tiles_failed += 1,
             }
         }
-        let mut intervals: HashMap<(usize, i64), f64> = HashMap::new();
         for (key, spline, d, interval, local) in rows.0 {
             let offset = chain_offset_from(&index, spline, local);
-            index.masters.insert(key, (spline, d - offset));
-            intervals.insert(key, interval);
+            index.masters.insert(key, (spline, d - offset, interval));
         }
         // how well the chain model matches the editor: a repeater names the first object of
-        // the row that lies on its spline
+        // the row that lies on its spline, and every record lays the row out from its own copy
+        // of it (see [`row_start`])
         let (mut checked, mut agree) = (0usize, 0usize);
-        for (key, spline, first) in &rows.1 {
-            let (Some(&(master_spline, d)), Some(&interval)) = (index.masters.get(key), intervals.get(key)) else { continue };
-            if interval <= 0.0 {
+        for (id, spline, first, d, interval) in &rows.1 {
+            if *interval <= 0.0 {
                 continue;
             }
-            if let Some((acc, _)) = chain_distance(&index, master_spline, *spline, f64::MAX) {
-                checked += 1;
-                let ours = ((acc - d) / interval + 1e-6).ceil().max(0.0) as usize;
-                agree += (ours == *first) as usize;
-                if ours != *first && omsi_cfg::flags::OMSI_DEBUG_REPEATERS.is_set() {
-                    log::info!("repeater {:?} on spline {spline}: the map says object {first}, the chain {ours} (chain {acc:.2} m, start {d:.2} m, interval {interval} m: the map's first at {:.2} m, ours at {:.2} m)", key, d + *first as f64 * interval - acc, d + ours as f64 * interval - acc);
-                }
+            let Some(local) = index.splines.get(spline) else { continue };
+            let d0 = d - chain_offset_from(&index, *spline, *local);
+            let ours = first_after(d0, 0.0, *interval).map(|(_, j)| j).unwrap_or(0);
+            checked += 1;
+            agree += (ours == *first) as usize;
+            if ours != *first && omsi_cfg::flags::OMSI_DEBUG_REPEATERS.is_set() {
+                log::info!("spline attachment {id}: the map counts object {first} first on spline {spline}, its own copy says {ours} (the row starts {d0:.2} m into the spline, objects every {interval} m)");
             }
         }
         log::info!("map index: {} tiles read ({} unreadable), {} splines, {} objects, {} attachment rows ({} repeaters, {agree} of the {checked} on a known chain start where the map says), {} object and spline files in {:.2} s", index.tiles_read, index.tiles_failed, index.splines.len(), index.objects.len(), index.masters.len(), rows.1.len(), index.files.len(), t0.elapsed().as_secs_f64());
@@ -536,35 +538,6 @@ pub struct RowObject {
     pub pose: Pose,
 }
 
-/// How long the chain from the start of spline `from` is before `to` starts, following the
-/// `next` links (and the direction flips where two splines meet end to end), and whether
-/// `to` is then run backwards. None when `to` is not on the chain within `limit` metres.
-pub fn chain_distance(index: &MapIndex, from: i64, to: i64, limit: f64) -> Option<(f64, bool)> {
-    let mut cur = from;
-    let mut forward = true;
-    let mut acc = 0.0;
-    let mut seen: Vec<i64> = Vec::new();
-    loop {
-        let s = index.splines.get(&cur)?;
-        if cur == to && !seen.is_empty() {
-            return Some((acc, !forward));
-        }
-        if seen.contains(&cur) || seen.len() > 500 || acc > limit {
-            return None;
-        }
-        seen.push(cur);
-        acc += s.length;
-        let next_id = if forward { s.next } else { s.prev };
-        let next = index.splines.get(&next_id)?;
-        if next.prev == cur {
-            forward = true;
-        } else if next.next == cur {
-            forward = false;
-        }
-        cur = next_id;
-    }
-}
-
 /// How far the start of spline `id` lies from the start of its chain. OMSI stores this in the
 /// last `[spline]` field in tile version 11 and newer; that value is authoritative because
 /// `prev`/`next` links can be stale. Older tiles do not store it, so reconstruct it by walking
@@ -638,43 +611,35 @@ fn first_after(d0: f64, acc: f64, interval: f64) -> Option<(f64, usize)> {
 }
 
 /// Where the objects of row record `att` begin on `spline`, its own spline.
+///
+/// Every record of a row - the `[splineAttachement]` of the spline the row was attached to and
+/// every `[splineAttachement_repeater]` that carries it on where the chain enters another tile
+/// - lays the row out itself: object `j` lies `d + j * interval` along the chain from the
+/// chain's start while `j * interval <= range`, the record's own copy of those numbers being
+/// the distance the editor last wrote (docs/FORMATS.md). A repeater's copy is what the map's
+/// own object counts agree with - it is the same row, so a tile can be drawn without the tile
+/// that holds the record the row was attached on, and where a mod map's copies have drifted
+/// apart (Grundorf Island 4's bridges carry interval 60 and a start that has moved, where the
+/// record on the bridge's first spline says 55) the row goes where its own record says, as
+/// `Omsi.exe` places it. The master's tile index the repeater stores is not consulted: it
+/// names a tile of `global.cfg`'s `[map]` list that no longer holds the master when a tile was
+/// added or removed after the repeater was written (32 of Berlin-Spandau's 213 repeaters).
 fn row_start(att: &SplineAttachment, spline: &MapSpline, index: Option<&MapIndex>) -> Option<RowStart> {
-    let interval = att.interval.max(0.0);
-    let d = att.offset[2];
-    let Some((master_tile, first)) = att.repeater else {
-        // the start distance counts from the start of the chain
-        // Separate towns in a merged map can reuse spline ids. The record's authored
-        // offset or legacy links belong to this record; a global id may name another.
-        let offset = spline.map_chain_offset
-            .or_else(|| index.map(|ix| chain_offset_from(ix, spline.id, IndexedSpline::from_map(spline))))
-            .unwrap_or(0.0);
-        let d0 = d - offset;
-        return Some(RowStart { s: d0, j: 0, backwards: false, d0, acc: 0.0 });
-    };
-    let master = index.and_then(|ix| ix.masters.get(&(master_tile, att.id)).copied());
-    if let (Some(ix), Some((master_spline, d0))) = (index, master) {
-        let limit = d0.max(0.0) + att.range.max(0.0) + spline.length.max(0.0) + 1000.0;
-        let Some((acc, backwards)) = chain_distance(ix, master_spline, spline.id, limit) else {
-            if interval > 0.0 {
-                log::debug!("spline attachment {} ({}): spline {} not on the chain of {master_spline}", att.id, att.file, spline.id);
-            }
-            return None;
-        };
-        return first_after(d0, acc, interval).map(|(s, j)| RowStart { s, j, backwards, d0, acc });
-    }
-    if interval > 0.0 && index.is_some() {
-        // the master is not in the map (a broken chain in a mod map): keep the row's
-        // spacing with its own count, starting at the interval's phase
-        let s = d % interval;
-        return Some(RowStart { s, j: first, backwards: false, d0: s - first as f64 * interval, acc: 0.0 });
-    }
-    None
+    // The start distance counts from the start of the chain:
+    // Separate towns in a merged map can reuse spline ids. The record's authored
+    // offset or legacy links belong to this record; a global id may name another.
+    let offset = spline.map_chain_offset
+        .or_else(|| index.map(|ix| chain_offset_from(ix, spline.id, IndexedSpline::from_map(spline))))
+        .unwrap_or(0.0);
+    let d0 = att.offset[2] - offset;
+    Some(RowStart { s: d0, j: 0, backwards: false, d0, acc: 0.0 })
 }
 
 /// The objects of row record `att` on `spline` from `start` on, while `j * interval <= range`.
 fn place_on(att: &SplineAttachment, spline: &MapSpline, origin: DVec2, index: Option<&MapIndex>, start: RowStart) -> Vec<RowObject> {
     let curve = SplineCurve { half_cant_width: omsi_geometry::half_cant_width_of(&spline.file), ..SplineCurve::from_map(spline, origin) };
     let len = spline.length.max(0.0);
+    // the record's own copy of the row's spacing and reach (see [`row_start`])
     let interval = att.interval.max(0.0);
     let range = att.range.max(0.0);
     let (x, h) = (att.offset[0], att.offset[1]);
@@ -1674,7 +1639,7 @@ mod tests {
 
     #[test]
     fn row_runs_on_through_its_tile() {
-        let mut ix = buffer_stop_chain();
+        let ix = buffer_stop_chain();
         // spline 11 runs against the chain: its end meets 10 at y = 400, its start meets 12
         let s10 = spline(10, 0, 11, 400.0);
         let s11 = MapSpline { pos: [0.0, 600.0, 10.0], heading: 180.0, ..spline(11, 12, 10, 200.0) };
@@ -1693,8 +1658,9 @@ mod tests {
         // where the chain leaves the tile, the row stops (a repeater there carries it on)
         let objs = tile_row_objects(&master, &tile[..2], DVec2::ZERO, Some(&ix));
         assert_eq!(objs.iter().map(|(_, o)| o.index).collect::<Vec<_>>(), vec![0, 1, 2]);
-        // ... like this one on spline 12, which then goes on through its own tile
-        ix.masters.insert((3, 7), (10, 20.0));
+        // ... like this one on spline 12, which then goes on through its own tile: its own
+        // copy of the row starts 20 m along the chain and reaches 600 m, so its objects lie at
+        // 20, 220, 420 and 620 m of the chain and only the last stands on this spline
         let repeater = SplineAttachment { id: 7, spline_index: 0, repeater: Some((3, 3)), ..row(200.0, 600.0, 20.0, None) };
         let objs = tile_row_objects(&repeater, &[s12], DVec2::ZERO, Some(&ix));
         assert_eq!(objs.len(), 1);
@@ -1707,14 +1673,44 @@ mod tests {
     }
 
     #[test]
+    fn a_repeater_lays_its_own_copy_of_the_row() {
+        // Every record of a row lays the row out itself, from its own copy of the parameters,
+        // so a tile is drawn without the tile that holds the record the row was attached on.
+        // The tile index a repeater stores names the master's tile as it was when the record
+        // was written; it is not consulted, so a tile added to or removed from global.cfg's
+        // `[map]` list since then (32 of Berlin-Spandau's 213 repeaters) cannot move the row
+        // into another tile's chain. Grundorf Island 4's bridge rows carry a copy that has
+        // drifted from the record on the bridge's first spline (start 25 m along the chain and
+        // interval 60 m where that one says 0 m and 55 m): the row goes where its own record
+        // says, as Omsi.exe places it.
+        let ix = buffer_stop_chain();
+        // this spline starts 600 m along the chain, so the objects the record's copy puts at
+        // 20, 220, 420, 620 and 820 m of the chain leave 620 and 820 on it
+        let tile = [MapSpline { pos: [0.0, 600.0, 10.0], ..spline(12, 11, 0, 250.0) }];
+        // the record names tile 9, which holds no master of id 7
+        let repeater = SplineAttachment { id: 7, spline_index: 0, repeater: Some((9, 3)), ..row(200.0, 2000.0, 20.0, None) };
+        let objs = tile_row_objects(&repeater, &tile, DVec2::ZERO, Some(&ix));
+        assert_eq!(objs.len(), 2, "{:?}", objs.iter().map(|(_, o)| (o.index, o.pose.pos.y)).collect::<Vec<_>>());
+        assert_eq!(objs[0].1.index, 3);
+        assert!((objs[0].1.pose.pos.y - 620.0).abs() < 1e-6, "{:?}", objs[0].1.pose.pos);
+        assert_eq!(objs[1].1.index, 4);
+        assert!((objs[1].1.pose.pos.y - 820.0).abs() < 1e-6, "{:?}", objs[1].1.pose.pos);
+        // the record's own spacing lays the row out: with 130 m between two objects it is at
+        // 20, 150, 280, 410, 540, 670 and 800 m of the chain, so two stand on this spline
+        let own = SplineAttachment { id: 7, spline_index: 0, repeater: Some((9, 5)), ..row(130.0, 2000.0, 20.0, None) };
+        let objs = tile_row_objects(&own, &tile, DVec2::ZERO, Some(&ix));
+        assert_eq!(objs.iter().map(|(_, o)| o.index).collect::<Vec<_>>(), vec![5, 6]);
+        assert!((objs[0].1.pose.pos.y - 670.0).abs() < 1e-6, "{:?}", objs[0].1.pose.pos);
+        assert!((objs[1].1.pose.pos.y - 800.0).abs() < 1e-6, "{:?}", objs[1].1.pose.pos);
+    }
+
+    #[test]
     fn repeater_continues_the_row() {
         let mut ix = MapIndex::default();
         ix.splines.insert(1, IndexedSpline { length: 100.0, map_chain_offset: None, prev: 0, next: 2 });
         ix.splines.insert(2, IndexedSpline { length: 50.0, map_chain_offset: None, prev: 1, next: 3 });
         // spline 3 is joined end to end: it runs against the chain
         ix.splines.insert(3, IndexedSpline { length: 80.0, map_chain_offset: None, prev: 0, next: 2 });
-        assert_eq!(chain_distance(&ix, 1, 3, 1e9), Some((150.0, true)));
-        ix.masters.insert((0, 5), (1, 20.0));
         // the master row: 20, 50, 80 m on spline 1
         let s1 = spline(1, 0, 2, 100.0);
         assert_eq!(row_objects(&row(30.0, 1000.0, 20.0, None), &s1, DVec2::ZERO, None).len(), 3);
@@ -1723,13 +1719,13 @@ mod tests {
         let objs = row_objects(&row(30.0, 1000.0, 20.0, Some((0, 3))), &s2, DVec2::ZERO, Some(&ix));
         assert_eq!(objs.iter().map(|o| o.index).collect::<Vec<_>>(), vec![3, 4]);
         assert!((objs[0].pose.pos.y - 110.0).abs() < 1e-6 && (objs[1].pose.pos.y - 140.0).abs() < 1e-6);
-        // on the reversed spline object 5 (170 m) lies 20 m from the joint, 60 m from its start
+        // on a spline that runs against the chain the record's own copy still starts where it
+        // says: 20 m along this spline, then every 30 m
         let s3 = MapSpline { pos: [0.0, 230.0, 10.0], heading: 180.0, ..spline(3, 0, 2, 80.0) };
         let objs = row_objects(&row(30.0, 1000.0, 20.0, Some((0, 5))), &s3, DVec2::ZERO, Some(&ix));
-        assert_eq!(objs[0].index, 5);
-        assert!((objs[0].pose.pos.y - 170.0).abs() < 1e-6, "{:?}", objs[0].pose.pos);
-        // the row's right is the spline's left there: still east of the chain
-        assert!(objs[0].pose.pos.x > 2.9, "{:?}", objs[0].pose.pos);
+        assert_eq!(objs.iter().map(|o| o.index).collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert!((objs[0].pose.pos.y - 210.0).abs() < 1e-6, "{:?}", objs[0].pose.pos);
+        assert!((objs[2].pose.pos.y - 150.0).abs() < 1e-6, "{:?}", objs[2].pose.pos);
     }
 
     #[test]

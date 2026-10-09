@@ -32,6 +32,9 @@ struct Camera {
     lamp_view_proj: array<mat4x4<f32>, 4>,
     lamp_shadow: vec4<f32>,
     tree_wind: vec4<f32>,
+    inside2_a: vec4<f32>,
+    inside2_b: vec4<f32>,
+    inside2_c: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
@@ -99,7 +102,7 @@ fn sun_reaches(x: vec3<f32>) -> f32 {
     if (fuv.x < 0.0 || fuv.x > 1.0 || fuv.y < 0.0 || fuv.y > 1.0 || fp2.z < 0.0 || fp2.z > 1.0) {
         return 1.0;
     }
-    // (the far map takes the top of its texture, see shader.wgsl `far_map_uv`)
+    // (the far map takes the top of its texture, see shader.wgsl `shadow_pcf_far`)
     return textureSampleCompareLevel(t_shadow_far, s_shadow, vec2<f32>(fuv.x, fuv.y * 0.8), fp2.z - 0.6 / SHAFT_DEPTH_RANGE);
 }
 

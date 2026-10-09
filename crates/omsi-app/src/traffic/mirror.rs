@@ -87,6 +87,7 @@ impl Traffic {
             bus: scheduled.then(|| Box::new(BusService::new(Vec::new()))),
             half_width,
             yielding: false,
+            exit_wait: false,
             light_hold: false,
             reserved: Vec::new(),
             amber: None,
@@ -111,6 +112,10 @@ impl Traffic {
             rail_trail: Default::default(),
             ai_secs: 0.0,
             consist_reversed: false,
+            waits_on: None,
+            yield_to: None,
+            deadlock_pass: f32::MIN,
+            deadlock_tried: f32::MIN,
             park: None,
         });
         view.insert(id, render);

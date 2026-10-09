@@ -12,6 +12,8 @@ pub(crate) struct DrawPlan {
     /// the blended (and, drawn in model order, all) slots of the vehicle the camera is in
     pub cab_batches: Vec<Batch>,
     pub prepass_batches: Vec<Batch>,
+    pub msaa_safe_batches: Vec<Batch>,
+    pub presurface_batch_end: usize,
     /// the rain films on the panes, drawn over the finished picture (see `glass_on`)
     pub rain_batches: Vec<Batch>,
     /// opaque/alpha-tested and blended draws of the main pass
@@ -20,10 +22,31 @@ pub(crate) struct DrawPlan {
 }
 
 impl DrawPlan {
+    /// Depth prefilling is shared by bundle planning and pass encoding so neither can
+    /// omit the excavation prefix unless it will actually be drawn separately.
+    pub(crate) fn msaa_prepass(&self, renderer: &Renderer, f: &FrameCtx) -> bool {
+        // Excavation covers have already been drawn when prefilling begins. They
+        // must not opt an otherwise opaque Apple view out of native surface removal.
+        let remaining = if self.has_presurface { &self.main_batches[self.presurface_batch_end..] } else { &self.main_batches };
+        let needs = !cfg!(target_vendor = "apple") || remaining.iter().chain(&self.cab_batches)
+            .any(|b| matches!(b.pipe / 4, PIPE_ALPHA_TEST | PIPE_BLEND | PIPE_BLEND_NO_WRITE));
+        renderer.prepass_msaa_pipelines.is_some()
+            && (!self.has_presurface || renderer.presurface_msaa_pipelines.is_some())
+            && f.enhanced && (f.with_overlays || f.xr_view) && renderer.options.msaa > 1
+            && (!self.has_presurface || self.msaa_safe_batches.iter().any(|b| b.pipe / 2 != PIPE_ALPHA_TEST))
+            && f.prepass_on && needs && !f.env.no_msaa_prepass
+    }
+
+    pub(crate) fn presurface_prefill(&self, renderer: &Renderer, f: &FrameCtx) -> bool {
+        self.has_presurface && self.msaa_prepass(renderer, f)
+    }
+
     /// the rain films out of the main pass: they are drawn after copying the clean picture
     pub(crate) fn split_rain(&mut self, scene: &Scene, glass_on: bool) {
         if glass_on {
-            let (rain, main): (Vec<_>, Vec<_>) = std::mem::take(&mut self.main_batches).into_iter().partition(|b| scene.materials[b.material as usize].uniform.emissive[3] > 1.5);
+            let is_rain = |b: &Batch| scene.materials[b.material as usize].uniform.emissive[3] > 1.5;
+            self.presurface_batch_end = self.main_batches[..self.presurface_batch_end].iter().filter(|b| !is_rain(b)).count();
+            let (rain, main): (Vec<_>, Vec<_>) = std::mem::take(&mut self.main_batches).into_iter().partition(is_rain);
             self.rain_batches = rain;
             self.main_batches = main;
         }
@@ -31,10 +54,12 @@ impl DrawPlan {
 }
 
 // the depth prepass: opaque and alpha-tested, single-sampled
-fn prepass_items(scene: &Scene, visible: &[(usize, f32, bool)]) -> (Vec<u32>, Vec<Batch>) {
+fn prepass_items(scene: &Scene, visible: &[(usize, f32, bool)], deferred: bool) -> (Vec<u32>, Vec<Batch>, Vec<Batch>) {
     let mut items: Vec<DrawItem> = Vec::new();
     let mut list: Vec<u32> = Vec::new();
     let mut batches: Vec<Batch> = Vec::new();
+    let mut safe_items = Vec::new();
+    let mut safe_batches = Vec::new();
     for &(i, _, _) in visible {
         let inst = &scene.instances[i];
         let cull = culls_back_faces(scene, inst);
@@ -52,19 +77,25 @@ fn prepass_items(scene: &Scene, visible: &[(usize, f32, bool)]) -> (Vec<u32>, Ve
                 // plain/alpha-tested materials use their ordinary depth pass;
                 // blended transmaps use the opaque-pixels-only pass.
                 let (material, look) = depth_only_material(pre_kind, mat_id, mat.look);
-                items.push(DrawItem {
+                let item = DrawItem {
                     pipe: pre_kind * 2 + cull as u8,
                     mesh: inst.mesh as u32,
                     range: ri as u32,
                     material,
                     look,
                     entry: inst.base + *slot,
-                });
+                };
+                // Ground must finish composing before its coverage can occlude later layers.
+                if deferred && effective_render_phase(inst) as u8 >= RenderPhase::BeforeNormal as u8 {
+                    safe_items.push(item);
+                }
+                items.push(item);
             }
         }
     }
     batch_items(scene, &mut items, true, &mut list, &mut batches);
-    (list, batches)
+    batch_items(scene, &mut safe_items, true, &mut list, &mut safe_batches);
+    (list, batches, safe_batches)
 }
 
 /// The surfaces' covered ground pixels committed to depth, before the normal phase.
@@ -215,14 +246,18 @@ impl Renderer {
         let list = &mut draw_list;
         let (exclude_texture, prepass_on) = (f.exclude_texture, f.prepass_on);
         let mut items: Vec<DrawItem> = Vec::new();
+        let has_presurface = visible.iter().any(|&(i, _, _)| scene.instances[i].presurface);
         let mut prepass_batches: Vec<Batch> = Vec::new();
-        let prepass_job = || -> (Vec<u32>, Vec<Batch>) { prepass_items(scene, visible) };
+        let mut msaa_safe_batches = Vec::new();
+        let deferred = has_presurface && f.enhanced && self.options.msaa > 1;
+        let prepass_job = || { prepass_items(scene, visible, deferred) };
         // The main pass follows the authored world phases. Each phase keeps its
         // opaque/cutout draws followed by its blended draws, far to near. Transparent
         // ground layers never write depth while composing: an alpha-zero junction
         // texel otherwise blocks a later opaque grass spline and exposes the sky
         // wherever that spline's prepass already rejected the terrain underneath.
         let mut main_batches: Vec<Batch> = Vec::new();
+        let mut presurface_batch_end = 0;
         // the blended (and, drawn in model order, all) slots of the vehicle the camera is in
         let mut cab_batches: Vec<Batch> = Vec::new();
         let mut cab_items: Vec<DrawItem> = Vec::new();
@@ -230,8 +265,7 @@ impl Renderer {
         // Keep mesh/material order here: an excavation's floor is drawn before its
         // invisible cover writes depth. Sorting its blended cover after the terrain
         // leaves the terrain's colour in place even though the cover writes depth.
-        let has_presurface = visible.iter().any(|&(i, _, _)| scene.instances[i].presurface);
-        let mut prepass_found: Option<(Vec<u32>, Vec<Batch>)> = None;
+        let mut prepass_found = None;
         let pool = self.encoding_pool.as_ref();
         in_scope(pool, |scope| {
             if prepass_on {
@@ -249,6 +283,7 @@ impl Renderer {
             // by that phase's blended draws. Keeping the phase boundary here lets later
             // surface markings compose over spline blends without changing the depth test.
             for phase in RenderPhase::DRAW_ORDER {
+                if phase == RenderPhase::Terrain { presurface_batch_end = main_batches.len(); }
                 // Finish surface composition before committing the fully covered ground
                 // pixels to depth. Doing this in the global prepass (or while blending
                 // each spline) would reject authored road overlaps and on-surface rails.
@@ -282,13 +317,14 @@ impl Renderer {
             main_draws[1] += cab_items.len();
             batch_items(scene, &mut cab_items, false, list, &mut cab_batches);
         });
-        if let Some((pre_list, mut pre_batches)) = prepass_found {
+        if let Some((pre_list, mut pre_batches, mut safe_batches)) = prepass_found {
             let offset = list.len() as u32;
-            for b in &mut pre_batches {
+            for b in pre_batches.iter_mut().chain(&mut safe_batches) {
                 b.instances = b.instances.start + offset..b.instances.end + offset;
             }
             list.extend(pre_list);
             prepass_batches = pre_batches;
+            msaa_safe_batches = safe_batches;
         }
         // OMSI_SKIP_PIPE=3,1: leave pipeline kinds out of the main pass (0 opaque, 1 alpha
         // tested, 2 blended, 3 blended without depth writes, 4 surface depth, 5 terrain
@@ -301,13 +337,14 @@ impl Renderer {
                 !skip.contains(&kind)
                     && !(kind == PIPE_TERRAIN_PAINT && skip.contains(&PIPE_BLEND_NO_WRITE))
             };
+            presurface_batch_end = main_batches[..presurface_batch_end].iter().filter(|b| include(b)).count();
             main_batches.retain(include);
             cab_batches.retain(include);
         }
         if f.env.debug_draws {
             log::info!("  main pass: {} opaque/alpha-tested and {} blended draws in {} batches; prepass {} batches; draw list {} entries", main_draws[0], main_draws[1], main_batches.len(), prepass_batches.len(), list.len());
         }
-        DrawPlan { list: draw_list, main_batches, cab_batches, prepass_batches, rain_batches: Vec::new(), main_draws, has_presurface }
+        DrawPlan { list: draw_list, main_batches, cab_batches, prepass_batches, msaa_safe_batches, presurface_batch_end, rain_batches: Vec::new(), main_draws, has_presurface }
     }
 
     /// The order a phase's blended draws are drawn in: (rank, distance, instance), far
@@ -428,7 +465,7 @@ impl Renderer {
     }
 
     /// OMSI_PROFILE: the frame's counts, and every ten seconds what each asset costs.
-    pub(crate) fn count_draws(&mut self, scene: &Scene, with_overlays: bool, visible: usize, plan: &DrawPlan, shadow_batches: &[Vec<Batch>; 4]) {
+    pub(crate) fn count_draws(&mut self, scene: &Scene, with_overlays: bool, visible: usize, plan: &DrawPlan, shadow_batches: &[Vec<Batch>; SHADOW_LISTS]) {
         let DrawPlan { main_batches, prepass_batches, main_draws, .. } = plan;
         if self.profiling && !with_overlays {
             let mut c = self.counts.borrow_mut();
@@ -493,7 +530,7 @@ impl Renderer {
                 &self.device,
                 self.encoding_pool.as_ref(),
                 scene,
-                &plan.main_batches,
+                if plan.presurface_prefill(self, f) { &plan.main_batches[plan.presurface_batch_end..] } else { &plan.main_batches },
                 pp,
                 scene.camera_bind_group.as_ref().expect("camera bind group"),
                 format,

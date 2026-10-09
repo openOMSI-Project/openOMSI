@@ -540,11 +540,18 @@ fn vehicle_sheet(l: &mut Launcher, r: Rect) -> bool {
             WARN,
         ) + 12.0;
     }
+    // (the whole description, which can run to several screens: it scrolls in the room left
+    // under the fields)
     let description = vehicle.description.replace('\t', " ").lines().map(str::trim).collect::<Vec<_>>().join("\n").trim().to_string();
-    if !description.is_empty() {
-        y += l.ui.paragraph(&description, Vec2::new(inner.x, y), inner.w, 12.0, Weight::Regular, TEXT_DIM) + 12.0;
-    }
-    l.ui.text_in(&vehicle.file, Rect::new(inner.x, y, inner.w, 22.0), 10.5, Weight::Regular, TEXT_FAINT, Align::Left);
+    let rest = Rect::new(inner.x, y, inner.w, (inner.bottom() - y).max(40.0));
+    l.ui.scroll_area("pv-description", rest, &mut |ui, v| {
+        let mut h = 0.0;
+        if !description.is_empty() {
+            h += ui.paragraph(&description, Vec2::new(v.x, v.y), v.w - 8.0, 12.0, Weight::Regular, TEXT_DIM) + 12.0;
+        }
+        ui.text_in(&vehicle.file, Rect::new(v.x, v.y + h, v.w - 8.0, 22.0), 10.5, Weight::Regular, TEXT_FAINT, Align::Left);
+        h + 22.0
+    });
     false
 }
 

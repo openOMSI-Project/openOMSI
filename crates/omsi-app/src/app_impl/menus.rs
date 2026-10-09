@@ -281,6 +281,7 @@ impl App {
                     let (at, heading) = (p.vehicle.position, p.vehicle.heading);
                     crate::admin::teleport(self, at, heading);
                     self.service_msg = Some(("The vehicle stands on its wheels again".into(), 3.0));
+                    self.service_event("reset", self.menu_by(), None);
                 }
             }
             "teleport" => {
@@ -312,7 +313,7 @@ impl App {
             }
             "refuel" | "wash" | "repair" => {
                 self.close_game_menu();
-                self.run_service(id);
+                self.run_service(id, self.menu_by());
             }
             "weather" => {
                 self.close_game_menu();

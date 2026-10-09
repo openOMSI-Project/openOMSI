@@ -91,14 +91,15 @@ strip = "debuginfo"
 gpu-allocator = { git = "https://github.com/openOMSI-Project/gpu-allocator", rev = "6ad8a7eeb9c3e1dcd65656f718c593a0a1a3915d" }
 # wgpu from the org's fork (upstream v29.0.4 plus fixes): GL texture units sized from the driver,
 # the GL context released while a thread waits for the GPU, errors instead of panics on driver
-# failures, Adapter::memory_info, and GLES over ANGLE (Direct3D 11) on Windows; every crate of the
+# failures, Adapter::memory_info, GLES over ANGLE (Direct3D 11) on Windows, and fixes backported from
+# v30 (Vulkan acquire fence, out-of-memory checks, DX12 textureNumLevels, 3D texture init); every crate of the
 # fork that Cargo.lock lists is patched, or the fork's and crates.io's halves would not match
-wgpu = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "49edcdfc0fdbae2ae50c18b0d75fba9c1972d04a" }
-wgpu-core = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "49edcdfc0fdbae2ae50c18b0d75fba9c1972d04a" }
-wgpu-core-deps-apple = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "49edcdfc0fdbae2ae50c18b0d75fba9c1972d04a" }
-wgpu-core-deps-emscripten = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "49edcdfc0fdbae2ae50c18b0d75fba9c1972d04a" }
-wgpu-core-deps-windows-linux-android = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "49edcdfc0fdbae2ae50c18b0d75fba9c1972d04a" }
-wgpu-hal = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "49edcdfc0fdbae2ae50c18b0d75fba9c1972d04a" }
-wgpu-types = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "49edcdfc0fdbae2ae50c18b0d75fba9c1972d04a" }
-wgpu-naga-bridge = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "49edcdfc0fdbae2ae50c18b0d75fba9c1972d04a" }
-naga = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "49edcdfc0fdbae2ae50c18b0d75fba9c1972d04a" }
+wgpu = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "4eb06e5bf8062be2978d93e95556a4dd83f1d3b8" }
+wgpu-core = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "4eb06e5bf8062be2978d93e95556a4dd83f1d3b8" }
+wgpu-core-deps-apple = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "4eb06e5bf8062be2978d93e95556a4dd83f1d3b8" }
+wgpu-core-deps-emscripten = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "4eb06e5bf8062be2978d93e95556a4dd83f1d3b8" }
+wgpu-core-deps-windows-linux-android = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "4eb06e5bf8062be2978d93e95556a4dd83f1d3b8" }
+wgpu-hal = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "4eb06e5bf8062be2978d93e95556a4dd83f1d3b8" }
+wgpu-types = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "4eb06e5bf8062be2978d93e95556a4dd83f1d3b8" }
+wgpu-naga-bridge = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "4eb06e5bf8062be2978d93e95556a4dd83f1d3b8" }
+naga = { git = "https://github.com/openOMSI-Project/wgpu-openomsi", rev = "4eb06e5bf8062be2978d93e95556a4dd83f1d3b8" }

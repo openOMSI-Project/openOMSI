@@ -130,7 +130,7 @@ impl Traffic {
         let n = new.len();
         let mut added = self.sim.net.lanes.len()..self.sim.net.lanes.len();
         if n > 0 {
-            added = self.sim.net.extend(new, 1.5);
+            added = self.sim.net.extend(new, omsi_sim::traffic::LINK_TOLERANCE);
             self.sim.street_weight += self.sim.net.lanes[added.clone()].iter().filter_map(street_lane_weight).sum::<f64>();
             log::debug!(
                 "traffic: {} lanes added ({} in all)",

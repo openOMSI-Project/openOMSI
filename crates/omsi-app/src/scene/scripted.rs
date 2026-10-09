@@ -223,6 +223,109 @@ impl World {
         }
     }
 
+    /// Finds the closest scenery object mesh carrying a `[mouseevent]` under a ray.
+    pub fn scenery_object_hit(&self, origin: DVec3, dir: glam::Vec3, reach: f32, spread: f32) -> Option<SceneryHit> {
+        let scripted = self.scripted.lock();
+        let mut best: Option<SceneryHit> = None;
+        let right = glam::Vec3::new(-dir.y, dir.x, 0.0).normalize_or_zero();
+        let up = dir.cross(right).normalize_or_zero();
+        let dirs = if spread > 0.0 {
+            vec![
+                dir,
+                (dir + right * spread).normalize(),
+                (dir - right * spread).normalize(),
+                (dir + up * spread).normalize(),
+                (dir - up * spread).normalize(),
+            ]
+        } else {
+            vec![dir]
+        };
+        for o in scripted.iter().filter(|o| o.ty.has_mouse_events) {
+            if (o.pos - origin).length() > reach as f64 + 60.0 {
+                continue;
+            }
+            let local = (origin - o.pos).as_vec3();
+            for mi in 0..o.ty.meshes.len() {
+                let Some((data, _, _)) = o.ty.meshes.get(mi) else { continue };
+                if !o.inst.mesh_visible.get(mi).copied().unwrap_or(true) {
+                    continue;
+                }
+                let Some(&def_idx) = o.ty.mesh_def_index.get(mi) else { continue };
+                let Some(event) = o.ty.model.meshes.get(def_idx).and_then(|m| m.mouse_event.as_ref()) else { continue };
+                let xf = o.xf * o.inst.mesh_transforms.get(mi).copied().unwrap_or(Mat4::IDENTITY);
+                for d in &dirs {
+                    if let Some(t) = omsi_geometry::ray_mesh(local, *d, data, &xf) {
+                        if t <= reach && best.as_ref().map_or(true, |b| t < b.t) {
+                            best = Some(SceneryHit {
+                                map_id: o.map_id,
+                                mesh_index: mi,
+                                event: event.clone(),
+                                t,
+                            });
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        best
+    }
+
+    /// Click down on a scenery object's `[mouseevent]` switch or button.
+    pub fn scenery_object_click(&self, map_id: i64, event: &str) -> bool {
+        let mut scripted = self.scripted.lock();
+        let Some(o) = scripted.iter_mut().find(|o| o.map_id == map_id) else {
+            return false;
+        };
+        log::info!("scenery mouse event {event} on object {map_id}");
+        let ok = o.inst.trigger(event);
+        let drag = format!("{event}_drag");
+        let low = event.to_ascii_lowercase();
+        if (low.contains("taste") || low.contains("button") || low.contains("click"))
+            && o.inst.program.trigger(&drag).is_some()
+        {
+            o.inst.host.mouse = (0.0, 0.0);
+            o.inst.trigger(&drag);
+            o.inst.host.mouse = (0.0, 0.0);
+        }
+        ok
+    }
+
+    /// Mouse dragged while holding down a scenery object switch.
+    pub fn scenery_object_drag(&self, map_id: i64, event: &str, dx: f32, dy: f32) -> bool {
+        let mut scripted = self.scripted.lock();
+        let Some(o) = scripted.iter_mut().find(|o| o.map_id == map_id) else {
+            return false;
+        };
+        let drag = format!("{event}_drag");
+        o.inst.host.mouse = (dx, dy);
+        let ok = o.inst.trigger(&drag);
+        o.inst.host.mouse = (0.0, 0.0);
+        ok
+    }
+
+    /// Mouse button released from a scenery object switch (`<event>_off`).
+    pub fn scenery_object_release(&self, map_id: i64, event: &str) -> bool {
+        let mut scripted = self.scripted.lock();
+        let Some(o) = scripted.iter_mut().find(|o| o.map_id == map_id) else {
+            return false;
+        };
+        let off = format!("{event}_off");
+        o.inst.trigger(&off)
+    }
+
+    /// Mouse wheel notch over a scenery object switch.
+    pub fn scenery_object_wheel(&self, map_id: i64, event: &str, amount: f32) -> bool {
+        let mut scripted = self.scripted.lock();
+        let Some(o) = scripted.iter_mut().find(|o| o.map_id == map_id) else {
+            return false;
+        };
+        o.inst.host.mouse = (0.0, amount);
+        let _ = o.inst.trigger(&format!("{event}_drag"));
+        o.inst.host.mouse = (0.0, 0.0);
+        o.inst.trigger(&format!("{event}_off"))
+    }
+
     /// The colour the tile's night light map (its own part, see [`own_tile_of_light_map`])
     /// has at `pos` (0..1, bilinear), or `None` where no light map is loaded: the light it
     /// throws on a vehicle standing there (Omsi.exe samples it at the vehicle's place,
@@ -314,12 +417,29 @@ impl World {
                 log::info!("particle object {} at ({:.1}, {:.1}, {:.1}), {d:.0} m: {} particles", po.map_id, po.pos.x, po.pos.y, po.pos.z, po.set.particles().count());
             }
         }
+        // The scripted objects whose variables the emitters read, found in one pass over the
+        // list - the first of each id, as a search would find it: a search of the whole list
+        // for every emitter's object, every frame, was most of the scenery scripts' time on a
+        // city map.
+        let mut owners: HashMap<i64, Option<usize>> = HashMap::new();
+        for po in objs.values().flatten() {
+            if !((po.pos - center).length() > 1500.0) {
+                owners.insert(po.map_id, None);
+            }
+        }
+        if !owners.is_empty() {
+            for (i, s) in scripted.iter().enumerate() {
+                if let Some(slot) = owners.get_mut(&s.map_id) {
+                    slot.get_or_insert(i);
+                }
+            }
+        }
         for list in objs.values_mut() {
             for po in list.iter_mut() {
                 if (po.pos - center).length() > 1500.0 {
                     continue;
                 }
-                let inst = scripted.iter().find(|s| s.map_id == po.map_id).map(|s| &s.inst);
+                let inst = owners.get(&po.map_id).copied().flatten().map(|i| &scripted[i].inst);
                 let value = |n: &str| inst.and_then(|i| i.var(n)).unwrap_or(0.0);
                 po.set.update(dt, po.pos, po.rot, &value);
             }
@@ -476,8 +596,9 @@ impl World {
             if !o.texts.is_empty() {
                 let _ = o.inst.take_refresh_strings();
                 for (tex, st) in o.texts.iter_mut() {
-                    let text = o.inst.str_var(st.def.variable.trim()).to_string();
-                    if st.update(&text) {
+                    // (read in place: a copy each frame was only compared with the last)
+                    let text = o.inst.str_var(st.def.variable.trim());
+                    if st.update(text) {
                         let (w, h) = (st.def.width.max(1) as u32, st.def.height.max(1) as u32);
                         if let Some(rgba) = st.pending.take() {
                             // OMSI_DUMP_SCENERY_TEXT=<dir>: the pictures as drawn

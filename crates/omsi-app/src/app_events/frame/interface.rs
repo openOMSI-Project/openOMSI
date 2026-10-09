@@ -49,6 +49,14 @@ impl App {
         // under the game's own interface; not under its menus, nor in VR
         let plugin_focus = crate::plugin_ui::focused(&self.integrations.plugins);
         self.frame_plugin_panels(dt, hud, vr_active);
+        // the mirror panels (Ctrl+M): over the picture and the navigator, under the notes
+        // and the menus - drawn after them, they covered the pause menu (#1880)
+        if self.cam.in_cab {
+            if let (Some(r), Some(scene), Some(w)) = (self.renderer.as_ref(), self.scene.as_mut(), self.world.as_ref()) {
+                self.gfx.mirror_hud.ensure_frame(r, scene);
+                steps::push_mirror_hud(&self.gfx.mirror_hud, scene, w, hud, (self.input.cursor.0 - hud[0], self.input.cursor.1));
+            }
+        }
         self.frame_ui_draw(dt, hud, vr_active, plugin_focus, &notes, tooltip, menu_lines, menu_tabs);
         *self.perf.profile.entry("hud").or_default() += __t.elapsed().as_secs_f64();
         vr_nav_display
@@ -290,6 +298,8 @@ impl App {
         menu_lines: Vec<(&'static str, &'static str)>,
         menu_tabs: Option<(Vec<String>, usize)>,
     ) {
+        // (the steering cross: before the renderer and the scene are borrowed)
+        let steer_cross = self.steer_cross_point();
         let (Some(r), Some(scene)) = (self.renderer.as_ref(), self.scene.as_mut()) else { return };
         if let (Some(ui), Some(s)) = (self.ui.as_mut(), self.gfx.surface.as_ref()) {
             let scale = self.window.as_ref().map(|w| w.scale_factor() as f32).unwrap_or(1.0);
@@ -365,6 +375,7 @@ impl App {
             // (the game menu's greyed-out lines: the timetable needs an active route)
             let menu_disabled: &[&str] = &[];
             let (menu_kind, menu_head, menu_preview) = crate::game_lists::menu_extras(self.menus.list_kind.as_ref(), self.menus.admin_list.as_deref(), chooser_sel, self.session.schedule.as_ref(), self.clock.time);
+            crate::telemetry::publish(self.player.as_ref(), self.session.duty.as_ref(), self.session.humans.as_ref(), self.paused, self.session.schedule.as_ref(), self.session.traffic.as_ref());
             let frame = ui::Frame {
                 scale,
                 ui_scale: ui::size_factor(h, scale, self.settings.ui_scale, self.settings.ui_scale_window),
@@ -372,6 +383,7 @@ impl App {
                 width: w,
                 height: h,
                 cursor: (self.input.cursor.0 - hud[0], self.input.cursor.1),
+                steer_cross: steer_cross.map(|(x, y)| (x - hud[0], y)),
                 vr: {
                     #[cfg(windows)] { self.xr.vr.is_some() }
                     #[cfg(not(windows))] { false }

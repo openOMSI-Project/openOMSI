@@ -155,7 +155,7 @@ impl SceneBase {
                 },
             }),
             multiview_mask: None,
-            cache: None,
+            cache: crate::pipeline_cache::get(device).as_ref(),
         })
     }
 
@@ -191,6 +191,7 @@ impl SceneBase {
 pub(crate) struct Prepass {
     pub pipelines: [wgpu::RenderPipeline; 6],
     pub msaa_pipelines: Option<[wgpu::RenderPipeline; 6]>,
+    pub presurface_pipelines: Option<[wgpu::RenderPipeline; 4]>,
 }
 
 pub(crate) fn prepass(device: &wgpu::Device, scene: &SceneBase, msaa: u32) -> Prepass {
@@ -201,7 +202,7 @@ pub(crate) fn prepass(device: &wgpu::Device, scene: &SceneBase, msaa: u32) -> Pr
     });
     // the prepass culls exactly as the main pass does: a back face that wrote depth
     // here would hide what the main pass then draws behind it
-    let make_prepass_samples = |kind: u8, cull: bool, samples: u32| {
+    let make_prepass_samples = |kind: u8, cull: bool, samples: u32, in_main: bool| {
         let fragment = match kind {
             0 => "fs_shadow",
             1 => "fs_shadow_test",
@@ -229,14 +230,14 @@ pub(crate) fn prepass(device: &wgpu::Device, scene: &SceneBase, msaa: u32) -> Pr
             fragment: Some(wgpu::FragmentState {
                 module: &scene.shader,
                 entry_point: Some(fragment),
-                targets: &[],
+                targets: &if in_main { color_targets(HDR_FORMAT, None, wgpu::ColorWrites::empty(), false, false) } else { Vec::new() },
                 compilation_options: Default::default(),
             }),
             multiview_mask: None,
-            cache: None,
+            cache: crate::pipeline_cache::get(device).as_ref(),
         })
     };
-    let make_prepass = |kind: u8, cull: bool| make_prepass_samples(kind, cull, 1);
+    let make_prepass = |kind: u8, cull: bool| make_prepass_samples(kind, cull, 1, false);
     let pipelines = [
         make_prepass(0, false),
         make_prepass(0, true),
@@ -250,7 +251,11 @@ pub(crate) fn prepass(device: &wgpu::Device, scene: &SceneBase, msaa: u32) -> Pr
     // Purely opaque Apple views still skip this pass below to avoid its cost.
     let msaa_pipelines = (msaa > 1).then(|| {
         [(0, false), (0, true), (1, false), (1, true), (2, false), (2, true)]
-            .map(|(kind, cull)| make_prepass_samples(kind, cull, msaa))
+            .map(|(kind, cull)| make_prepass_samples(kind, cull, msaa, false))
     });
-    Prepass { pipelines, msaa_pipelines }
+    let presurface_pipelines = (msaa > 1).then(|| {
+        [(0, false), (0, true), (2, false), (2, true)]
+            .map(|(kind, cull)| make_prepass_samples(kind, cull, msaa, true))
+    });
+    Prepass { pipelines, msaa_pipelines, presurface_pipelines }
 }

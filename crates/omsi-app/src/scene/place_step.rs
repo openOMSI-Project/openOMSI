@@ -743,6 +743,8 @@ impl World {
                 || ot.model.meshes.iter().any(|m| m.no_distance_check);
             let near_only = stand_in_area(&ot, &xf, pos, (p.tx, p.ty));
             for inst in all_instances.iter().chain(&lod_instances) {
+                scene.instances[*inst].shadow_owner =
+                    ot.sco.crash_mode_pole.is_some().then_some(collision_key);
                 scene.instances[*inst].presurface =
                     ot.sco.render_type == omsi_scenery::sco::RenderType::PreSurface;
                 renderer.set_object_culling(scene, *inst, radius, detail, any_distance);
@@ -1277,6 +1279,7 @@ impl World {
             || !script_texts.is_empty()
             || !html_pages.is_empty()
             || !ot.dynamic_textures.is_empty()
+            || ot.has_mouse_events
         {
             let arrivals = inst.wants_arrivals();
             // (a scripted object with [terrainmapping] slots had more instances

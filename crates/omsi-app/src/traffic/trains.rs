@@ -138,10 +138,15 @@ impl Traffic {
     pub(crate) fn coupled_chain(&mut self, ty: &Arc<VehicleType>, rev: bool, toward_back: bool) -> Vec<(Arc<VehicleType>, bool)> {
         let mut out = Vec::new();
         let (mut lead, mut lead_rev) = (ty.clone(), rev);
-        for _ in 0..8 {
+        let mut seen = vec![lead.def.path.clone()];
+        for _ in 0..crate::spawn::MAX_COUPLED_PARTS {
             let Some((path, r)) = crate::spawn::next_coupled(&lead.def, lead_rev, toward_back) else {
                 break;
             };
+            // a consist that comes round again ends here (see `spawn::chain_has_part`)
+            if crate::spawn::chain_has_part(&seen, &path) {
+                break;
+            }
             let root = self.sim.root.clone();
             let t =
                 self.sim.trailer_types.entry(path.clone()).or_insert_with(
@@ -155,6 +160,7 @@ impl Traffic {
                 );
             let Some(t) = t.clone() else { break };
             out.push((t.clone(), r));
+            seen.push(path);
             lead = t;
             lead_rev = r;
         }

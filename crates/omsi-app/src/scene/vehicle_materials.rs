@@ -597,6 +597,7 @@ pub(super) fn material_extra(
         display: false,
         screen: false,
         led: false,
+        led_sign: false,
         no_map_lights: false,
         tree: false,
         sway: None,

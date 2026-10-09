@@ -11,6 +11,8 @@ pub(crate) struct SkyBase {
     pub cloud_detail_view: wgpu::TextureView,
     pub cloud_sampler: wgpu::Sampler,
     pub cloud_shape_cpu: Vec<u8>,
+    /// The classic sky's weather (`VanillaSkyUniform`, binding 10).
+    pub vanilla_buf: wgpu::Buffer,
     pub shader: wgpu::ShaderModule,
     pl: wgpu::PipelineLayout,
 }
@@ -33,6 +35,8 @@ impl SkyBase {
                 float_texture_entry(6),
                 texture_entry(7, float_2d, wgpu::TextureViewDimension::D3),
                 sampler_entry(8),
+                float_texture_entry(9),
+                uniform_entry(10, wgpu::ShaderStages::FRAGMENT),
             ],
         });
         let (cloud_shape_view, cloud_detail_view, cloud_sampler, cloud_shape_cpu) = cloud_noise_textures(device, queue, !preview);
@@ -46,7 +50,8 @@ impl SkyBase {
             bind_group_layouts: &[Some(camera_layout), Some(&sky_layout)],
             immediate_size: 0,
         });
-        SkyBase { layout: sky_layout, cloud_shape_view, cloud_detail_view, cloud_sampler, cloud_shape_cpu, shader: sky_shader, pl: sky_pl }
+        let vanilla_buf = uniform_buffer(device, "vanilla sky", std::mem::size_of::<VanillaSkyUniform>() as u64);
+        SkyBase { layout: sky_layout, cloud_shape_view, cloud_detail_view, cloud_sampler, cloud_shape_cpu, vanilla_buf, shader: sky_shader, pl: sky_pl }
     }
 
     pub(crate) fn pipeline(&self, device: &wgpu::Device, f: wgpu::TextureFormat, fs: &str, msaa: u32) -> wgpu::RenderPipeline {
@@ -83,7 +88,7 @@ impl SkyBase {
                 compilation_options: Default::default(),
             }),
             multiview_mask: None,
-            cache: None,
+            cache: crate::pipeline_cache::get(device).as_ref(),
         })
     }
 }

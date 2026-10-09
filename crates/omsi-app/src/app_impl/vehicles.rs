@@ -249,5 +249,6 @@ impl App {
         let heading = heading as f64;
         crate::admin::teleport(self, pos, heading);
         self.service_msg = Some(("The bus stands where the map was clicked".into(), 3.0));
+        self.service_event("teleport", "player", None);
     }
 }

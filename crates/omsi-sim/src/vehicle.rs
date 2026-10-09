@@ -1449,7 +1449,8 @@ impl VehicleInstance {
     /// the original at the spawn; the original reads it back as the index).
     pub fn apply_paint_vars(&mut self, scheme: Option<usize>) {
         let scheme = scheme.filter(|i| *i < self.ty.paint_schemes.len());
-        self.set_var("Colorscheme", scheme.map(|i| i as f32).unwrap_or(-1.0));
+        // (an engine variable: a model may switch meshes by it without declaring it)
+        self.set_engine_var("Colorscheme", scheme.map(|i| i as f32).unwrap_or(-1.0));
         if let Some(i) = scheme {
             for (var, v) in self.ty.paint_schemes[i].set_vars.clone() {
                 self.set_var(&var, v);
@@ -3046,10 +3047,13 @@ pub fn compute_mesh_props(ty: &VehicleType, var: &dyn Fn(&str) -> Option<f32>) -
                     }
                 }
             }
+            // (a variable the bus does not declare is 0: Omsi.exe registers every
+            // `[visible]` and `[alphascale]` variable in the varlist as it reads the model,
+            // 0x5efae8 -> VarList_Register - left visible, the 2nd..nth variant of a
+            // destination display stood over the one shown)
             if let Some((v, value)) = &def.visible {
-                if let Some(x) = var(v) {
-                    props.visible = (x - value).abs() < 0.5;
-                }
+                let x = var(v).unwrap_or(0.0);
+                props.visible = (x - value).abs() < 0.5;
             }
             // [illumination_interior] a b c d: the interior lights (by index) lighting this mesh
             let mut interior = 0.0f32;
@@ -3072,7 +3076,7 @@ pub fn compute_mesh_props(ty: &VehicleType, var: &dyn Fn(&str) -> Option<f32>) -
             props.interior = interior * 0.5;
             for m in &def.materials {
                 if let Some(v) = &m.alphascale {
-                    if let (Some(x), Some(slot)) = (var(v), override_slot(&vm.materials, m)) {
+                    if let (Some(x), Some(slot)) = (Some(var(v).unwrap_or(0.0)), override_slot(&vm.materials, m)) {
                         let boost = if v.trim().to_ascii_lowercase().starts_with("rain_window") {
                             1.8
                         } else {
@@ -3125,15 +3129,16 @@ struct MeshPlan {
     /// `[matl_change]` (default 1) and `[matl_lightmap]` (default 1: a variable the bus does not have is on) per slot.
     night: Vec<(usize, PropSource)>,
     light: Vec<(usize, PropSource)>,
-    /// `[visible]` variable and value.
-    visible: Option<(usize, f32)>,
+    /// `[visible]` variable (None: one the bus does not declare, which reads 0) and value.
+    visible: Option<(Option<usize>, f32)>,
     /// `[illumination_interior]`: (brightness, range).
     interior: Vec<(PropSource, f32)>,
     /// `[alphascale]`, `[texcoordtransX/Y]` variables per slot; the third field of `alpha`
     /// boosts a raindrop-film layer (`Rain_Window_*_Wetness`) so it stays visible instead of
     /// reading as the texture's own faint alpha (its drops are only a few percent opaque,
     /// so a middling wetness value was nearly invisible against the glass behind it).
-    alpha: Vec<(usize, usize, f32)>,
+    /// (An undeclared `[alphascale]` variable reads 0, as `[visible]`'s.)
+    alpha: Vec<(usize, Option<usize>, f32)>,
     uv_x: Vec<(usize, usize)>,
     uv_y: Vec<(usize, usize)>,
 }
@@ -3181,15 +3186,13 @@ impl PropsPlan {
                         plan.light.push((slot, source(v)));
                     }
                     if let Some(name) = m.alphascale.as_deref() {
-                        if let Some(i) = var(name) {
-                            let boost =
-                                if name.trim().to_ascii_lowercase().starts_with("rain_window") {
-                                    1.8
-                                } else {
-                                    1.0
-                                };
-                            plan.alpha.push((slot, i, boost));
-                        }
+                        let boost =
+                            if name.trim().to_ascii_lowercase().starts_with("rain_window") {
+                                1.8
+                            } else {
+                                1.0
+                            };
+                        plan.alpha.push((slot, var(name), boost));
                     }
                     if let Some(i) = m.texcoord_trans_x.as_deref().and_then(var) {
                         plan.uv_x.push((slot, i));
@@ -3201,7 +3204,7 @@ impl PropsPlan {
                 plan.visible = def
                     .visible
                     .as_ref()
-                    .and_then(|(v, value)| var(v).map(|i| (i, *value)));
+                    .map(|(v, value)| (var(v), *value));
                 for idx in &def.illumination_interior {
                     if let Some(il) = usize::try_from(*idx)
                         .ok()
@@ -3248,9 +3251,8 @@ impl PropsPlan {
                 props.slot_light[slot] = props.slot_light[slot].max(if src.value(vars, 1.0) >= 0.5 { 1.0 } else { 0.0 });
             }
             if let Some((i, value)) = plan.visible {
-                if let Some(x) = vars.get(i) {
-                    props.visible = (x - value).abs() < 0.5;
-                }
+                let x = i.and_then(|i| vars.get(i).copied()).unwrap_or(0.0);
+                props.visible = (x - value).abs() < 0.5;
             }
             let mut interior = 0.0f32;
             for &(src, range) in &plan.interior {
@@ -3258,8 +3260,11 @@ impl PropsPlan {
             }
             props.interior = interior * 0.5;
             for &(slot, i, boost) in &plan.alpha {
-                props.slot_alpha[slot] =
-                    (vars.get(i).copied().unwrap_or(1.0) * boost).clamp(0.0, 1.0);
+                let x = match i {
+                    Some(i) => vars.get(i).copied().unwrap_or(1.0),
+                    None => 0.0,
+                };
+                props.slot_alpha[slot] = (x * boost).clamp(0.0, 1.0);
             }
             for &(slot, i) in &plan.uv_x {
                 props.slot_uv[slot][0] = vars.get(i).copied().unwrap_or(0.0);
@@ -3520,19 +3525,63 @@ pub fn coupling_offsets(
     if !car.def.is_rail() {
         return None;
     }
+    // the part in front joins by the coupling of its own frame that faces the one behind it -
+    // its rear coupling, which is its front coupling where it is itself turned round; the
+    // one behind joins by its front coupling, which is its rear where it is turned round.
+    // The two read opposite ends because the two face opposite ways.
     let lead_rear = if lead.def.boogies.is_some() {
-        declared_coupling(&lead.def, lead_reversed).y
+        declared_joint(lead, lead_reversed)
     } else {
         lead.model_box()
             .map(|(lo, hi)| if lead_reversed { hi.y } else { lo.y })?
     };
     let car_front = if car.def.boogies.is_some() {
-        declared_coupling(&car.def, !car_reversed).y
+        declared_joint(car, !car_reversed)
     } else {
         car.model_box()
             .map(|(lo, hi)| if car_reversed { lo.y } else { hi.y })?
     };
     Some((lead_rear, car_front))
+}
+
+/// The shortest model that is a car body and not one of its fittings. The bellows, the
+/// passenger floor and the gear of a rail car are modelled on their own, a fraction of a
+/// metre long, and their declared joints are measured from where they really are: only a
+/// body long enough to stand on its own bounds is judged against itself.
+const MIN_BODY_FOR_JOINT: f32 = 1.0;
+
+/// The joint of a bogie-defined rail car at the `front` or `back` coupling of its body
+/// frame (m forward of its origin), from the file where it is there.
+///
+/// A declared joint is kept even where it leaves an overlap or a gap between two cars -
+/// that is what the CR200J's inset rear coupling does in vanilla, and it is deliberate. A
+/// joint that stands metres clear of the body is not that car's joint in that frame,
+/// though, and taking it for one puts the car on the wrong side of the one it hangs on.
+/// The NF6D's two bogie frames declare `[coupling_front] 0 -17.71 1` and
+/// `[coupling_back] 0 3.42 1` on 2.2 m models: the first put its bogie seventeen metres ahead
+/// of the joint it hangs on - in front of the tram's own cab - and the second put the rear
+/// cab car in front of the bogie it belongs behind. A joint may stand clear of the body - a
+/// coupler, a drawbar - but not by more than the body's own length, and there the body's
+/// own end is used, as a rail car without `[boogies]` is placed anyway. A body too short to
+/// be one is not measured against itself: see [`MIN_BODY_FOR_JOINT`].
+fn declared_joint(ty: &VehicleType, front: bool) -> f32 {
+    let declared = declared_coupling(&ty.def, front).y;
+    let Some((lo, hi)) = ty
+        .model_box()
+        .filter(|(lo, hi)| hi.y - lo.y >= MIN_BODY_FOR_JOINT)
+    else {
+        return declared;
+    };
+    let slack = hi.y - lo.y;
+    if declared < lo.y - slack || declared > hi.y + slack {
+        if front {
+            hi.y
+        } else {
+            lo.y
+        }
+    } else {
+        declared
+    }
 }
 
 /// `(lead's rear, car's front)` in each body's model frame, including default joints.
@@ -3800,12 +3849,14 @@ impl TrailerPart {
     /// Transform for mesh `i` relative to the part's position; a shadow blob lies on the
     /// ground under its axles (see `VehicleInstance::mesh_local_transform`).
     pub fn mesh_local_transform(&self, i: usize) -> Mat4 {
+        let xf = self.mesh_transforms.get(i).copied().unwrap_or(Mat4::IDENTITY);
         if is_shadow_mesh(&self.ty, i) {
+            let lift = if self.ty.def.is_rail() { 0.0 } else { -self.ground_lift };
             return self.body_rotation()
-                * onto_plane([-self.ground_lift, 0.0, 0.0])
-                * self.mesh_transforms[i];
+                * onto_plane([lift, 0.0, 0.0])
+                * xf;
         }
-        self.body_rotation() * self.mesh_transforms[i]
+        self.body_rotation() * xf
     }
 
     /// Where this part hangs on the one in front: the coupling point in the frame of the
@@ -4179,12 +4230,13 @@ impl VehicleInstance {
     /// lies at z = 0, which the springs' sag takes 10-16 cm under the road, where no depth
     /// bias brings it through.
     pub fn mesh_local_transform(&self, i: usize) -> Mat4 {
+        let xf = self.mesh_transforms.get(i).copied().unwrap_or(Mat4::IDENTITY);
         if is_shadow_mesh(&self.ty, i) {
             return self.body_rotation()
                 * onto_plane(self.contact_plane())
-                * self.mesh_transforms[i];
+                * xf;
         }
-        self.body_rotation() * self.mesh_transforms[i]
+        self.body_rotation() * xf
     }
 
     /// The plane the wheels stand on, in the body frame: z = p[0] + p[1]·x + p[2]·y (m).
@@ -4192,6 +4244,9 @@ impl VehicleInstance {
     /// pushed up into the body), the simple physics asks the ground under each wheel; an
     /// AI copy stands `ai_rest_offset` above its plane.
     pub fn contact_plane(&self) -> [f32; 3] {
+        if self.ty.def.is_rail() {
+            return [0.0, 0.0, 0.0];
+        }
         let mut points: Vec<Vec3> = Vec::new();
         if let Some(rb) = &self.rigid {
             let standing = rb.wheels.iter().any(|w| w.on_ground);
@@ -4772,6 +4827,44 @@ mod tests {
     }
 
     #[test]
+    fn a_joint_clear_of_the_body_falls_back_to_the_body_end() {
+        let frame = |front: f32, back: f32, half: f32| {
+            let mut ty = coupling_test_type(Some(1.1));
+            let ty_mut = Arc::get_mut(&mut ty).unwrap();
+            ty_mut.def.coupling_front.as_mut().unwrap().pos[1] = front;
+            ty_mut.def.coupling_back.as_mut().unwrap().pos[1] = back;
+            ty_mut.mesh_boxes =
+                vec![(Vec3::new(-1.1, -half, 0.0), Vec3::new(1.1, half, 3.0))];
+            ty
+        };
+        // The NF6D's bogie frames: `[coupling_front] 0 -17.71 1` on a 2.2 m model put the
+        // bogie seventeen metres in front of the tram it hangs on.
+        let wild = frame(-17.71, -5.49, 1.1);
+        assert_eq!(
+            coupling_points(&wild, false, &wild, false),
+            (Vec3::new(0.0, -1.1, 0.0), Vec3::new(0.0, 1.1, 0.0))
+        );
+        // a coupler standing clear within the body's own length is the mod's, and kept
+        let coupler = frame(2.0, -2.4, 1.1);
+        assert_eq!(
+            coupling_points(&coupler, false, &coupler, false),
+            (Vec3::new(0.0, -2.4, 0.0), Vec3::new(0.0, 2.0, 0.0))
+        );
+        // an inset joint is kept too - the CR200J's overlap in vanilla
+        let inset = frame(0.8, -0.9, 1.1);
+        assert_eq!(
+            coupling_points(&inset, false, &inset, false),
+            (Vec3::new(0.0, -0.9, 0.0), Vec3::new(0.0, 0.8, 0.0))
+        );
+        // a fitting, not a body: its joints are measured from where it really is
+        let bellows = frame(-17.71, -5.49, 0.3);
+        assert_eq!(
+            coupling_points(&bellows, false, &bellows, false),
+            (Vec3::new(0.0, -5.49, 0.0), Vec3::new(0.0, -17.71, 0.0))
+        );
+    }
+
+    #[test]
     fn asymmetric_rail_ends_distinguish_declared_joints_from_body_bounds() {
         for bogies in [None, Some(5.0), Some(-5.0)] {
             let part = |front: f32, back: f32, min_y: f32, max_y: f32| {
@@ -5195,6 +5288,14 @@ mod tests {
             (axle[0] - 0.15).abs() < 1e-5 && axle[1] == 0.0 && axle[2] == 0.0,
             "{axle:?}"
         );
+
+        // A rail vehicle sits level on the track and its shadow blob is not distorted by road ground.
+        let rail_ty = coupling_test_type(Some(5.0));
+        let rail_v = VehicleInstance::new(rail_ty.clone(), VehicleHost::new(Default::default()));
+        assert_eq!(rail_v.contact_plane(), [0.0, 0.0, 0.0]);
+        let rail_t = TrailerPart::new_ex(rail_ty.clone(), &rail_ty, false, false, &rail_ty.program, 0, 0);
+        let m_local = rail_t.mesh_local_transform(0);
+        assert!(!m_local.is_nan());
     }
 
     /// Volvo Wright's dashboard rear-close trigger falls back to its explicit external-close

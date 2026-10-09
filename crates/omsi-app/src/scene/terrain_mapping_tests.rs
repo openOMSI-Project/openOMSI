@@ -89,6 +89,7 @@ fn mapped_splines_and_objects_use_uncut_base_while_ground_keeps_paint() {
     let spline = Arc::new(SplineType {
         dir: fixture.0.clone(),
         surf: Vec::new(),
+        surface: Vec::new(),
         def: Spline {
             path: fixture.0.join("mapped.sli"),
             textures: vec![omsi_scenery::sli::SplineTexture {

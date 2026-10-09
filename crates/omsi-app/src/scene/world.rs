@@ -257,6 +257,7 @@ pub(crate) fn traffic_lamp_value(var: &str, scripted: Option<f32>, standard: Opt
 /// mesh before it, and 40 stock models (the Spandau neon, sodium and gas street lamps, the
 /// Sv signals, the ICE and RE160 coaches) declare theirs after the far `[LOD] 0` mesh - their
 /// glow still shows up close in OMSI. No stock model repeats a light in two levels.
+#[cfg(test)]
 pub fn model_lights_faded(
     model: &Model,
     mesh_transforms: &dyn Fn(usize) -> Mat4,
@@ -264,7 +265,22 @@ pub fn model_lights_faded(
     value_of: &dyn Fn(&str) -> f32,
     fades: &[f32],
 ) -> Vec<omsi_render::Corona> {
-    model_lights_owned(model, mesh_transforms, pos, value_of, fades).into_iter().map(|c| c.0).collect()
+    let mut out = Vec::new();
+    model_lights_into(model, mesh_transforms, pos, value_of, fades, &mut out, None);
+    out
+}
+
+/// [`model_lights_faded`] added to `out`: every vehicle's lamps are gathered every frame,
+/// and a list of their own (and one of their owners) for each was only copied over.
+pub fn model_lights_extend(
+    model: &Model,
+    mesh_transforms: &dyn Fn(usize) -> Mat4,
+    pos: DVec3,
+    value_of: &dyn Fn(&str) -> f32,
+    fades: &[f32],
+    out: &mut Vec<omsi_render::Corona>,
+) {
+    model_lights_into(model, mesh_transforms, pos, value_of, fades, out, None);
 }
 
 /// Every light of a model in the order [`model_lights_owned`] numbers them: the mesh it
@@ -333,9 +349,25 @@ pub fn model_lights_owned(
 ) -> Vec<(omsi_render::Corona, usize)> {
     let mut out = Vec::new();
     let mut owners: Vec<usize> = Vec::new();
+    model_lights_into(model, mesh_transforms, pos, value_of, fades, &mut out, Some(&mut owners));
+    out.into_iter().zip(owners).collect()
+}
+
+/// The sprites of a model's lights added to `out`, and with `owners` the light each of them
+/// belongs to (see [`model_lights_owned`]).
+fn model_lights_into(
+    model: &Model,
+    mesh_transforms: &dyn Fn(usize) -> Mat4,
+    pos: DVec3,
+    value_of: &dyn Fn(&str) -> f32,
+    fades: &[f32],
+    out: &mut Vec<omsi_render::Corona>,
+    mut owners: Option<&mut Vec<usize>>,
+) {
+    let base = out.len();
     let mut seq = 0usize;
     let mut li = 0usize;
-    let model_dir = model.path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let model_dir = model.path.parent().unwrap_or(std::path::Path::new(""));
     for (i, md) in model.meshes.iter().enumerate() {
         // most meshes carry no light, and their transform is not free (every mesh of every
         // AI car, every frame)
@@ -346,7 +378,9 @@ pub fn model_lights_owned(
         li += md.light_enh_2.len();
         let xf = mesh_transforms(i);
         for l in &md.light_enh {
-            owners.resize(out.len(), seq.wrapping_sub(1));
+            if let Some(o) = owners.as_deref_mut() {
+                o.resize(out.len() - base, seq.wrapping_sub(1));
+            }
             seq += 1;
             // Omsi.exe reads a `[light_enh]` into the same lamp as a `[light_enh_2]` (0x5f2bb6,
             // a TLampensetting) and draws it alike (0x5a0068): omnidirectional, turned to the
@@ -374,13 +408,15 @@ pub fn model_lights_owned(
                 rotating: 2,
                 z_offset: l.values.get(1).copied().unwrap_or(0.1).max(0.0),
                 flags: effect & !1,
-                texture: l.texture.as_deref().map(|b| crate::lights::corona_texture_id(&model_dir, b)).filter(|t| *t != 0).unwrap_or_else(crate::lights::glow_texture_id),
+                texture: l.texture.as_deref().map(|b| crate::lights::corona_texture_id(model_dir, b)).filter(|t| *t != 0).unwrap_or_else(crate::lights::glow_texture_id),
                 ..Default::default()
             };
-            push_lamp_sprites(&mut out, glow, effect, l.size, (0.0, 0.0));
+            push_lamp_sprites(out, glow, effect, l.size, (0.0, 0.0));
         }
         for (k, l) in md.light_enh_2.iter().enumerate() {
-            owners.resize(out.len(), seq.wrapping_sub(1));
+            if let Some(o) = owners.as_deref_mut() {
+                o.resize(out.len() - base, seq.wrapping_sub(1));
+            }
             seq += 1;
             // the fading variable: 0 dark, 1 normal, 2 double (times the factor), as far as
             // the lamp has come on or gone out (`timeconst`)
@@ -418,10 +454,10 @@ pub fn model_lights_owned(
                 up,
                 z_offset: l.z_offset.max(0.0),
                 flags: flags & !1,
-                texture: l.bitmap.as_deref().map(|b| crate::lights::corona_texture_id(&model_dir, b)).filter(|t| *t != 0).unwrap_or_else(crate::lights::glow_texture_id),
+                texture: l.bitmap.as_deref().map(|b| crate::lights::corona_texture_id(model_dir, b)).filter(|t| *t != 0).unwrap_or_else(crate::lights::glow_texture_id),
                 ..Default::default()
             };
-            push_lamp_sprites(&mut out, glow, flags, l.size, ((outer * 0.5).to_radians(), (inner.max(0.0) * 0.5).to_radians()));
+            push_lamp_sprites(out, glow, flags, l.size, ((outer * 0.5).to_radians(), (inner.max(0.0) * 0.5).to_radians()));
             // the light's cone in fog (the original: built for a directional light
             // with the cone flag whose cone angles make sense; effect bit 2 leaves it out).
             // Its size and strength follow the weather and the viewer (`lights::collect`,
@@ -443,8 +479,9 @@ pub fn model_lights_owned(
             }
         }
     }
-    owners.resize(out.len(), seq.wrapping_sub(1));
-    out.into_iter().zip(owners).collect()
+    if let Some(o) = owners {
+        o.resize(out.len() - base, seq.wrapping_sub(1));
+    }
 }
 
 /// An object whose top stays this low (m over its foot) is no wall for a vehicle body; with

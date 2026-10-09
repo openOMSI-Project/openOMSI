@@ -499,6 +499,11 @@ fn safe_rel(name: &str) -> Option<String> {
 
 /// An error unless `rel` is a `safe_rel` path: checked again right before anything is
 /// written, so that nothing lands outside its folder whatever the plan says.
+/// For `mods`: whether `rel` is a plain path inside the content folder.
+pub(crate) fn check_rel_pub(rel: &str) -> Result<()> {
+    check_rel(rel)
+}
+
 fn check_rel(rel: &str) -> Result<()> {
     if safe_rel(rel).as_deref() != Some(rel) {
         return Err(anyhow!("refused to write {rel:?}: it is not a plain path inside the mod"));
@@ -1183,6 +1188,8 @@ fn run(job: &Job, content: &Path, root: Option<&Path>) -> Result<()> {
             note_installed(content, &src.file_name().unwrap_or_default().to_string_lossy(), &created);
         }
     }
+    // (noted as one mod: its own folders, see `mods`)
+    crate::mods::record(content, &source_name, &created);
     let summary = match (installed_items.is_empty(), aside_items.is_empty()) {
         (false, true) => format!("installed {} - it is in the lists now", installed_items.join(", ")),
         (false, false) => format!("installed {}; kept aside: {}", installed_items.join(", "), aside_items.join(", ")),
@@ -1389,6 +1396,7 @@ fn place_archive(job: &Job, content: &Path, src: &Path, plan: &Plan) -> Result<(
     if !cfg!(test) {
         crate::mount_archive(&dest);
     }
+    crate::mods::record(content, &name, &[format!("{ARCHIVES}/{name}")]);
     let items: Vec<String> = plan.maps.iter().filter(|m| !m.aside).map(|m| m.dest.clone()).collect();
     let summary = format!("{} used in place ({how}) as {}/{} - {} in the lists now; the game reads it without unpacking", name, ARCHIVES, name, if items.is_empty() { "its content is".to_string() } else { format!("{} are", items.join(", ")) });
     job.set(|p| {

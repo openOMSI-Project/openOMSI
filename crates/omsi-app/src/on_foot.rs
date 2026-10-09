@@ -15,6 +15,8 @@ use crate::humans::{AvatarCmd, BusId, Humans};
 use crate::App;
 use glam::{DVec2, DVec3};
 use omsi_sim::collision::Obb;
+use omsi_sim::human::HumanType;
+use std::sync::Arc;
 use winit::keyboard::KeyCode;
 
 /// The local player's avatar key (other players' walkers are `REMOTE_KEY + id`).
@@ -311,10 +313,7 @@ impl App {
         // facing away from the bus
         let away = (pos.truncate() - v.position.truncate()).dot(right).signum();
         let face = (right * away).x.atan2((right * away).y).to_degrees();
-        let kind = match (driver_ty, self.session.humans.as_mut()) {
-            (Some(t), Some(h)) => h.type_index(t) as u64,
-            _ => self.args.root.to_string_lossy().len() as u64 * 7 + 3,
-        };
+        let kind = Self::figure_kind(self.world.as_deref(), self.session.humans.as_mut(), &self.args.root, driver_ty);
         // up beside the seat inside, facing where the driver looks, as in OMSI 2 - a second
         // Ctrl+Shift+G steps out (`step_out`). Only a bus with no standing place by the seat
         // puts the driver out of the side looked at (by a door there, else beside the cab):
@@ -474,6 +473,7 @@ impl App {
             h.avatar_only = true;
             self.session.humans = Some(h);
         }
+        let kind = Self::figure_kind(self.world.as_deref(), self.session.humans.as_mut(), &self.args.root, None);
         self.session.on_foot = Some(OnFoot {
             pos,
             heading,
@@ -490,7 +490,7 @@ impl App {
             lag: DVec3::ZERO,
             settle: 0.0,
             view_before: "driver".into(),
-            kind: self.args.root.to_string_lossy().len() as u64 * 7 + 3,
+            kind,
             face_seat: false,
             transit: None,
             arrive: None,
@@ -1168,9 +1168,21 @@ impl App {
         Some(omsi_net::Walker { x: f.pos.x, y: f.pos.y, z: f.pos.z + f.lift, heading: f.heading as f32, speed: f.vel.length() as f32, course, seated: f.seat.is_some(), aboard })
     }
 
+    /// The player's figure on foot: `driver`, the figure at the wheel, else the one the map
+    /// gives the player's driver (`driver_type` pick 0) - the same clothes in and out of the
+    /// bus, here and in the other players' games -, else a passenger fixed by the install.
+    fn figure_kind(world: Option<&crate::scene::World>, humans: Option<&mut Humans>, root: &std::path::Path, driver: Option<Arc<HumanType>>) -> u64 {
+        let ty = driver.or_else(|| world.and_then(|w| crate::driver::driver_type(w, 0)));
+        match (ty, humans) {
+            (Some(t), Some(h)) => h.type_index(t) as u64,
+            _ => root.to_string_lossy().len() as u64 * 7 + 3,
+        }
+    }
+
     /// Other players on foot: their avatars.
     pub(crate) fn sync_remote_walkers(&mut self) {
-        let walkers: Vec<(u32, Option<omsi_net::Walker>, String)> = self.net.remotes.remotes.iter().map(|(id, r)| (*id, r.last.walker, r.last.figure.clone())).collect();
+        let walkers: Vec<(u32, Option<omsi_net::Walker>, String, Option<Arc<HumanType>>)> =
+            self.net.remotes.remotes.iter().map(|(id, r)| (*id, r.last.walker, r.last.figure.clone(), r.figure_type())).collect();
         if walkers.iter().all(|w| w.1.is_none()) && self.net.remote_walkers.is_empty() {
             return;
         }
@@ -1182,18 +1194,29 @@ impl App {
         let (Some(h), Some(w), Some(r), Some(scene)) = (self.session.humans.as_mut(), self.world.as_ref(), self.renderer.as_ref(), self.scene.as_mut()) else { return };
         let my_id = self.net.lan.as_ref().map(|l| l.my_id).unwrap_or(0);
         let mut now = Vec::new();
-        for (id, wk, figure) in walkers {
+        for (id, wk, figure, at_wheel) in walkers {
             let Some(wk) = wk else { continue };
             // (the way it goes: an older game sends none, then its facing)
             let hh = (if wk.course.is_finite() { wk.course } else { wk.heading } as f64).to_radians();
-            // the player's own figure, as their game draws them (a random passenger's
-            // otherwise), else one fixed by their id
-            let kind = omsi_net::human_path(&figure)
-                .map(|rel| omsi_cfg::resolve_path(&self.args.root, &rel))
-                .filter(|p| omsi_cfg::vfs::exists(p))
-                .and_then(|p| crate::driver::cached_type(&p))
+            // the figure they are drawn as at their wheel: their own, as their game draws
+            // them, or the one of the map's drivers that stands in for it here - not a
+            // passenger picked by their id, who got off the bus in someone else's clothes
+            let kind = at_wheel
+                .or_else(|| {
+                    omsi_net::human_path(&figure)
+                        .map(|rel| omsi_cfg::resolve_path(&self.args.root, &rel))
+                        .filter(|p| omsi_cfg::vfs::exists(p))
+                        .and_then(|p| crate::driver::cached_type(&p))
+                })
+                // (on foot with no bus: the map's driver their bus would get here)
+                .or_else(|| crate::driver::driver_type(w, 1000 + id as u64))
                 .map(|t| h.type_index(t) as u64)
                 .unwrap_or(id as u64 * 13 + 5);
+            // (the figure is chosen when the avatar is made: one that changed - their INFO
+            // naming theirs after the first steps - makes it again)
+            if self.net.remote_walkers.iter().any(|&(i, k)| i == id && k != kind) {
+                h.avatar_remove(REMOTE_KEY + id);
+            }
             // aboard a player's bus (ours, or a third player's): in that bus's frame as it
             // is drawn here, on its seat or its floor
             let aboard = wk.aboard.and_then(|a| {
@@ -1209,13 +1232,13 @@ impl App {
                 None => AvatarCmd { pos: DVec3::new(wk.x, wk.y, wk.z), heading: wk.heading as f64, vel: DVec2::new(hh.sin(), hh.cos()) * wk.speed as f64, lift: 0.0, seat: None, floor: w.walk_height(wk.x, wk.y).filter(|g| wk.z > g + 0.25).map(|_| wk.z), aboard: None },
             };
             h.avatar(&mut self.gfx.sim_view.people, REMOTE_KEY + id, w, r, scene, cmd, kind);
-            if !self.net.remote_walkers.contains(&id) {
+            if !self.net.remote_walkers.iter().any(|&(i, _)| i == id) {
                 log::info!("LAN: player {id} got up and walks at ({:.1}, {:.1})", wk.x, wk.y);
             }
-            now.push(id);
+            now.push((id, kind));
         }
-        for id in std::mem::take(&mut self.net.remote_walkers) {
-            if !now.contains(&id) {
+        for (id, _) in std::mem::take(&mut self.net.remote_walkers) {
+            if !now.iter().any(|&(i, _)| i == id) {
                 h.avatar_remove(REMOTE_KEY + id);
             }
         }

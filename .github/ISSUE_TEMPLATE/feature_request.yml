@@ -14,7 +14,7 @@ body:
       options:
         - label: I wrote this request in English.
           required: true
-        - label: I searched the [open and closed issues](https://github.com/openOMSI-Project/openOMSI/issues?q=is%3Aissue) and nobody has asked for this yet.
+        - label: I searched the [open and closed issues](https://github.com/openOMSI-org/openOMSI/issues?q=is%3Aissue) and nobody has asked for this yet.
           required: true
 
   - type: dropdown

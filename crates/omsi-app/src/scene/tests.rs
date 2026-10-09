@@ -315,19 +315,19 @@ fn spline_batches_keep_materials_cells_shadows_and_long_segments_separate() {
         textures: vec![SplineTexture { file: file.into(), ..Default::default() }],
         ..Default::default()
     };
-    let ty = Arc::new(SplineType { def: def("curb.dds"), dir: PathBuf::new(), surf: Vec::new() });
-    let other = Arc::new(SplineType { def: def("other.dds"), dir: PathBuf::new(), surf: Vec::new() });
-    let other_dir = Arc::new(SplineType { def: def("curb.dds"), dir: PathBuf::from("another_pack"), surf: Vec::new() });
+    let ty = Arc::new(SplineType { def: def("curb.dds"), dir: PathBuf::new(), surf: Vec::new(), surface: Vec::new() });
+    let other = Arc::new(SplineType { def: def("other.dds"), dir: PathBuf::new(), surf: Vec::new(), surface: Vec::new() });
+    let other_dir = Arc::new(SplineType { def: def("curb.dds"), dir: PathBuf::from("another_pack"), surf: Vec::new(), surface: Vec::new() });
     let mut tested = def("curb.dds");
     tested.textures[0].alpha = 1;
-    let tested = Arc::new(SplineType { def: tested, dir: PathBuf::new(), surf: Vec::new() });
+    let tested = Arc::new(SplineType { def: tested, dir: PathBuf::new(), surf: Vec::new(), surface: Vec::new() });
     let mut blended = def("curb.dds");
     blended.textures[0].alpha = 2;
-    let blended = Arc::new(SplineType { def: blended, dir: PathBuf::new(), surf: Vec::new() });
+    let blended = Arc::new(SplineType { def: blended, dir: PathBuf::new(), surf: Vec::new(), surface: Vec::new() });
     let mut compatible = def("curb.dds");
     compatible.path = PathBuf::from("another_profile.sli");
     compatible.textures.push(SplineTexture { file: "unused-grass.dds".into(), ..Default::default() });
-    let compatible = Arc::new(SplineType { def: compatible, dir: PathBuf::new(), surf: Vec::new() });
+    let compatible = Arc::new(SplineType { def: compatible, dir: PathBuf::new(), surf: Vec::new(), surface: Vec::new() });
     let mesh = |x: f32, length: f32| Arc::new(MeshData {
         positions: vec![glam::Vec3::new(x, 0.0, 0.0), glam::Vec3::new(x + length, 0.0, 0.0), glam::Vec3::new(x, 1.0, 0.0)],
         normals: vec![glam::Vec3::Z; 3],
@@ -928,5 +928,139 @@ fn standard_traffic_lamps_are_state_driven() {
     assert_eq!(standard_traffic_lamp("green", false, false, true, false), Some(1.0));
     assert_eq!(standard_traffic_lamp("red", false, true, false, false), Some(0.0));
     assert_eq!(standard_traffic_lamp("custom_channel", true, true, true, false), None);
+}
+
+#[test]
+fn scenery_mouseevent_hit_and_trigger() {
+    let dir = std::env::temp_dir().join(format!("openomsi-scenery-mouseevent-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("global.cfg"), "[map]\n0\n0\n0\n").unwrap();
+    let world = World::open(&dir, &dir.join("global.cfg"), 20261001).unwrap();
+
+    let mut mesh_data = omsi_geometry::MeshData::default();
+    mesh_data.positions = vec![
+        glam::Vec3::new(-1.0, 5.0, -1.0),
+        glam::Vec3::new(1.0, 5.0, -1.0),
+        glam::Vec3::new(1.0, 5.0, 1.0),
+        glam::Vec3::new(-1.0, 5.0, 1.0),
+    ];
+    mesh_data.indices = vec![0, 1, 2, 0, 2, 3];
+
+    let mut model = omsi_model::Model::default();
+    let mut mdef = omsi_model::MeshDef::default();
+    mdef.mouse_event = Some("toggle_switch".to_string());
+    model.meshes.push(mdef);
+
+    let mut prog = omsi_script::Program::default();
+    let var_id = prog.declare_var("Switch");
+    prog.blocks.push(omsi_script::compile::Block {
+        name: "toggle_switch".into(),
+        ops: vec![
+            omsi_script::Op::Load(var_id),
+            omsi_script::Op::Not,
+            omsi_script::Op::Store(var_id),
+        ],
+        ..Default::default()
+    });
+    prog.triggers.insert("toggle_switch".into(), 0);
+    prog.blocks.push(omsi_script::compile::Block {
+        name: "toggle_switch_drag".into(),
+        ops: vec![
+            omsi_script::Op::LoadSys(omsi_script::SysVar::MouseX),
+            omsi_script::Op::Store(var_id),
+        ],
+        ..Default::default()
+    });
+    prog.triggers.insert("toggle_switch_drag".into(), 1);
+    prog.blocks.push(omsi_script::compile::Block {
+        name: "toggle_switch_off".into(),
+        ops: vec![
+            omsi_script::Op::Push(0.0),
+            omsi_script::Op::Store(var_id),
+        ],
+        ..Default::default()
+    });
+    prog.triggers.insert("toggle_switch_off".into(), 2);
+
+    let inst = omsi_sim::scenery::SceneryInstance::new(
+        Arc::new(prog),
+        &[],
+        omsi_sim::SimClock::default(),
+        &[],
+    );
+
+    let ot = Arc::new(ObjectType {
+        sco: omsi_scenery::sco::SceneryObject::default(),
+        sound_path: Default::default(),
+        model,
+        model_dir: dir.clone(),
+        meshes: vec![(mesh_data, Vec::new(), Vec::new())],
+        mesh_visible: vec![None],
+        mesh_def_index: vec![0],
+        mesh_pivots: vec![glam::Mat4::IDENTITY],
+        mesh_shadow: vec![false],
+        mesh_casts: vec![false],
+        has_mouse_events: true,
+        embedded_lights: Default::default(),
+        program: None,
+        lower_lods: Vec::new(),
+        lod0_min: 0.0,
+        paint_scheme_count: 0,
+        dynamic_textures: Vec::new(),
+        holes: Vec::new(),
+        deform: None,
+        collision: None,
+        paint: false,
+        camera: Default::default(),
+        collision_shape: Default::default(),
+    });
+
+    world.scripted.lock().push(ScriptedObject {
+        ty: ot,
+        pos: DVec3::ZERO,
+        xf: glam::Mat4::IDENTITY,
+        instances: vec![0],
+        inst,
+        controller: None,
+        light_index: 0,
+        light_parent: None,
+        map_id: 42,
+        variants: Vec::new(),
+        sounds: None,
+        tile: (0, 0),
+        var_parent: None,
+        texts: Vec::new(),
+        arrivals: false,
+        htmls: Vec::new(),
+        alpha_slots: Vec::new(),
+        alpha_last: Vec::new(),
+    });
+
+    // 1. Raycast towards (0, 1, 0) should hit the quad at (0, 5, 0)
+    let hit = world.scenery_object_hit(DVec3::ZERO, glam::Vec3::Y, 50.0, 0.0);
+    assert!(hit.is_some(), "scenery object hit should find the switch");
+    let h = hit.unwrap();
+    assert_eq!(h.map_id, 42);
+    assert_eq!(h.event, "toggle_switch");
+    assert!((h.t - 5.0).abs() < 1e-3);
+
+    // 2. Raycast in opposite direction should miss
+    let miss = world.scenery_object_hit(DVec3::ZERO, -glam::Vec3::Y, 50.0, 0.0);
+    assert!(miss.is_none());
+
+    // 3. Test click triggers toggle_switch: Switch was 0, becomes 1
+    assert_eq!(world.scripted.lock()[0].inst.var("Switch"), Some(0.0));
+    assert!(world.scenery_object_click(42, "toggle_switch"));
+    assert_eq!(world.scripted.lock()[0].inst.var("Switch"), Some(1.0));
+
+    // 4. Test drag triggers toggle_switch_drag with mouse_x
+    assert!(world.scenery_object_drag(42, "toggle_switch", 0.75, 0.0));
+    assert_eq!(world.scripted.lock()[0].inst.var("Switch"), Some(0.75));
+
+    // 5. Test release triggers toggle_switch_off
+    assert!(world.scenery_object_release(42, "toggle_switch"));
+    assert_eq!(world.scripted.lock()[0].inst.var("Switch"), Some(0.0));
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -4,8 +4,8 @@ contact_links:
     url: https://discord.gg/VG2EKVafYG
     about: How do I...? Setting up, mods, or a chat with other players - ask on our Discord server.
   - name: Security problem
-    url: https://github.com/openOMSI-Project/openOMSI/security/advisories/new
+    url: https://github.com/openOMSI-org/openOMSI/security/advisories/new
     about: A vulnerability in the game, the server or the updater - report it privately, not as an issue (see SECURITY.md).
   - name: User guide
-    url: https://github.com/openOMSI-Project/openOMSI/blob/main/docs/USER_GUIDE.md
+    url: https://github.com/openOMSI-org/openOMSI/blob/main/docs/USER_GUIDE.md
     about: Settings, controls, multiplayer and common problems explained.

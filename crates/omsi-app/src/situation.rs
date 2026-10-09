@@ -2,6 +2,47 @@
 
 use super::*;
 
+/// The folder beside a situation file that keeps its bus's script textures (the
+/// destination displays, the IBIS, the ticket printer as they were drawn), as OMSI keeps
+/// them with a situation (#1559).
+pub(crate) fn script_texture_dir(osn: &Path) -> PathBuf {
+    let mut name = osn.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    name.push(".scripttex");
+    osn.with_file_name(name)
+}
+
+/// Write the player's bus's script textures beside the situation `osn` was saved to.
+pub(crate) fn save_script_textures(osn: &Path, vehicle: &omsi_sim::VehicleInstance) {
+    let dir = script_texture_dir(osn);
+    let _ = std::fs::remove_dir_all(&dir);
+    if vehicle.host.script_textures.is_empty() || std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    for (i, st) in vehicle.host.script_textures.iter().enumerate() {
+        if let Err(e) = image::save_buffer(dir.join(format!("{i}.png")), &st.rgba, st.width, st.height, image::ColorType::Rgba8) {
+            log::warn!("saving script texture {i} beside {}: {e}", osn.display());
+        }
+    }
+}
+
+/// Put the script textures saved beside the situation `osn` back on the bus. How many.
+pub(crate) fn restore_script_textures(osn: &Path, vehicle: &mut omsi_sim::VehicleInstance) -> usize {
+    let dir = script_texture_dir(osn);
+    let mut n = 0;
+    for (i, st) in vehicle.host.script_textures.iter_mut().enumerate() {
+        let Ok(img) = image::open(dir.join(format!("{i}.png"))) else { continue };
+        let img = img.to_rgba8();
+        n += usize::from(st.restore(img.width(), img.height(), img.into_raw()));
+    }
+    n
+}
+
+/// The situation file a session was started from (as `apply_situation` finds it).
+pub(crate) fn situation_file(args: &Args) -> Option<PathBuf> {
+    let rel = args.situation.as_ref()?;
+    Some(if Path::new(rel).is_absolute() { PathBuf::from(rel) } else { omsi_cfg::resolve_path(&args.root, rel) })
+}
+
 /// The depot file of a vehicle for this map: `--hof`, else the hof named by the map's
 /// `[aigroup_depot]`, else the first .hof next to the .bus file.
 pub(crate) fn find_hof(

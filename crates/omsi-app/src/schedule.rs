@@ -93,7 +93,7 @@ impl TimetableWorld for World {
 
 impl Schedule {
     /// `clock` gives the date: tours carry a validity mask (bits 0-6 Monday…Sunday, 7 public
-    /// holiday, 8 school holidays, 9 school days) that selects which run today.
+    /// holiday, 8 school days, 9 school holidays) that selects which run today.
     pub fn new(root: &Path, world: &World, clock: &omsi_sim::SimClock) -> Schedule {
         Schedule {
             sim: ScheduleSim::new(root, world, clock),
@@ -144,7 +144,10 @@ impl Schedule {
         let now = clock.time;
         let mut boards = world.timetable_boards.lock();
         boards.clock = Some(clock.clone());
-        if self.sim.boards_fresh(now) || (boards.wanted.is_empty() && boards.wanted_names.is_empty()) {
+        // (a stop a page asks for anew is made at once, not up to a second later: the boards of
+        // the map's own displays may just have been made without it)
+        let new_name = boards.wanted_names.iter().any(|k| !boards.departures.contains_key(k));
+        if (self.sim.boards_fresh(now) && !new_name) || (boards.wanted.is_empty() && boards.wanted_names.is_empty()) {
             return;
         }
         let (wanted, wanted_names) = (boards.wanted.clone(), boards.wanted_names.clone());
@@ -153,5 +156,28 @@ impl Schedule {
         boards.by_stop = by_stop;
         boards.departures = departures;
         boards.departures_gen = boards.departures_gen.wrapping_add(1);
+    }
+}
+
+impl Schedule {
+    /// The timetable buses on the road, for outside tools (`telemetry`): line, tour, trip file,
+    /// next stop (map object), standing at it, delay, position and fleet number of each.
+    pub fn telemetry_ai(&self, traffic: Option<&crate::traffic::Traffic>) -> serde_json::Value {
+        let Some(t) = traffic else { return serde_json::Value::Array(Vec::new()) };
+        let list = self.sim.ai_bus_rows(&t.sim);
+        serde_json::Value::Array(list.into_iter().map(|b| serde_json::json!({
+            "id": b.id,
+            "line": b.line,
+            "tour": b.tour,
+            "trip": b.trip,
+            "terminus": b.terminus,
+            "depart": b.depart,
+            "next_stop_id": b.next_stop_id,
+            "at_stop": b.at_stop,
+            "trip_done": b.trip_done,
+            "delay_s": b.delay_s,
+            "x": b.x, "y": b.y,
+            "number": b.number,
+        })).collect())
     }
 }

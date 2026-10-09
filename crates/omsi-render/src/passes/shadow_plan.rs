@@ -15,6 +15,27 @@ pub(crate) struct ShadowPlan {
     pub light_view_proj_close: Mat4,
 }
 
+/// The light matrix of a cascade: an orthographic box `range` metres either side of the
+/// camera, looking along `sun`, drawn into a map of `texels` a side. The box is a fixed size
+/// whatever the view (no shimmer from a box that grows and shrinks as the camera turns), and
+/// its centre moves in whole texels of its own map, so that a still caster stays on the same
+/// texels while the camera moves. (The close cascade's map is smaller than the shadow setting
+/// above 2048, `SHADOW_CLOSE_MAX`: snapped to the setting's texels, it had moved by half or a
+/// quarter of its own texel, and every shadow edge round the bus trembled as the camera moved.)
+pub(crate) fn cascade_matrix(sun: Vec3, cam_rel: Vec3, range: f32, texels: u32) -> Mat4 {
+    let texel = range * 2.0 / texels.max(1) as f32;
+    let up = if sun.z.abs() > 0.95 { Vec3::Y } else { Vec3::Z };
+    let view0 = Mat4::look_at_rh(sun * 900.0, Vec3::ZERO, up);
+    let ls = view0.transform_point3(cam_rel);
+    let snapped = glam::Vec2::new((ls.x / texel).round() * texel, (ls.y / texel).round() * texel);
+    // (the snapped centre as a translation in light space, the eye 900 m from it towards the
+    // sun: built as a new look-at instead, its dot products with a 900 m eye rounded the
+    // offset off the texel grid)
+    let view = Mat4::from_translation(Vec3::new(-snapped.x, -snapped.y, -900.0 - ls.z)) * view0;
+    let proj = Mat4::orthographic_rh(-range, range, -range, range, 1.0, 2200.0);
+    proj * view
+}
+
 impl Renderer {
     /// The light matrices of the cascades, the near and far ones kept from an earlier
     /// frame while they still fit (and the second XR eye taking the first one's).
@@ -34,29 +55,13 @@ impl Renderer {
             None
         };
         let draw_shadows = shadows && shared_xr_shadows.is_none();
-        let light_matrix = |range: f32| {
-            // Snap the centre to whole texels so the map does not shimmer while driving.
-            let texel = range * 2.0 / self.options.shadow_size as f32;
-            let up = if sun.z.abs() > 0.95 { Vec3::Y } else { Vec3::Z };
-            let raw = cam_rel;
-            let view0 = Mat4::look_at_rh(sun * 900.0, Vec3::ZERO, up);
-            let ls = view0.transform_point3(raw);
-            let snapped = Vec3::new(
-                (ls.x / texel).round() * texel,
-                (ls.y / texel).round() * texel,
-                ls.z,
-            );
-            let center = view0.inverse().transform_point3(snapped);
-            let view = Mat4::look_at_rh(center + sun * 900.0, center, up);
-            let proj = Mat4::orthographic_rh(-range, range, -range, range, 1.0, 2200.0);
-            proj * view
-        };
+        let light_matrix = |range: f32, texels: u32| cascade_matrix(sun, cam_rel, range, texels);
         // The near cascade (140 m, 4096 texels at the top setting: the costliest shadow
         // pass, a third of it the trees' leaf cards) is drawn every other frame and kept
         // for the next, with the light matrix it was drawn with; the close one - the bus
         // and everything within 30 m - every frame. Redrawn at once when the camera has
         // jumped, the sun has moved or the render origin has (its matrix is relative to it).
-        let near_wanted = light_matrix(SHADOW_RANGE);
+        let near_wanted = light_matrix(SHADOW_RANGE, self.options.shadow_size);
         let (near_m, near_age, near_origin, near_sun) = self.shadow_near_cache.get();
         let near_jumped = (near_m.project_point3(cam_rel) - near_wanted.project_point3(cam_rel)).length() > 0.03;
         let redraw_near = draw_shadows
@@ -79,13 +84,13 @@ impl Renderer {
         };
         let light_view_proj_close = shared_xr_shadows
             .map(|(_, _, _, _, close)| close)
-            .unwrap_or_else(|| light_matrix(SHADOW_RANGE_CLOSE));
+            .unwrap_or_else(|| light_matrix(SHADOW_RANGE_CLOSE, self.options.shadow_size.min(SHADOW_CLOSE_MAX)));
         // The far cascade (700 m, metre-sized texels) is drawn every 4th frame, or at once
         // when the camera has left the middle of the one drawn, the sun has moved or the
         // render origin has jumped (its matrix is relative to that). Drawn every frame it
         // was 0.6 ms of GPU time for a picture that hardly changes; a car in it is a few
         // texels, and a tile streamed in waits three frames at most for its shadow.
-        let far_wanted = light_matrix(SHADOW_RANGE_FAR);
+        let far_wanted = light_matrix(SHADOW_RANGE_FAR, self.options.shadow_size);
         let (far_m, far_age, far_origin, far_sun) = self.shadow_far_cache.get();
         let far_moved = (far_m.project_point3(cam_rel) - far_wanted.project_point3(cam_rel)).length() > 0.12;
         let redraw_far = draw_shadows
@@ -134,16 +139,18 @@ impl Renderer {
 
     /// The shadow casters of each cascade (near, far, close) and of the street lamps'
     /// maps, as batches over the frame's draw list.
-    pub(crate) fn plan_shadow_casters(&self, scene: &Scene, f: &FrameCtx, sh: &ShadowPlan, list: &mut Vec<u32>) -> [Vec<Batch>; 4] {
+    pub(crate) fn plan_shadow_casters(&self, scene: &Scene, f: &FrameCtx, sh: &ShadowPlan, list: &mut Vec<u32>) -> [Vec<Batch>; SHADOW_LISTS] {
         let (camera, cam_rel, rt_frame) = (f.camera, f.cam_rel, f.rt_frame);
         let (moon_shadows, draw_shadows, redraw_near, redraw_far) = (sh.moon_shadows, sh.draw_shadows, sh.redraw_near, sh.redraw_far);
         let (light_view_proj, light_view_proj_far, light_view_proj_close) = (sh.light_view_proj, sh.light_view_proj_far, sh.light_view_proj_close);
         let lamp_shadows = &f.lamp_shadows;
         let debug_draws = f.env.debug_draws;
         // near, far, close
-        // (3: the street lamps' maps, every caster within a chosen lamp's reach under its head)
-        let mut shadow_batches: [Vec<Batch>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
-        let lamp_reach = |c: Vec3, r: f32| lamp_shadows.iter().any(|l| c.z - r < l.position.z && (c - l.position).length() < l.range + r);
+        // (3..: each street lamp's map, every caster within that lamp's reach under its head;
+        // a source embedded in a pole's fixture leaves its own fixture out, see `PointLight::shadow_owner`)
+        let mut shadow_batches: [Vec<Batch>; SHADOW_LISTS] = std::array::from_fn(|_| Vec::new());
+        let lamp_reaches = |l: &LampShadow, c: Vec3, r: f32| c.z - r < l.position.z && (c - l.position).length() < l.range + r;
+        let lamp_reach = |c: Vec3, r: f32| lamp_shadows.iter().any(|l| lamp_reaches(l, c, r));
         // an instance's screen size as the camera pass measures it for the LOD choice
         let lod_fov = camera.fov_deg.to_radians().max(1e-3);
         let lod_size = |inst: &Instance| -> f32 {
@@ -162,9 +169,9 @@ impl Renderer {
             .unwrap_or(3.0);
         // (a copy: the casters are gathered on the worker pool, the renderer is not shared)
         let omsi_shadow_casters = self.options.omsi_shadow_casters;
-        let casters = |span: std::ops::Range<usize>| -> [Vec<DrawItem>; 4] {
-            let mut out: [Vec<DrawItem>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
-            let mut ranges: Vec<(u8, u32, u32, usize, u32)> = Vec::new();
+        // (the lists are filled in place, block after block of the instances: a fresh list
+        // per block was a few hundred small allocations a frame and every item copied twice)
+        let casters = |span: std::ops::Range<usize>, out: &mut [Vec<DrawItem>; SHADOW_LISTS], ranges: &mut Vec<(u8, u32, u32, usize, u32)>| {
             for inst in &scene.instances[span] {
                 if !inst.visible || !inst.casts_shadow || (omsi_shadow_casters && !inst.omsi_caster) {
                     continue;
@@ -192,6 +199,35 @@ impl Renderer {
                         continue;
                     }
                 }
+                // Which maps the instance falls into, before its materials are looked at: on
+                // most frames only the close cascade (30 m round the camera) is drawn, and
+                // most of a city's instances lie outside it - looking up the materials of
+                // every one of them first was most of this planning's time.
+                let lamp_hit = !lamp_shadows.is_empty() && !(m.bounds_radius > 0.0 && m.bounds_radius < 0.1) && lamp_reach(c, r);
+                let mut hits = [false; 3];
+                for (cascade, &(range, lvp, min_radius)) in boxes.iter().enumerate() {
+                    if !active[cascade] {
+                        continue;
+                    }
+                    if m.bounds_radius > 0.0 && m.bounds_radius < min_radius {
+                        if dbg_shadow && cascade == 0 && m.bounds_radius >= dbg_r {
+                            log::info!("shadow: mesh r={:.1} skipped (ranges {})", m.bounds_radius, m.ranges.len());
+                        }
+                        continue;
+                    }
+                    let lc = lvp.project_point3(c);
+                    let rr = r / range;
+                    if lc.x.abs() > 1.0 + rr || lc.y.abs() > 1.0 + rr {
+                        if dbg_shadow && cascade == 0 && r >= dbg_r {
+                            log::info!("shadow: mesh r={r:.1} outside the light box at ({:.2}, {:.2})", lc.x, lc.y);
+                        }
+                        continue;
+                    }
+                    hits[cascade] = true;
+                }
+                if !lamp_hit && hits == [false; 3] {
+                    continue;
+                }
                 ranges.clear();
                 for (ri, (_, _, slot)) in m.ranges.iter().enumerate() {
                     let mat_id = inst.materials.get(*slot as usize).copied().unwrap_or(0);
@@ -215,36 +251,28 @@ impl Renderer {
                     }
                     ranges.push((kind, ri as u32, *slot, mat_id, mat.look));
                 }
-                if !lamp_shadows.is_empty() && !(m.bounds_radius > 0.0 && m.bounds_radius < 0.1) && lamp_reach(c, r) {
-                    for &(kind, ri, slot, mat_id, look) in &ranges {
-                        let kind = if kind == PIPE_KINDS { PIPE_OPAQUE } else { kind };
-                        let (material, look) = depth_only_material(kind, mat_id, look);
-                        out[3].push(DrawItem { pipe: kind, mesh: inst.mesh as u32, range: ri, material, look, entry: inst.base + slot });
+                if lamp_hit {
+                    // (each lamp's map takes the casters within its own reach: one list
+                    // drawn into every map cost each lamp the others' casters as well)
+                    for (k, light) in lamp_shadows.iter().enumerate() {
+                        if (light.owner.is_some() && light.owner == inst.shadow_owner) || !lamp_reaches(light, c, r) {
+                            continue;
+                        }
+                        for &(kind, ri, slot, mat_id, look) in ranges.iter() {
+                            let kind = if kind == PIPE_KINDS { PIPE_OPAQUE } else { kind };
+                            let (material, look) = depth_only_material(kind, mat_id, look);
+                            out[3 + k].push(DrawItem { pipe: kind, mesh: inst.mesh as u32, range: ri, material, look, entry: inst.base + slot });
+                        }
                     }
                 }
-                for (cascade, &(range, lvp, min_radius)) in boxes.iter().enumerate() {
-                    if !active[cascade] {
+                for cascade in 0..3 {
+                    if !hits[cascade] {
                         continue;
                     }
-                    let dbg = dbg_shadow && cascade == 0 && r >= dbg_r;
-                    if m.bounds_radius > 0.0 && m.bounds_radius < min_radius {
-                        if dbg_shadow && cascade == 0 && m.bounds_radius >= dbg_r {
-                            log::info!("shadow: mesh r={:.1} skipped (ranges {})", m.bounds_radius, m.ranges.len());
-                        }
-                        continue;
-                    }
-                    let lc = lvp.project_point3(c);
-                    let rr = r / range;
-                    if lc.x.abs() > 1.0 + rr || lc.y.abs() > 1.0 + rr {
-                        if dbg {
-                            log::info!("shadow: mesh r={r:.1} outside the light box at ({:.2}, {:.2})", lc.x, lc.y);
-                        }
-                        continue;
-                    }
-                    if dbg {
+                    if dbg_shadow && cascade == 0 && r >= dbg_r {
                         log::info!("shadow: caster r={r:.1} at {:?} slots {:?}", inst.origin, ranges.iter().map(|x| x.0).collect::<Vec<_>>());
                     }
-                    for &(kind, ri, slot, mat_id, look) in &ranges {
+                    for &(kind, ri, slot, mat_id, look) in ranges.iter() {
                         let kind = if kind == PIPE_KINDS {
                             if cascade != 1 {
                                 continue;
@@ -266,7 +294,6 @@ impl Renderer {
                     }
                 }
             }
-            out
         };
         if active.iter().any(|a| *a) || !lamp_shadows.is_empty() {
             let n = scene.instances.len();
@@ -283,17 +310,16 @@ impl Renderer {
                     })
                 })
             };
-            let mut found: [Vec<DrawItem>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+            let mut found: [Vec<DrawItem>; SHADOW_LISTS] = std::array::from_fn(|_| Vec::new());
             for part in run_parts(self.encoding_pool.as_ref(), parts, |p| {
-                let mut out: [Vec<DrawItem>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+                let mut out: [Vec<DrawItem>; SHADOW_LISTS] = std::array::from_fn(|_| Vec::new());
+                let mut ranges = Vec::new();
                 let end = ((p + 1) * chunk).min(n);
                 let mut b = p * chunk;
                 while b < end {
                     let next = (b + CULL_BLOCK).min(end);
                     if lit(b / CULL_BLOCK) {
-                        for (a, x) in out.iter_mut().zip(casters(b..next)) {
-                            a.extend(x);
-                        }
+                        casters(b..next, &mut out, &mut ranges);
                     }
                     b = next;
                 }
@@ -303,7 +329,7 @@ impl Renderer {
                     a.extend(b);
                 }
             }
-            for cascade in 0..4 {
+            for cascade in 0..SHADOW_LISTS {
                 if cascade < 3 && !active[cascade] {
                     continue;
                 }
@@ -320,5 +346,30 @@ impl Renderer {
             );
         }
         shadow_batches
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A still point keeps its place among the map's texels while the camera moves by
+    /// fractions of a texel and turns: the cascade moves by whole texels only.
+    #[test]
+    fn cascades_move_by_whole_texels() {
+        let sun = Vec3::new(0.4, -0.5, 0.75).normalize();
+        let point = Vec3::new(3.3, -7.1, 0.4);
+        for (range, texels) in [(SHADOW_RANGE_CLOSE, 2048u32), (SHADOW_RANGE, 4096), (SHADOW_RANGE_FAR, 2048)] {
+            let frac = |cam: Vec3| {
+                let p = cascade_matrix(sun, cam, range, texels).project_point3(point);
+                let t = (glam::Vec2::new(p.x, p.y) * 0.5 + 0.5) * texels as f32;
+                t - t.round()
+            };
+            let f0 = frac(Vec3::ZERO);
+            for k in 1..40 {
+                let cam = Vec3::new(0.013 * k as f32, -0.021 * k as f32, 0.005 * k as f32);
+                assert!((frac(cam) - f0).abs().max_element() < 0.02, "range {range}: {:?} vs {:?}", frac(cam), f0);
+            }
+        }
     }
 }

@@ -4,6 +4,7 @@ pub mod atmosphere;
 pub mod clouds;
 mod passes;
 use passes::{Encoders, FrameArgs, FrameEnv, PassTimers, StageClock};
+pub mod pipeline_cache;
 mod pipelines;
 mod puddles;
 mod rt;
@@ -76,6 +77,13 @@ struct CameraUniform {
     /// Windy trees: xy the weather's wind (m/s, world; 0 with the setting off), zw how far
     /// the air has carried the gusts since the start (m, modulo the shaders' PATTERN_PERIOD).
     tree_wind: [f32; 4],
+    /// The rear section of the player's articulated vehicle as `inside_*` (w of the third
+    /// 0 without one): the weather stays out of it as well (#1967: it snowed and rained in
+    /// the back of an articulated bus). Last, so that the shaders that do not read it can
+    /// leave it out of their copy of this struct.
+    inside2_a: [f32; 4],
+    inside2_b: [f32; 4],
+    inside2_c: [f32; 4],
 }
 
 /// The period the sky's cloud patterns repeat with (m): 5 x the cloud field (14 km), 8 x
@@ -320,6 +328,9 @@ pub struct PointLight {
     /// A lamp in a housing - a street lamp's head, a platform's light (`[maplight]`): the
     /// enhanced path sends its light down and out, a few per cent above its horizon.
     pub housed: bool,
+    /// A virtual source embedded in a pole fixture. Its fixture cannot occlude
+    /// its own output; it remains a caster for other lamps and the sun.
+    pub shadow_owner: Option<i64>,
     /// Which path draws the light.
     pub mode: LightMode,
 }
@@ -336,6 +347,7 @@ impl Default for PointLight {
             core: 0.0,
             beam: 0.0,
             housed: false,
+            shadow_owner: None,
             mode: LightMode::Both,
         }
     }
@@ -479,6 +491,9 @@ const LIGHT_CELL: f32 = 25.0;
 /// Enhanced: how many street lamps cast shadows (their maps are tiles of a quarter of the
 /// shadow size under the far map), and how far from the camera a lamp's reach may end.
 const LAMP_SHADOWS: usize = 4;
+/// The shadow casters' lists of a frame: the near, far and close cascades, then one per
+/// street lamp's map (each lamp's own: an embedded source leaves its own fixture out).
+const SHADOW_LISTS: usize = 3 + LAMP_SHADOWS;
 const LAMP_SHADOW_REACH: f32 = 45.0;
 /// The far map's height over its width: the lamps' tiles take the quarter under it.
 const FAR_MAP_ASPECT: f32 = 1.25;
@@ -493,6 +508,7 @@ struct LampShadow {
     index: u32,
     position: Vec3,
     range: f32,
+    owner: Option<i64>,
 }
 
 impl LampShadow {
@@ -671,6 +687,9 @@ pub struct Lighting {
     /// Cloud layer: density 0..1 and the texture offset (wind drift), 0 = no clouds.
     pub cloud_density: f32,
     pub cloud_offset: [f32; 2],
+    /// The weather of the classic sky (Vanilla, Vanilla+): its haze and its cloud layer, as
+    /// Omsi.exe draws them (sky.wgsl `fs_main`).
+    pub vanilla_sky: VanillaSky,
     /// Sun shadow map (off in mirrors and at night).
     pub shadows: bool,
     /// How wet the roads are (0..1): rain darkens them and makes them mirror the sky.
@@ -808,6 +827,7 @@ impl Default for Lighting {
             sky_weights: [1.0, 0.0, 0.0],
             cloud_density: 0.0,
             cloud_offset: [0.0; 2],
+            vanilla_sky: VanillaSky::default(),
             shadows: true,
             snowfall: 0.0,
             wind: Vec3::ZERO,
@@ -1045,6 +1065,10 @@ pub struct MaterialExtra {
     /// (Only a panel whose `[matl_lightmap]` is white all over: a flipdot carries the same
     /// mask, but its light map is a picture of the lamps over it, and it does not glow.)
     pub led: bool,
+    /// An LED panel drawn by a page (`[useHtmlTexture]`): a destination sign, made to be read
+    /// from the street, so it keeps its brightness at night even where it sits in the cab
+    /// (behind a coach's windscreen) - the cab's dimming at night is for the dashboard's LCDs.
+    pub led_sign: bool,
     /// The film of water on a window (`[alphascale] Rain_Window_…`): drawn as drops that sit,
     /// gather and run down the glass instead of the texture sliding down as a whole.
     pub rain_film: bool,
@@ -1246,6 +1270,8 @@ pub struct Instance {
     /// it - except a spline standing clear of the ground (a bridge deck, an elevated
     /// railway), which is raised with `set_casts_shadow`.
     pub casts_shadow: bool,
+    /// Stable identity of a pole fixture hosting embedded virtual map lights.
+    pub shadow_owner: Option<i64>,
     /// Part of a vehicle whose roof lies this high over its origin (model frame): what faces
     /// up under the roof (the floor, the seats) is out of the weather - no snow nor wet on
     /// it. (Only the vehicle the camera is in was spared, by its box; every other bus showed
@@ -1339,6 +1365,14 @@ pub struct Scene {
     cpu_params: Vec<[f32; 4]>,
     /// The light grid and lights as last uploaded, so that unchanged ones are not sent again.
     last_grid: Vec<u32>,
+    /// The grid before that, the room the next one is made in: half a megabyte, made and
+    /// let go twice a frame (the window's picture and a mirror's), went back to the system
+    /// each time and came back as fresh pages to be faulted in.
+    grid_scratch: Vec<u32>,
+    /// The smoke's sprites, their order and the sorted list of the last `prepare_smoke`,
+    /// kept for the next: every car's exhaust is thousands of sprites, and lists made anew
+    /// each time grew by copying and went back to the system (see `grid_scratch`).
+    smoke_scratch: (Vec<(f64, GpuCorona)>, Vec<(f64, u32)>, Vec<GpuCorona>),
     /// The street lamps that had a shadow map last frame (their places in centimetres):
     /// they keep it against a lamp only a little stronger (`prepare_lights`).
     lamp_shadow_last: Vec<[i64; 3]>,
@@ -2066,6 +2100,8 @@ pub struct Renderer {
     corona_sampler: wgpu::Sampler,
     sky_layout: wgpu::BindGroupLayout,
     sky_sampler: wgpu::Sampler,
+    /// The classic sky's weather (`VanillaSkyUniform`, sky bind group binding 10).
+    vanilla_sky_buf: wgpu::Buffer,
     /// The enhanced clouds' noise (clouds.rs): the shape map, the detail volume and their
     /// repeating, mip-mapped sampler (sky bind group bindings 6-8).
     cloud_shape_view: wgpu::TextureView,
@@ -2101,6 +2137,8 @@ pub struct Renderer {
     /// The same, multisampled: the enhanced main pass's own depth laid first (see
     /// `render_inner`), so that its costly shading runs once per visible surface.
     prepass_msaa_pipelines: Option<[wgpu::RenderPipeline; 6]>,
+    /// Depth-only pipelines compatible with the existing HDR colour pass.
+    presurface_msaa_pipelines: Option<[wgpu::RenderPipeline; 4]>,
     /// Ambient occlusion and its blur; none on OpenGL (GLES), whose shading language cannot
     /// read a depth texture texel by texel - the pipelines failed there, AO off or not (#422).
     ssao_pipeline: Option<wgpu::RenderPipeline>,
@@ -2490,6 +2528,42 @@ fn color_targets(format: wgpu::TextureFormat, blend: Option<wgpu::BlendState>, w
     }
     v
 }
+/// The weather of the classic sky, the values Omsi.exe draws its haze and clouds from
+/// (its THimmel render 0x5d8e98 and the cloud layer 0x754e44).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct VanillaSky {
+    /// The weather's `[clouds]` height H (m over the map's zero): the apex of the cloud
+    /// cone, and the measure of the haze over the horizon - also with no clouds (-1).
+    pub cloud_height: f32,
+    /// The weather's `[fog]` range as the file gives it (m): the haze over the horizon.
+    pub fog_range: f32,
+    /// How far one sees (m: the fog range, shortened by rain and snow): the far clouds go
+    /// over into the fog colour.
+    pub visibility: f32,
+    /// The cloud type's size in `Weather/clouds.cfg` (m of ground a tile of its texture
+    /// covers); 0: no clouds.
+    pub cloud_size: f32,
+    /// The cloud type is an `ovc` one (its texture an opaque deck).
+    pub overcast: bool,
+    /// How far the wind has carried the clouds (m, east and north; modulo
+    /// `VANILLA_CLOUD_PERIOD`).
+    pub cloud_offset: [f32; 2],
+}
+
+/// The period the classic clouds' drift is kept in (m): a whole number of tiles of the stock
+/// cloud types (1000 and 2000 m), so that the wrap does not move them.
+pub const VANILLA_CLOUD_PERIOD: f32 = 10000.0;
+
+/// The classic sky's uniform (sky.wgsl `VanillaSkyUniform`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct VanillaSkyUniform {
+    /// cloud height, cloud size (0: none), drift east, drift north
+    cloud: [f32; 4],
+    /// fog range, visibility, 1 for an overcast type, the render origin's height
+    haze: [f32; 4],
+}
+
 /// Half size of the area around the camera covered by the near shadow cascade (m).
 pub const SHADOW_RANGE: f32 = 140.0;
 /// Half size of the far cascade (m): coarser, but reaches the whole visible street.
@@ -2729,6 +2803,10 @@ impl Renderer {
             // textures are decoded to RGBA by upload_texture on this device.
             required_features = wgpu::Features::empty();
         }
+        // the driver's compiled pipelines kept for the next start (Vulkan, OpenGL)
+        if !intel_vulkan_safe {
+            required_features |= pipeline_cache::wanted(&adapter);
+        }
         // Enhanced+: hardware ray queries where the device has them (Apple silicon from the
         // M3/A17 on, RTX and RDNA 2 cards and newer through Vulkan and Direct3D 12 - with DXC,
         // which the Windows build ships beside the game); OMSI_NO_RT=1 leaves them out. Should
@@ -2754,6 +2832,10 @@ impl Renderer {
             Some("nostorage") => ArrayPath::NoStorage,
             _ if !downlevel.contains(wgpu::DownlevelFlags::FRAGMENT_STORAGE) || storage < 2 => ArrayPath::NoStorage,
             _ if !downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE) || storage < 3 => ArrayPath::VertexTextures,
+            // (the draw list and the lamps' grid are arrays of u32, 4 bytes, which such a device
+            // cannot bind as storage buffers: ANGLE on Vulkan, an Exynos' Xclipse, failed the
+            // shadow pipeline with "a size that is a multiple of 16 bytes", #1857)
+            _ if !downlevel.contains(wgpu::DownlevelFlags::BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED) => ArrayPath::NoStorage,
             _ => ArrayPath::Storage,
         };
         ARRAY_PATH.store(path as u8, std::sync::atomic::Ordering::Relaxed);
@@ -2780,6 +2862,7 @@ impl Renderer {
             .await
             .context("request_device")?;
         log::info!("graphics device opened; compiling renderer pipelines");
+        pipeline_cache::open(&device, &info);
         // the same choice wgpu-core makes when it validates a texture or a pipeline
         let adapter_table = device
             .features()
@@ -2849,6 +2932,7 @@ impl Renderer {
         }
         if let Some(why) = made.as_ref().ok().and_then(|r| r.device_lost()) {
             drop(made);
+            pipeline_cache::close(&device);
             if basic_pipelines() {
                 return Err(anyhow!("the graphics device was lost while the pipelines were made: {why}"));
             }
@@ -2857,6 +2941,10 @@ impl Renderer {
             // (and so from the start next time, see `fallback_load`)
             fallback_store(&name, Some((1, true)));
             return Box::pin(Self::new_on(adapter, surface, asked_format, asked_options)).await;
+        }
+        match &made {
+            Ok(_) => pipeline_cache::save(),
+            Err(_) => pipeline_cache::close(&device),
         }
         made
     }
@@ -3037,6 +3125,7 @@ impl Renderer {
             ao_buf: ssao.buf,
             prepass_pipelines: prepass.pipelines,
             prepass_msaa_pipelines: prepass.msaa_pipelines,
+            presurface_msaa_pipelines: prepass.presurface_pipelines,
             ssao_pipeline: ssao.ssao_pipeline,
             blur_pipeline: ssao.blur_pipeline,
             fog_lamps_pipeline: fog_lamps.pipeline,
@@ -3060,6 +3149,7 @@ impl Renderer {
             corona_sampler: coronas.sampler,
             sky_layout: sky.layout,
             sky_sampler,
+            vanilla_sky_buf: sky.vanilla_buf,
             cloud_shape_view: sky.cloud_shape_view,
             cloud_detail_view: sky.cloud_detail_view,
             cloud_sampler: sky.cloud_sampler,
@@ -3248,6 +3338,8 @@ impl Renderer {
             cpu_models: Vec::new(),
             cpu_params: Vec::new(),
             last_grid: Vec::new(),
+            grid_scratch: Vec::new(),
+            smoke_scratch: Default::default(),
             lamp_shadow_last: Vec::new(),
             last_lights: Vec::new(),
             bind_groups: HashMap::new(),
@@ -4286,7 +4378,7 @@ impl Renderer {
                     + if extra.transmap_declared || transmap.is_some() { 2.0 } else { 0.0 }
                     + if extra.metal_ok { 4.0 } else { 0.0 },
             ],
-            emissive: [emissive[0], emissive[1], emissive[2], if extra.rain_film { 2.0 } else if extra.glass { 1.0 } else if extra.led { -2.0 } else if extra.display { -1.0 } else { 0.0 }],
+            emissive: [emissive[0], emissive[1], emissive[2], if extra.rain_film { 2.0 } else if extra.glass { 1.0 } else if extra.led && extra.led_sign { -3.0 } else if extra.led { -2.0 } else if extra.display { -1.0 } else { 0.0 }],
             specular: extra.specular,
             bump: [
                 bump.map(|b| b.1).unwrap_or(0.0),
@@ -4655,6 +4747,19 @@ impl Renderer {
         textures: [TextureId; 3],
         clouds: Option<TextureId>,
     ) {
+        self.set_sky_textures_vanilla(scene, textures, clouds, None)
+    }
+
+    /// Sky gradients, the cloud field (`clouds`, the enhanced sky's and its weather's
+    /// picture) and the weather's cloud type texture as it is (`vanilla_clouds`: the
+    /// classic sky's cloud layer, see `VanillaSky`).
+    pub fn set_sky_textures_vanilla(
+        &self,
+        scene: &mut Scene,
+        textures: [TextureId; 3],
+        clouds: Option<TextureId>,
+        vanilla_clouds: Option<TextureId>,
+    ) {
         let views: Vec<&wgpu::TextureView> =
             textures.iter().map(|t| &scene.textures[*t].view).collect();
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -4699,6 +4804,17 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 8,
                     resource: wgpu::BindingResource::Sampler(&self.cloud_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(match vanilla_clouds {
+                        Some(c) => &scene.textures[c].view,
+                        None => &self.black_texture.view,
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: self.vanilla_sky_buf.as_entire_binding(),
                 },
             ],
         });
@@ -4751,6 +4867,7 @@ impl Renderer {
             omsi_caster: false,
             ordered: false,
             casts_shadow: true,
+            shadow_owner: None,
             roof: None,
         });
         if scene.bounds_known.get(mesh).copied().unwrap_or(false) {
@@ -4805,6 +4922,7 @@ impl Renderer {
             omsi_caster: false,
             ordered: false,
             casts_shadow: false,
+            shadow_owner: None,
             roof: None,
         });
         if scene.bounds_known.get(mesh).copied().unwrap_or(false) {
@@ -6148,7 +6266,9 @@ impl Renderer {
         for l in &scene.interior_lights {
             gpu_lights.push(gpu_light(l, (l.position - ro).as_vec3()));
         }
-        let mut grid = vec![u32::MAX; side * side * LIGHT_CELL_CAP];
+        let mut grid = std::mem::take(&mut scene.grid_scratch);
+        grid.clear();
+        grid.resize(side * side * LIGHT_CELL_CAP, u32::MAX);
         for l in &scene.lights {
             if !drawn_by(l, enhanced) {
                 continue;
@@ -6174,7 +6294,7 @@ impl Renderer {
                     if scene.lamp_shadow_last.contains(&key) {
                         score *= 1.6;
                     }
-                    chosen.push((score, LampShadow { index: idx, position: p, range: l.radius }, key));
+                    chosen.push((score, LampShadow { index: idx, position: p, range: l.radius, owner: l.shadow_owner }, key));
                 }
             }
             for y in (y0.max(0.0) as usize)..=(y1.min(side as f32 - 1.0) as usize) {
@@ -6231,7 +6351,7 @@ impl Renderer {
         }
         scene.last_lights.clear();
         scene.last_lights.extend_from_slice(lbytes);
-        scene.last_grid = grid;
+        scene.grid_scratch = std::mem::replace(&mut scene.last_grid, grid);
         if rebuilt {
             self.rebuild_camera_bind_group(scene);
         }
@@ -6368,18 +6488,34 @@ impl Renderer {
     /// Upload this frame's smoke particles, farthest first (they are blended over each other).
     fn prepare_smoke(&self, scene: &mut Scene, eye: DVec3) {
         let ro = scene.render_origin;
-        let mut order: Vec<(f64, GpuCorona)> = scene
-            .smoke
-            .iter()
-            .filter_map(|p| smoke_sprite(p, ro).map(|g| (-(p.position - eye).length_squared(), g)))
-            .collect();
+        // (the order is sorted as keys with the sprite's place in the list, the sprites
+        // gathered after: sorting the 80-byte sprites themselves moved them about many
+        // times over, for the window's picture and again for each mirror; a stable sort of
+        // the same keys gives the same order)
+        let (mut sprites, mut order, mut data) = std::mem::take(&mut scene.smoke_scratch);
+        sprites.clear();
+        sprites.extend(
+            scene
+                .smoke
+                .iter()
+                .filter_map(|p| smoke_sprite(p, ro).map(|g| (-(p.position - eye).length_squared(), g))),
+        );
+        order.clear();
+        order.extend(sprites.iter().enumerate().map(|(i, (d, _))| (*d, i as u32)));
         order.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let data: Vec<GpuCorona> = order.into_iter().map(|(_, g)| g).collect();
+        data.clear();
+        data.extend(order.iter().map(|&(_, i)| sprites[i as usize].1));
         scene.smoke_count = data.len() as u32;
+        self.upload_smoke(scene, &data);
+        scene.smoke_scratch = (sprites, order, data);
+    }
+
+    /// The sorted smoke sprites into the smoke buffer, grown when they do not fit.
+    fn upload_smoke(&self, scene: &mut Scene, data: &[GpuCorona]) {
         if data.is_empty() {
             return;
         }
-        let bytes: &[u8] = bytemuck::cast_slice(&data);
+        let bytes: &[u8] = bytemuck::cast_slice(data);
         match &scene.smoke_buf {
             Some(b) if b.size() as usize >= bytes.len() => self.queue.write_buffer(b, 0, bytes),
             _ => {
@@ -10037,6 +10173,18 @@ mod tests {
         );
         let pane = quad(&renderer, &mut scene, 0.5, blend);
         scene.instances[pane].render_phase = RenderPhase::Normal;
+        // A small excavation in the corner activates the deferred prepass without
+        // covering the road, cutout and glass samples checked below.
+        let floor = quad(&renderer, &mut scene, -0.1, road_mat);
+        scene.instances[floor].presurface = true;
+        scene.instances[floor].transform = Mat4::from_translation(Vec3::new(7.0, 7.0, 0.0));
+        let clear = renderer.add_texture(&mut scene, &omsi_texture::Image {
+            width: 1, height: 1, rgba: vec![255, 255, 255, 0], has_alpha: true,
+        }, false);
+        let cover_material = renderer.add_material(&mut scene, Some(clear), AlphaMode::Blend, [1.0; 4], true);
+        let cover = quad(&renderer, &mut scene, 0.1, cover_material);
+        scene.instances[cover].presurface = true;
+        scene.instances[cover].transform = Mat4::from_translation(Vec3::new(7.0, 7.0, 0.0));
         let camera = Camera {
             position: DVec3::new(0.0, -0.105, 6.0),
             yaw: 0.0,
@@ -10046,7 +10194,11 @@ mod tests {
             near: 0.1,
             far: 100.0,
         };
-        for wetness in [0.0, 1.0] {
+        for (excavation, wetness) in [(false, 0.0), (false, 1.0), (true, 0.0), (true, 1.0)] {
+            scene.instances[floor].visible = excavation;
+            scene.instances[cover].visible = excavation;
+            Renderer::mark_changed(&mut scene, floor);
+            Renderer::mark_changed(&mut scene, cover);
             let lighting = Lighting {
                 enhanced: true,
                 shadows: false,
@@ -10070,7 +10222,7 @@ mod tests {
                 .unwrap();
             assert!(
                 delta <= 2,
-                "MSAA prepass changed layered surfaces by {delta}: wetness {wetness}"
+                "MSAA prepass changed layered surfaces by {delta}: excavation {excavation}, wetness {wetness}"
             );
             let pixel = |x: usize| &enabled[(32 * 64 + x) * 4..(32 * 64 + x) * 4 + 3];
             assert!(
@@ -10516,6 +10668,7 @@ mod tests {
                 },
             ))
             .expect("test renderer");
+            renderer.profiling = true;
             let mut scene = renderer.new_scene();
             let green = renderer.add_material(
                 &mut scene,
@@ -10580,6 +10733,15 @@ mod tests {
                 vec![transparent],
             );
             scene.instances[cover].presurface = true;
+            // A normal opaque object lies between the excavation floor and its cover.
+            // Prefilling its depth before the floor's colour erases the excavation, even
+            // though the cover will reject that object's later colour draw.
+            let background_mesh = quad(&renderer, &mut scene, 7.0, 2.0);
+            renderer.add_instance(&mut scene, background_mesh, DVec3::ZERO, Mat4::IDENTITY, vec![red]);
+            // Ordinary cutouts need shading to determine visibility on tile GPUs.
+            // Keep a transparent one in the view to exercise mixed-scene prefilling.
+            let foliage_mesh = quad(&renderer, &mut scene, 10.0, 0.25);
+            renderer.add_instance(&mut scene, foliage_mesh, DVec3::ZERO, Mat4::IDENTITY, vec![cutout]);
             let foreground_mesh = quad(&renderer, &mut scene, 2.0, 0.25);
             let foreground = renderer.add_instance(
                 &mut scene,
@@ -10603,6 +10765,15 @@ mod tests {
             let rgba = renderer
                 .render_to_image(&mut scene, 64, 64, &camera, &lighting)
                 .unwrap();
+            if enhanced && renderer.options.msaa > 1 {
+                assert!(renderer.counts.borrow().get("msaa prepass batches").copied().unwrap_or(0.0) > 0.0,
+                    "an excavation must not disable depth prefilling for the rest of the view");
+            }
+            let saved = renderer.prepass_msaa_pipelines.take();
+            let reference = renderer.render_to_image(&mut scene, 64, 64, &camera, &lighting).unwrap();
+            renderer.prepass_msaa_pipelines = saved;
+            assert!(rgba.iter().zip(&reference).all(|(a, b)| a.abs_diff(*b) <= 2),
+                "presurface depth optimization changed the image: {msaa}/{ssao}/{enhanced}");
             let centre = pixel(&rgba, 32);
             assert!(
                 centre[2] > centre[1] + 40,
@@ -11066,6 +11237,65 @@ mod tests {
             },
         ));
         assert!(res.is_ok(), "renderer should initialize on noop backend: {:?}", res.err());
+    }
+
+    #[test]
+    fn excavation_keeps_ordinary_depth_prefilling_without_a_gpu() {
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = wgpu::Backends::NOOP;
+        descriptor.backend_options.noop = wgpu::NoopBackendOptions { enable: true };
+        let instance = wgpu::Instance::new(descriptor);
+        let mut renderer = pollster::block_on(Renderer::new_with(
+            &instance, None, Some(wgpu::TextureFormat::Rgba8UnormSrgb),
+            RenderOptions { msaa: 4, ssao: true, render_scale: 1.0, ..Default::default() },
+        )).expect("noop renderer");
+        renderer.profiling = true;
+        let mut scene = renderer.new_scene();
+        let material = renderer.add_material(&mut scene, None, AlphaMode::Opaque, [1.0; 4], true);
+        let mesh = renderer.add_mesh(&mut scene, &MeshData {
+            positions: vec![Vec3::new(-2.0, 4.0, -2.0), Vec3::new(2.0, 4.0, -2.0),
+                Vec3::new(2.0, 4.0, 2.0), Vec3::new(-2.0, 4.0, 2.0)],
+            normals: vec![-Vec3::Y; 4], uvs: vec![glam::Vec2::ZERO; 4],
+            indices: vec![0, 1, 2, 0, 2, 3], ranges: vec![(0, 6, 0)],
+            ..Default::default()
+        });
+        let floor = renderer.add_instance(&mut scene, mesh, DVec3::ZERO, Mat4::IDENTITY, vec![material]);
+        scene.instances[floor].presurface = true;
+        let transparent = renderer.add_material(&mut scene, None, AlphaMode::Blend, [1.0, 1.0, 1.0, 0.0], true);
+        let cover = renderer.add_surface_instance(&mut scene, mesh, DVec3::ZERO, Mat4::IDENTITY, vec![transparent]);
+        scene.instances[cover].presurface = true;
+        let glass_material = renderer.add_material(&mut scene, None, AlphaMode::Blend, [1.0, 1.0, 1.0, 0.25], true);
+        let glass = renderer.add_instance(&mut scene, mesh, DVec3::ZERO, Mat4::IDENTITY, vec![glass_material]);
+        let scenery = renderer.add_instance(&mut scene, mesh, DVec3::ZERO, Mat4::IDENTITY, vec![material]);
+        let camera = Camera { position: DVec3::ZERO, yaw: 0.0, pitch: 0.0, roll: 0.0,
+            fov_deg: 90.0, near: 0.1, far: 100.0 };
+        let lighting = Lighting { enhanced: true, shadows: false, fog_density: 0.0, ..Default::default() };
+        // Exercise the actual render planner on CI's CPU-only backend. A presurface
+        // must not turn off prefilling for ordinary scenery, but ground must stay out:
+        // its authored blends have to finish before later surface coverage writes depth.
+        for phase in RenderPhase::DRAW_ORDER {
+            scene.instances[scenery].render_phase = phase;
+            renderer.counts.borrow_mut().clear();
+            renderer.render_to_image(&mut scene, 16, 16, &camera, &lighting).unwrap();
+            let batches = renderer.counts.borrow().get("msaa prepass batches").copied().unwrap_or(0.0);
+            let ordinary = matches!(phase, RenderPhase::BeforeNormal | RenderPhase::Normal
+                | RenderPhase::AfterNormal | RenderPhase::AfterVehicles);
+            assert_eq!(batches > 0.0, ordinary, "phase {phase:?}");
+        }
+        // The explicit presurface flag overrides even an ordinary authored phase.
+        scene.instances[scenery].render_phase = RenderPhase::Normal;
+        scene.instances[scenery].presurface = true;
+        renderer.counts.borrow_mut().clear();
+        renderer.render_to_image(&mut scene, 16, 16, &camera, &lighting).unwrap();
+        assert_eq!(renderer.counts.borrow().get("msaa prepass batches"), None);
+        if cfg!(target_vendor = "apple") {
+            scene.instances[scenery].presurface = false;
+            scene.instances[glass].visible = false;
+            renderer.counts.borrow_mut().clear();
+            renderer.render_to_image(&mut scene, 16, 16, &camera, &lighting).unwrap();
+            assert_eq!(renderer.counts.borrow().get("msaa prepass batches"), None,
+                "an opaque-only view keeps native hidden-surface removal even with an excavation");
+        }
     }
 
     #[test]

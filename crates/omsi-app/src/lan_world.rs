@@ -592,6 +592,13 @@ impl LanWorld {
         let centers: Vec<DVec3> = players.iter().map(|p| p.1).collect();
         if let Some(t) = traffic.as_deref_mut() {
             t.lan_centers = centers.clone();
+            // and what they see: no car may come or go there in front of them either
+            // (the list is kept: no allocation a frame)
+            t.lan_eyes.clear();
+            t.lan_eyes.extend(lan.peers().filter(|p| p.has_pose && p.pose.has_vehicle()).map(|p| {
+                let at = DVec3::new(p.pose.x, p.pose.y, p.pose.z);
+                crate::traffic::Viewer::lan_player(at, p.pose.heading as f64)
+            }));
         }
         if let Some(h) = humans.as_deref_mut() {
             h.lan_centers = centers;

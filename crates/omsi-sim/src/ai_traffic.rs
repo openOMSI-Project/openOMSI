@@ -8,9 +8,11 @@
 
 pub mod bus_service;
 pub mod control;
+pub mod deadlock;
 pub mod density;
 pub mod dormant;
 pub mod junctions;
+pub mod light_paths;
 pub mod lights;
 pub mod mirror;
 pub mod model;
@@ -18,8 +20,11 @@ pub mod obstacles;
 pub mod parked;
 pub mod planning;
 pub mod setup;
+pub mod stats;
 pub mod tick;
 pub mod viewer;
+#[cfg(test)]
+mod scenario_tests;
 #[cfg(test)]
 mod tests;
 
@@ -97,6 +102,10 @@ pub struct TrafficSim {
     /// on the roads - no aircraft, no parked car pulling out - while `target` is 0.
     pub lights_only: bool,
     pub spawn_radius: f64,
+    /// Since when (sim time) fewer than half the cars asked for drive about the player: open
+    /// country, where nothing within `NEAR_HIDE` is ever out of sight and a car coming along
+    /// the road could never be woken (see `omsi-app`'s `wake_dormant`).
+    pub starved_since: Option<f32>,
     pub time: f32,
     /// Where the camera is (the window sets it before `sync`): far cars show their script
     /// textures as stand-ins.
@@ -112,6 +121,8 @@ pub struct TrafficSim {
     /// aboard wants to get off, the stops where somebody waits. None without passengers:
     /// every bus then serves every stop.
     pub stop_wishes: Option<(hashbrown::HashSet<u64>, hashbrown::HashSet<i64>)>,
+    /// How full each timetable bus is (`PeopleSim::bus_loads`), for the departure displays.
+    pub bus_loads: hashbrown::HashMap<u64, f32>,
     /// Seconds the player's vehicle has been standing.
     pub player_still: f32,
     /// Time of day (seconds since midnight); light cycles and timetables run on it.
@@ -201,6 +212,10 @@ pub struct TrafficSim {
     /// before each `tick`: the cars stop behind them and go round them as round the
     /// player's bus.
     pub others: Vec<(u32, PlayerBox)>,
+    /// The indicators of `others` by id (0 off, 1 left, 2 right, 3 hazard; a rear section
+    /// shows its towing vehicle's), set with them: a light path marked as a turn asks its
+    /// light for whoever stands on it indicating that way (`light_paths`).
+    pub other_blinkers: HashMap<u32, u8>,
     /// Where the last `tick` spent its time (s, OMSI_PROFILE): who is on which lane and the
     /// light programs, every car's plan, the bodies and scripts on the workers.
     pub tick_split: [f64; 3],
@@ -227,7 +242,15 @@ pub struct TrafficSim {
     pub count_near: Option<(DVec3, f64)>,
     /// LAN play: where the other players are (host): the traffic is kept around them too.
     pub lan_centers: Vec<DVec3>,
+    /// LAN play: where the other players look from (host): what they could see, the
+    /// population may not be seen doing either (see `TrafficSim::unseen`).
+    pub lan_eyes: Vec<Viewer>,
     /// Cars the last `tick` took off the road (their ids): their sounds and pictures are
     /// for the game to let go (see omsi-app's `Traffic::tick`).
     pub retired: Vec<u64>,
+    /// The LAN players' vehicles as of this tick (`others` is taken for the tick's scene):
+    /// the lane changes look at them (`players_on`).
+    pub others_now: Vec<PlayerBox>,
+    /// `OMSI_TRAFFIC_STATS`: the flow statistics of the run (see `stats`).
+    pub stats: Option<Box<stats::TrafficStats>>,
 }

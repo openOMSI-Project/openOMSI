@@ -68,7 +68,7 @@ impl<'a> NoVertexPipeline<'a> {
                 compilation_options: Default::default(),
             }),
             multiview_mask: None,
-            cache: None,
+            cache: crate::pipeline_cache::get(device).as_ref(),
         })
     }
 }

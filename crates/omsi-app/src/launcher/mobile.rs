@@ -70,15 +70,22 @@ pub fn storage_roots() -> Vec<(String, PathBuf)> {
     if shared.is_dir() {
         v.push(("Internal storage".to_string(), shared));
     }
-    if let Ok(rd) = std::fs::read_dir("/storage") {
-        for e in rd.flatten() {
-            let n = e.file_name().to_string_lossy().to_string();
-            if n == "emulated" || n == "self" {
-                continue;
-            }
-            if e.path().is_dir() {
-                v.push((format!("Card {n}"), e.path()));
-            }
+    // the cards: /storage's own folders, where the system lets them be listed, and the
+    // volumes mounted there - since Android 11 /storage itself is not readable even with
+    // the access to all files, and the SD card did not show up at all (#1306)
+    let mut cards: Vec<String> = std::fs::read_dir("/storage").map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect()).unwrap_or_default();
+    if let Ok(mounts) = std::fs::read_to_string("/proc/mounts") {
+        cards.extend(storage_volumes(&mounts));
+    }
+    cards.sort();
+    cards.dedup();
+    for n in cards {
+        if n == "emulated" || n == "self" {
+            continue;
+        }
+        let p = PathBuf::from("/storage").join(&n);
+        if p.is_dir() {
+            v.push((format!("Card {n}"), p));
         }
     }
     if v.is_empty() {
@@ -87,6 +94,26 @@ pub fn storage_roots() -> Vec<(String, PathBuf)> {
         }
     }
     v
+}
+
+/// The volumes `/proc/mounts` has under /storage (`/storage/1A2B-3C4D`): their names.
+fn storage_volumes(mounts: &str) -> Vec<String> {
+    mounts
+        .lines()
+        .filter_map(|l| l.split_whitespace().nth(1))
+        .filter_map(|m| m.strip_prefix("/storage/"))
+        .filter(|n| !n.is_empty() && !n.contains('/'))
+        .map(|n| n.to_string())
+        .collect()
+}
+
+#[cfg(test)]
+mod storage_tests {
+    #[test]
+    fn an_sd_card_is_found_in_the_mounts() {
+        let mounts = "/dev/fuse /storage/emulated fuse rw 0 0\n/dev/fuse /storage/1A2B-3C4D fuse rw 0 0\n/dev/block/vold/public:179,65 /mnt/media_rw/1A2B-3C4D vfat rw 0 0\n";
+        assert_eq!(super::storage_volumes(mounts), vec!["emulated".to_string(), "1A2B-3C4D".to_string()]);
+    }
 }
 
 impl Browser {

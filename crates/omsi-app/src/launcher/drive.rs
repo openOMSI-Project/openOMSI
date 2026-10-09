@@ -382,8 +382,11 @@ fn duty_panel(l: &mut Launcher, body: Rect) {
     let searching = !q.is_empty();
     let tours: Vec<(String, usize, String, bool, Option<String>, Option<omsi_launcher_lib::TripInfo>, String, String, bool)> = tours.iter().map(|&(t, ended, k)| {
         let trip = k.and_then(|i| t.trips.get(i)).cloned();
-        let from = t.trips.first().map(|x| x.from.clone()).unwrap_or_default();
-        let terminus = t.trips.last().map(|x| x.terminus.clone()).unwrap_or_default();
+        // (the first and the last trip with passengers: a tour that starts and ends with
+        // depot runs read "Omnibushof > Betriebsfahrt" whichever it was, #1891)
+        let service = || t.trips.iter().filter(|x| !depot_run(x));
+        let from = service().next().or(t.trips.first()).map(|x| x.from.clone()).unwrap_or_default();
+        let terminus = service().last().or(t.trips.last()).map(|x| x.terminus.clone()).unwrap_or_default();
         (t.number.clone(), t.trips.len(), t.days.clone(), t.runs, t.next_run.clone(), trip, from, terminus, ended)
     }).collect();
     let chosen_t = l.state.choice.tour.clone();
@@ -1755,5 +1758,30 @@ mod vehicle_picker_tests {
         assert_eq!(default_livery_label(&vehicle), "Beige");
         vehicle.default_paint.clear();
         assert_eq!(default_livery_label(&vehicle), "Default paint");
+    }
+}
+
+/// A trip without passengers (to or from the depot): no line, or a terminus that says so -
+/// Spandau's are "Betriebsfahrt" with the line of the trip they lead to.
+fn depot_run(t: &omsi_launcher_lib::TripInfo) -> bool {
+    let to = t.terminus.to_lowercase();
+    t.line.trim().is_empty()
+        || ["betriebsfahrt", "leerfahrt", "dienstfahrt", "not in service", "out of service", "hors service", "zjazd do zajezdni"].iter().any(|w| to.contains(w))
+}
+
+#[cfg(test)]
+mod depot_run_tests {
+    use omsi_launcher_lib::TripInfo;
+
+    fn trip(line: &str, terminus: &str) -> TripInfo {
+        TripInfo { name: String::new(), index: 1, line: line.into(), from: "Omnibushof".into(), terminus: terminus.into(), departure: 0.0, arrival: 0.0, stops: Vec::new(), km: 0.0 }
+    }
+
+    /// Spandau's tours begin and end with "Betriebsfahrt" runs (#1891).
+    #[test]
+    fn a_depot_run_is_not_where_a_tour_goes() {
+        assert!(super::depot_run(&trip("92", "Betriebsfahrt")));
+        assert!(super::depot_run(&trip("", "Hof")));
+        assert!(!super::depot_run(&trip("92", "S Spandau")));
     }
 }

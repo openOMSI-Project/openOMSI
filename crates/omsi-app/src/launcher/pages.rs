@@ -11,6 +11,12 @@ use omsi_ui::paint::Align;
 use omsi_ui::{Color, Rect, Weight};
 use serde_json::{json, Value};
 
+// the "Add binding" picker of the keyboard page: OMSI's events and the installed buses' own
+// triggers, searchable
+mod keybind_picker;
+pub use keybind_picker::keybind_picker;
+use keybind_picker::{controller_action_choices, KeyActionOption};
+
 #[derive(Default)]
 pub struct PagesView {
     pub new_driver: String,
@@ -18,15 +24,40 @@ pub struct PagesView {
     /// The "reset every setting" dialog is open.
     pub confirm_reset: bool,
     pub kb_filter: [String; 2],
-    /// The OMSI-style "Add event..." browser is open for a keyboard section.
-    pub kb_events: [bool; 2],
+    /// The keyboard action picker: which section it adds to, and its search query.
+    pub kb_picker: Option<usize>,
+    pub kb_picker_filter: String,
+    pub kb_picker_source_filter: String,
+    /// The complete bus-file provenance list shown from an action row.
+    pub kb_source_action: Option<(String, Vec<String>)>,
     /// (section, index) of the binding waiting for a key.
     pub capturing: Option<(usize, usize)>,
     pub drop_hover: bool,
+    /// The Mods page's list: its search, its filter (see `MOD_FILTERS`), and the mod whose
+    /// deletion is asked about.
+    pub mod_search: String,
+    pub mod_filter: usize,
+    pub mod_confirm: Option<String>,
     pub setup_root: Option<String>,
     pub setup_game: Option<String>,
     /// The Controls page's tab: 0 the keyboard, 1 the game controllers.
     pub controls_tab: usize,
+    /// Sources indexed by action name, filled as installed vehicle scripts are scanned.
+    pub kb_script_actions: Option<std::collections::HashMap<String, Vec<String>>>,
+    pub kb_script_actions_rx: Option<std::sync::mpsc::Receiver<crate::describe::ScriptActionScanUpdate>>,
+    kb_script_actions_root: Option<std::path::PathBuf>,
+    kb_script_cache_loaded: bool,
+    kb_script_scan_actions: Option<std::collections::HashMap<String, Vec<String>>>,
+    kb_script_scan_paths: Vec<String>,
+    kb_source_paths: Vec<String>,
+    kb_source_path_set: std::collections::HashSet<String>,
+    kb_source_suggestions: Option<(String, Vec<String>)>,
+    pub kb_script_scan: (usize, usize, String),
+    kb_script_total_buses: usize,
+    pub kb_script_scan_complete: bool,
+    kb_action_options: Option<Vec<KeyActionOption>>,
+    kb_filtered_options: Option<(String, String, Vec<KeyActionOption>)>,
+    controller_action_choices: Option<std::sync::Arc<(Vec<String>, Vec<String>)>>,
     /// The Settings page's tab (see `SETTINGS_TABS`).
     pub settings_tab: usize,
     pub pads: PadsView,
@@ -594,6 +625,7 @@ fn graphics_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, cols: [Rect; 2]) ->
     if matches!(get(s, "graphics").as_str(), Some("enhanced" | "enhanced_plus")) && get(s, "clouds").as_bool() != Some(false) {
         sel_setting(ui, s, dirty, "s-cloud-quality", c.row(), "Cloud quality", "cloud_quality", &[("high", "High"), ("low", "Low")]);
     }
+    sel_setting(ui, s, dirty, "s-rain-quality", c.row(), "Rain quality", "rain_quality", &[("high", "High"), ("medium", "Medium"), ("low", "Low")]);
     toggle_setting(ui, s, dirty, c.row(), "Windy trees", "windy_trees");
     let left = c.used();
     let mut c = Col::new(ui, cols[1], "Display");
@@ -673,6 +705,7 @@ fn driving_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
         *dirty = 0.3;
     }
     toggle_setting(ui, s, dirty, c.row(), "Smooth mouse steering (off: the wheel follows the cursor at once, as in OMSI)", "mouse_smooth");
+    toggle_setting(ui, s, dirty, c.row(), "Hold the cursor while the mouse steers (off: the crosshair stays free, the window's edges are the lock)", "mouse_hold");
     toggle_setting(ui, s, dirty, c.row(), "A right click ends the mouse steering (as in OMSI)", "mouse_right_off");
     toggle_setting(ui, s, dirty, c.row(), "Indicators cancel themselves (as the bus's script does)", "blinker_cancel");
     toggle_setting(ui, s, dirty, c.row(), "The keyboard brake stays on until the throttle (as in OMSI)", "brake_hold");
@@ -705,7 +738,11 @@ fn driving_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
     }
     // how fast the stick turns the wheel (middle to full lock), and its dead zone
     let mut pad_speed = get(s, "pad_steer_speed").as_f64().unwrap_or(2.0) as f32;
+<<<<<<< HEAD
     if ui.slider("s-pad-steer-speed", c.row(), &mut pad_speed, 0.8, 5.0, 0.1, "Stick steering speed (middle to full lock)", &|v| format!("{v:.1} s")) {
+=======
+    if ui.slider("s-pad-steer-speed", c.row(), &mut pad_speed, 0.8, 5.0, 0.1, "Stick steering speed", &|v| format!("{v:.1} s")) {
+>>>>>>> c4738ed6f43f11b4c06ead299af7ac74280d5c5b
         s["pad_steer_speed"] = json!((pad_speed * 10.0).round() / 10.0);
         *dirty = 0.3;
     }
@@ -718,7 +755,11 @@ fn driving_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, c
     // Xbox, PlayStation 4 or 5: how the buttons are named, and the default buttons of a
     // gamepad nobody set up
     sel_setting(ui, s, dirty, "s-pad-type", c.row(), "Gamepad type", "pad_type", &[("auto", "Automatic"), ("xbox", "Xbox"), ("ps4", "PlayStation 4"), ("ps5", "PlayStation 5")]);
+<<<<<<< HEAD
     toggle_setting(ui, s, dirty, c.row(), "Default gamepad buttons (indicators, doors, views, gears, pause)", "pad_buttons");
+=======
+    toggle_setting(ui, s, dirty, c.row(), "Default gamepad buttons (indicators, doors, views, gears, menu, pause)", "pad_buttons");
+>>>>>>> c4738ed6f43f11b4c06ead299af7ac74280d5c5b
     toggle_setting(ui, s, dirty, c.row(), "Arrow keys switch the cameras with a wheel too (no glance)", "arrows_switch_cams");
     // the pedals' response: softer (below 1) or stronger (above 1) than the pedal reads
     for (key, label, id) in [("pedal_throttle", "Throttle pedal strength", "s-pedt"), ("pedal_brake", "Brake pedal strength", "s-pedb")] {
@@ -1270,8 +1311,9 @@ fn mb(v: i64) -> String {
 /// The game's own actions a controller's button can be given, besides the bus's: the doors
 /// and gears of any bus, looking round while held, the bus radio while held, the cameras
 /// and the views - both of OMSI's view resets, the one view's (C) and every view's (Space),
-/// which a controller could not bring back to the first camera (#1167).
-const PAD_GAME_ACTIONS: [&str; 26] = ["doors_all", "door_4", "door_3", "door_2", "door_1", "gear_up", "gear_down", "view_look_left", "view_look_right", "view_look_up", "view_look_down", "view_reset_direction", "view_reset_all_directions", "view_interiorcam_plus", "view_interiorcam_minus", "view_toggle_viewpoint", "view_toggle_interior", "view_set_driver", "view_set_passenger", "view_set_outside", "sim_pause", "screenshot", "quicksave", "toggel_mouse_ctrl", "toggel_ctrler", "voice_radio"];
+/// which a controller could not bring back to the first camera (#1167) - and the main menu,
+/// which Esc opens and a controller has no Esc for.
+const PAD_GAME_ACTIONS: [&str; 27] = ["doors_all", "door_4", "door_3", "door_2", "door_1", "gear_up", "gear_down", "view_look_left", "view_look_right", "view_look_up", "view_look_down", "view_reset_direction", "view_reset_all_directions", "view_interiorcam_plus", "view_interiorcam_minus", "view_toggle_viewpoint", "view_toggle_interior", "view_set_driver", "view_set_passenger", "view_set_outside", "sim_pause", "open_menu", "screenshot", "quicksave", "toggel_mouse_ctrl", "toggel_ctrler", "voice_radio"];
 
 fn action_text(names: &crate::describe::ControlNames, a: &str) -> String {
     known_action(a).unwrap_or_else(|| names.control(a))
@@ -1336,6 +1378,7 @@ fn known_action(a: &str) -> Option<String> {
         ("chat_toggle", "Multiplayer: show / hide the chat"),
         ("voice_radio", "Multiplayer: bus radio (hold)"),
         ("sim_pause", "Pause"),
+        ("open_menu", "Open / close the main menu"),
         ("screenshot", "Screenshot"),
         ("quicksave", "Quicksave"),
         ("toggel_mouse_ctrl", "Toggle mouse steering"),
@@ -1418,53 +1461,22 @@ pub fn controls(l: &mut Launcher, area: Rect) {
         let inner = l.ui.heading(Rect::new(r.x + 18.0, r.y + 14.0, r.w - 36.0, r.h - 28.0), title, Some(if sec == 0 { "directions_bus" } else { "sports_esports" }));
         l.ui.text_in(sub, Rect::new(inner.x, inner.y - 6.0, inner.w, 18.0), 12.0, Weight::Regular, TEXT_DIM, Align::Left);
         let mut filter = std::mem::take(&mut l.pages.kb_filter[sec]);
-        let event_w = if sec == 0 { 138.0 } else { 0.0 };
-        let filter_w = if sec == 0 { (inner.w - event_w - GAP).max(120.0) } else { inner.w };
-        l.ui.text_input(&format!("kb-filter-{sec}"), Rect::new(inner.x, inner.y + 18.0, filter_w, 34.0), &mut filter, if l.pages.kb_events[sec] { "Filter events…" } else { "Filter…" }, Some("search"));
-        if sec == 0 && l.ui.button(
-            "kb-events",
-            Rect::new(inner.x + filter_w + GAP, inner.y + 18.0, event_w, 34.0),
-            if l.pages.kb_events[sec] { "Back to keys" } else { "Add event…" },
-            Some(if l.pages.kb_events[sec] { "arrow_back" } else { "add" }),
-            ButtonKind::Normal,
-        ) {
-            l.pages.kb_events[sec] = !l.pages.kb_events[sec];
-            filter.clear();
+        // "Add binding": the picker of every action (keybind_picker.rs) - OMSI's events and
+        // the installed buses' own triggers, which the game's section has no use for (there
+        // a name typed in the filter is added, below)
+        let add_w = if sec != 0 { 0.0 } else if inner.w < 500.0 { 104.0 } else { 124.0 };
+        let filter_w = if sec != 0 { inner.w } else { (inner.w - add_w - GAP).max(120.0) };
+        l.ui.text_input(&format!("kb-filter-{sec}"), Rect::new(inner.x, inner.y + 18.0, filter_w, 34.0), &mut filter, "Filter…", Some("search"));
+        if sec == 0 && l.ui.button(&format!("kb-add-{sec}"), Rect::new(inner.right() - add_w, inner.y + 18.0, add_w, 34.0), "Add binding", Some("add"), ButtonKind::Normal) {
+            l.pages.kb_picker = Some(sec);
+            l.pages.kb_picker_filter.clear();
+            l.pages.kb_picker_source_filter.clear();
+            l.pages.kb_action_options = None;
+            l.pages.kb_filtered_options = None;
+            l.pages.capturing = None;
         }
         l.pages.kb_filter[sec] = filter.clone();
         let q = filter.to_lowercase();
-
-        // OMSI's Add event dialog: all KY_ events from the language files, including
-        // event tables supplied by installed mods. Picking one adds an unbound vehicle
-        // entry and immediately waits for its key.
-        if sec == 0 && l.pages.kb_events[sec] {
-            let mut events = names.events();
-            if !q.is_empty() {
-                events.retain(|(action, label)| action.to_lowercase().contains(&q) || matches(label, &q));
-            }
-            let mut picked: Option<String> = None;
-            l.ui.scroll_area(&format!("kb-events-{sec}"), Rect::new(inner.x - 6.0, inner.y + 62.0, inner.w + 12.0, inner.bottom() - (inner.y + 62.0)), &mut |ui, v| {
-                let rh = 40.0;
-                for (row, (action, label)) in events.iter().enumerate() {
-                    let rr = Rect::new(v.x + 6.0, v.y + row as f32 * rh, v.w - 16.0, rh - 4.0);
-                    let shown = format!("{label}  ·  KY_{action}");
-                    if ui.button(&format!("kb-event-{row}"), rr, &shown, Some("add"), ButtonKind::Ghost) {
-                        picked = Some(action.clone());
-                    }
-                }
-                events.len() as f32 * rh
-            });
-            if let Some(action) = picked {
-                if let Some(a) = l.state.keybindings.get_mut("vehicles").and_then(|a| a.as_array_mut()) {
-                    a.push(json!({ "action": action.clone(), "scan_code": 0, "modifier": 0 }));
-                    l.pages.capturing = Some((0, a.len() - 1));
-                    l.pages.kb_events[0] = false;
-                    l.pages.kb_filter[0] = action;
-                    l.state.set_status("Event added. Press the key you want to use (Escape cancels).", false);
-                }
-            }
-            continue;
-        }
 
         let list: Vec<(usize, String, i64, i64)> = l.state.keybindings.get(*key).and_then(|a| a.as_array()).map(|a| a.iter().enumerate().map(|(i, b)| (i, b.get("action").and_then(|x| x.as_str()).unwrap_or("").to_string(), b.get("scan_code").and_then(|x| x.as_i64()).unwrap_or(0), b.get("modifier").and_then(|x| x.as_i64()).unwrap_or(0))).collect()).unwrap_or_default();
         let mut shown: Vec<(usize, String, String, bool)> = list
@@ -1479,9 +1491,11 @@ pub fn controls(l: &mut Launcher, area: Rect) {
             shown.sort_by_key(|(_, label, _, _)| !label.starts_with("VR:"));
         }
         let capturing = l.pages.capturing;
-        // what the row's buttons asked: (entry, cleared) a key cleared or to be pressed,
+        // what the row's buttons asked: a key to be pressed, cleared, or the entry removed;
         // `more` another key for an entry's action (#854)
-        let mut clicked: Option<(usize, bool)> = None;
+        #[derive(Clone, Copy)]
+        enum RowAsked { Capture, Clear, Remove }
+        let mut clicked: Option<(usize, RowAsked)> = None;
         let mut more: Option<usize> = None;
         let time = l.ui.time;
         // a name the list does not have (a bus's own trigger a mod's readme gives a key, the
@@ -1490,7 +1504,7 @@ pub fn controls(l: &mut Launcher, area: Rect) {
         let new_action = filter.trim();
         let mut list_top = inner.y + 62.0;
         if shown.is_empty() && new_action.len() > 1 && new_action.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            if l.ui.button(&format!("kb-add-{sec}"), Rect::new(inner.x, list_top, inner.w, 36.0), &format!("Add \"{new_action}\" and give it a key"), Some("add"), ButtonKind::Normal) {
+            if l.ui.button(&format!("kb-add-custom-{sec}"), Rect::new(inner.x, list_top, inner.w, 36.0), &format!("Add \"{new_action}\" and give it a key"), Some("add"), ButtonKind::Normal) {
                 if let Some(a) = l.state.keybindings.get_mut(*key).and_then(|a| a.as_array_mut()) {
                     a.push(json!({ "action": new_action, "scan_code": 0, "modifier": 0 }));
                     l.pages.capturing = Some((sec, a.len() - 1));
@@ -1507,48 +1521,76 @@ pub fn controls(l: &mut Launcher, area: Rect) {
                     continue;
                 }
                 ui.p().rounded(rr, 8.0, Color::WHITE.alpha(0.03));
-                ui.text_in(label, Rect::new(rr.x + 12.0, rr.y, rr.w - 240.0, rr.h), 13.0, Weight::Medium, TEXT_SOFT, Align::Left);
+                ui.text_in(label, Rect::new(rr.x + 12.0, rr.y, rr.w - 270.0, rr.h), 13.0, Weight::Medium, TEXT_SOFT, Align::Left);
                 // another key for the same action (OMSI's file may give one action
                 // several [entry]s; several actions on one key need nothing more than the
                 // same key pressed for each)
-                let pr = Rect::new(rr.right() - 222.0, rr.y + 5.0, 26.0, rr.h - 10.0);
+                let pr = Rect::new(rr.right() - 252.0, rr.y + 5.0, 26.0, rr.h - 10.0);
                 let (hp, _, cp) = ui.interact(id_of(&format!("kb-{sec}-{i}-more")), pr);
                 ui.icon("add", pr.center(), 16.0, if hp { ACCENT } else { TEXT_FAINT });
+                if ui.hover(pr) {
+                    ui.tooltip(pr, "Add another key for this action");
+                }
                 if cp {
                     more = Some(*i);
                 }
-                let kr = Rect::new(rr.right() - 190.0, rr.y + 5.0, 150.0, rr.h - 10.0);
+                let kr = Rect::new(rr.right() - 220.0, rr.y + 5.0, 150.0, rr.h - 10.0);
                 let waiting = capturing == Some((sec, *i));
                 let id = id_of(&format!("kb-{sec}-{i}"));
                 let (h, _, c) = ui.interact(id, kr);
                 if c {
-                    clicked = Some((*i, false));
+                    clicked = Some((*i, RowAsked::Capture));
                 }
                 let base = if waiting { ACCENT.alpha(0.25 + 0.15 * (time * 6.0).sin().abs()) } else if *clash { DANGER.alpha(0.22) } else { Color::WHITE.alpha(if h { 0.12 } else { 0.07 }) };
                 ui.p().rounded(kr, 6.0, base);
                 ui.p().rounded_border(kr, 6.0, 1.0, if waiting { ACCENT } else if *clash { DANGER } else { Color::WHITE.alpha(0.1) });
                 ui.text_in(if waiting { "press a key…" } else { keyn }, kr, 12.0, Weight::Bold, if *clash { DANGER.lighten(0.3) } else { TEXT }, Align::Center);
+                let dr = Rect::new(rr.right() - 64.0, rr.y + 5.0, 26.0, rr.h - 10.0);
+                let (hd, _, cd) = ui.interact(id_of(&format!("kb-{sec}-{i}-clear")), dr);
+                ui.icon("delete", dr.center(), 16.0, if hd { TEXT } else { TEXT_FAINT });
+                if ui.hover(dr) {
+                    ui.tooltip(dr, "Clear the key (the entry stays)");
+                }
+                if cd {
+                    clicked = Some((*i, RowAsked::Clear));
+                }
                 let xr = Rect::new(rr.right() - 32.0, rr.y + 5.0, 26.0, rr.h - 10.0);
-                let (hx, _, cx) = ui.interact(id ^ 1, xr);
+                let (hx, _, cx) = ui.interact(id_of(&format!("kb-{sec}-{i}-remove")), xr);
                 ui.icon("close", xr.center(), 16.0, if hx { DANGER } else { TEXT_FAINT });
+                if ui.hover(xr) {
+                    ui.tooltip(xr, "Remove the entry");
+                }
                 if cx {
-                    clicked = Some((*i, true));
+                    clicked = Some((*i, RowAsked::Remove));
                 }
             }
             shown.len() as f32 * rh
         });
         match clicked {
-            Some((i, true)) => {
+            Some((i, asked @ (RowAsked::Clear | RowAsked::Remove))) => {
                 let vr_binding = l.state.keybindings.get(*key).and_then(|a| a.as_array())
                     .and_then(|a| a.get(i)).and_then(|b| b.get("action"))
                     .and_then(|a| a.as_str()).is_some_and(|a| a.starts_with("vr_"));
-                if let Some(b) = l.state.keybindings.get_mut(*key).and_then(|a| a.as_array_mut()).and_then(|a| a.get_mut(i)) {
-                    b["scan_code"] = json!(0);
-                    b["modifier"] = json!(0);
+                let entries = l.state.keybindings.get_mut(*key).and_then(|a| a.as_array_mut());
+                match (asked, entries) {
+                    (RowAsked::Clear, Some(a)) => if let Some(b) = a.get_mut(i) {
+                        b["scan_code"] = json!(0);
+                        b["modifier"] = json!(0);
+                    },
+                    // (the entry out of the file; one waiting for its key below it moves up)
+                    (_, Some(a)) if i < a.len() => {
+                        a.remove(i);
+                        l.pages.capturing = match l.pages.capturing {
+                            Some((s, k)) if s == sec && k == i => None,
+                            Some((s, k)) if s == sec && k > i => Some((s, k - 1)),
+                            other => other,
+                        };
+                    }
+                    _ => {}
                 }
                 save_keys(l, vr_binding);
             }
-            Some((i, false)) => l.pages.capturing = Some((sec, i)),
+            Some((i, RowAsked::Capture)) => l.pages.capturing = Some((sec, i)),
             None => {}
         }
         if let Some(i) = more {
@@ -1578,8 +1620,13 @@ fn shown_button_count(buttons: &[(String, String)], physical: usize, revealed: O
 /// The game controllers tab (see `PadsView`).
 fn game_controllers(l: &mut Launcher, body: Rect) {
     use crate::controllers::{DeviceCfg, Func};
-    let hwnd = l.window.as_deref().and_then(crate::controllers::window_handle);
     let names = control_names(l);
+    if l.pages.controller_action_choices.is_none() {
+        l.pages.controller_action_choices = Some(std::sync::Arc::new(controller_action_choices(names, &l.state.keybindings)));
+    }
+    let choices = std::sync::Arc::clone(l.pages.controller_action_choices.as_ref().unwrap());
+    let (actions, labels) = choices.as_ref();
+    let hwnd = l.window.as_deref().and_then(crate::controllers::window_handle);
     let pv = &mut l.pages.pads;
     if pv.io.is_none() {
         pv.io = Some(crate::controllers::Devices::new(hwnd, false));
@@ -1740,23 +1787,6 @@ fn game_controllers(l: &mut Launcher, body: Rect) {
     }
     const AXES: [&str; 8] = ["X axis", "Y axis", "Z axis", "X rotation", "Y rotation", "Z rotation", "Slider 1", "Slider 2"];
     let funcs: Vec<String> = Func::LABELS.iter().map(|s| s.to_string()).collect();
-    let mut actions: Vec<String> = vec!["<none>".into()];
-    actions.extend(l.state.keybindings.get("vehicles").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|b| b.get("action").and_then(|x| x.as_str()).map(String::from)).collect::<Vec<_>>()).unwrap_or_default());
-    // H-pattern shifters use OMSI's "_fest" actions: pressing the gate selects the gear,
-    // releasing it fires "_fest_off", which lets the bus script return to neutral.
-    for a in ["kw_s_R_fest", "kw_s_1_fest", "kw_s_2_fest", "kw_s_3_fest", "kw_s_4_fest", "kw_s_5_fest", "kw_s_6_fest", "kw_s_7_fest", "kw_s_8_fest", "kw_s_9_fest", "kw_s_10_fest"] {
-        if !actions.iter().any(|x| x.eq_ignore_ascii_case(a)) {
-            actions.push(a.to_string());
-        }
-    }
-    // the game's own view actions (looking around while held, the cameras, the views)
-    for a in PAD_GAME_ACTIONS {
-        if !actions.iter().any(|x| x == a) {
-            actions.insert(1, a.to_string());
-        }
-    }
-    actions.dedup();
-    let labels: Vec<String> = actions.iter().enumerate().map(|(i, a)| if i == 0 { a.clone() } else { action_text(names, a) }).collect();
     let mut dirty = false;
     let lit = pv.last_pressed.filter(|(_, t)| t.elapsed().as_secs_f32() < 4.0).map(|(b, _)| b);
     // Some OMSI configs contain hundreds of empty trailing slots (the G920 report had
@@ -2183,6 +2213,9 @@ fn save_keys(l: &mut Launcher, vr_binding: bool) {
             if let Ok(k) = core::get_keybindings() {
                 l.state.keybindings = k;
             }
+            l.pages.kb_action_options = None;
+            l.pages.kb_filtered_options = None;
+            l.pages.controller_action_choices = None;
             // a key changed is a key the player wants to use: with a ready-made layout it
             // would be ignored wherever that layout has a key of its own
             if !vr_binding && use_custom_keys(l) {
@@ -2372,9 +2405,20 @@ pub fn mods(l: &mut Launcher, area: Rect) {
         l.state.load_mods();
     }
     let body = l.page_title(area, "Mods", "A bus, a map, scenery, a whole OMSI folder - as a folder or a .zip, .7z or .rar. The original OMSI 2 folder is never written to.");
-    let cols = 3;
-    let cw = (body.w - GAP * 2.0 * (cols as f32 - 1.0)) / cols as f32;
-    let colr = |k: usize| Rect::new(body.x + k as f32 * (cw + GAP * 2.0), body.y, cw, body.h);
+    // (installing and the installs on the left, the list of every mod taking the rest)
+    let side = (body.w * 0.27).clamp(280.0, 380.0);
+    let list_w = body.w - 2.0 * (side + GAP * 2.0);
+    let colr = |k: usize| match k {
+        0 => Rect::new(body.x, body.y, side, body.h),
+        1 => Rect::new(body.x + side + GAP * 2.0, body.y, side, body.h),
+        _ => Rect::new(body.x + 2.0 * (side + GAP * 2.0), body.y, list_w, body.h),
+    };
+    // (asked again once an install has finished: the list shows what it put there)
+    let done = l.state.jobs.iter().filter(|j| j.finished.is_some()).count();
+    if done != l.state.mods_jobs_seen {
+        l.state.mods_jobs_seen = done;
+        l.state.load_mods();
+    }
     // install
     let c0 = colr(0);
     l.ui.panel(c0);
@@ -2503,42 +2547,145 @@ pub fn mods(l: &mut Launcher, area: Rect) {
         core::install::cancel(id);
         l.state.poll_now();
     }
-    // content folder
-    let c2 = colr(2);
-    l.ui.panel(c2);
-    let inner = l.ui.heading(Rect::new(c2.x + 18.0, c2.y + 14.0, c2.w - 36.0, c2.h - 28.0), "Content folder", Some("folder_open"));
-    let Some(m) = l.state.mods.clone() else {
-        l.ui.text_in("Reading…", Rect::new(inner.x, inner.y, inner.w, 20.0), 12.5, Weight::Regular, TEXT_DIM, Align::Left);
+    // waiting packs, under the install column's text
+    if let Some(m) = l.state.mods.clone().filter(|m| !m.waiting.is_empty()) {
+        let c0 = colr(0);
+        let y0 = c0.bottom() - 24.0 - 22.0 * m.waiting.len().min(4) as f32;
+        l.ui.text_in("Waiting for their bus", Rect::new(c0.x + 18.0, y0 - 26.0, c0.w - 36.0, 22.0), 12.5, Weight::Bold, TEXT, Align::Left);
+        for (k, w) in m.waiting.iter().take(4).enumerate() {
+            l.ui.text_in(w, Rect::new(c0.x + 18.0, y0 + k as f32 * 22.0, c0.w - 36.0, 20.0), 12.0, Weight::Regular, TEXT_DIM, Align::Left);
+        }
+    }
+    mod_list(l, colr(2));
+}
+
+/// The Mods page's filters over the list.
+const MOD_FILTERS: [&str; 6] = ["All", "Buses", "Maps", "Archives", "Other", "Off"];
+
+fn mod_passes(m: &core::mods::Mod, filter: usize) -> bool {
+    use core::mods::Kind;
+    match filter {
+        1 => m.kind == Kind::Bus,
+        2 => m.kind == Kind::Map,
+        3 => m.kind == Kind::Archive,
+        4 => m.kind == Kind::Other,
+        5 => !m.enabled,
+        _ => true,
+    }
+}
+
+/// Every mod of the content folder (see `omsi_launcher_lib::mods`): found by a search and a
+/// filter, each switched off and on - its folders out of the game's sight, nothing deleted -
+/// or deleted after a question asked in its row.
+fn mod_list(l: &mut Launcher, c: Rect) {
+    use core::mods::Kind;
+    l.ui.panel(c);
+    let inner = l.ui.heading(Rect::new(c.x + 18.0, c.y + 14.0, c.w - 36.0, c.h - 28.0), "Installed mods", Some("extension"));
+    let Some(status) = l.state.mods.clone() else {
+        l.ui.text_in("Reading the content folder…", Rect::new(inner.x, inner.y, inner.w, 20.0), 12.5, Weight::Regular, TEXT_DIM, Align::Left);
         return;
     };
+    let mods = status.installed.clone();
+    let on = mods.iter().filter(|m| m.enabled).count();
+    // the content folder: where, how much room
+    l.ui.text_in(&format!("{} mods, {on} on · {} free", mods.len(), fmt_bytes(status.free_bytes)), Rect::new(c.x + 220.0, c.y + 14.0, c.w - 238.0, 28.0), 12.0, Weight::Regular, TEXT_DIM, Align::Right);
     let mut y = inner.y;
-    y += l.ui.paragraph(&m.content_dir, Vec2::new(inner.x, y), inner.w, 12.0, Weight::Medium, TEXT_SOFT);
-    y += 6.0;
-    l.ui.text_in(&format!("{} free on this disk", fmt_bytes(m.free_bytes)), Rect::new(inner.x, y, inner.w, 20.0), 13.0, Weight::Bold, ACCENT, Align::Left);
-    y += 30.0;
-    for (f, n) in &m.folders {
-        l.ui.icon("folder_open", Vec2::new(inner.x + 9.0, y + 10.0), 16.0, TEXT_DIM);
-        l.ui.text_in(f, Rect::new(inner.x + 26.0, y, inner.w * 0.6, 20.0), 12.5, Weight::Medium, TEXT, Align::Left);
-        l.ui.text_in(&format!("{n} {}", if *n == 1 { "entry" } else { "entries" }), Rect::new(inner.x, y, inner.w, 20.0), 12.0, Weight::Regular, TEXT_DIM, Align::Right);
-        y += 24.0;
+    l.ui.text_in(&status.content_dir, Rect::new(inner.x, y, inner.w - 90.0, 18.0), 11.5, Weight::Regular, TEXT_FAINT, Align::Left);
+    if l.ui.button("mods-open-folder", Rect::new(inner.right() - 80.0, y - 4.0, 80.0, 26.0), "Open", Some("open_in_new"), ButtonKind::Ghost) {
+        crate::updater::open_url(&status.content_dir);
     }
-    if !m.archives.is_empty() {
-        y += 8.0;
-        l.ui.heading(Rect::new(inner.x, y, inner.w, 28.0), "Archives used in place", None);
-        y += 30.0;
-        for (n, b) in &m.archives {
-            l.ui.text_in(&format!("{n}  ({})", fmt_bytes(*b)), Rect::new(inner.x, y, inner.w, 20.0), 12.0, Weight::Regular, TEXT_SOFT, Align::Left);
-            y += 22.0;
-        }
+    y += 26.0;
+    // the search, and the filters with how many each holds
+    let mut q = std::mem::take(&mut l.pages.mod_search);
+    l.ui.text_input("mods-search", Rect::new(inner.x, y, inner.w, 34.0), &mut q, "Search mods…", Some("search"));
+    l.pages.mod_search = q.clone();
+    y += 42.0;
+    let labels: Vec<String> = MOD_FILTERS.iter().enumerate().map(|(k, f)| format!("{f} {}", mods.iter().filter(|m| mod_passes(m, k)).count())).collect();
+    let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+    let mut f = l.pages.mod_filter;
+    if l.ui.segmented("mods-filter", Rect::new(inner.x, y, inner.w, 32.0), &mut f, &refs) {
+        l.pages.mod_filter = f;
     }
-    if !m.waiting.is_empty() {
-        y += 8.0;
-        l.ui.heading(Rect::new(inner.x, y, inner.w, 28.0), "Waiting for their bus", None);
-        y += 30.0;
-        for w in &m.waiting {
-            l.ui.text_in(w, Rect::new(inner.x, y, inner.w, 20.0), 12.0, Weight::Regular, TEXT_DIM, Align::Left);
-            y += 22.0;
+    y += 42.0;
+    let q = q.to_lowercase();
+    let mut shown: Vec<core::mods::Mod> = mods.into_iter().filter(|m| mod_passes(m, l.pages.mod_filter)).filter(|m| q.is_empty() || m.name.to_lowercase().contains(&q) || m.paths.iter().any(|p| p.to_lowercase().contains(&q))).collect();
+    // (switched-on first, then by name)
+    shown.sort_by(|a, b| b.enabled.cmp(&a.enabled).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    let busy = l.state.mod_busy.clone();
+    let confirm = l.pages.mod_confirm.clone();
+    let empty = status.installed.is_empty();
+    // what the rows asked: (id, Some(on)) switch, (id, None) delete asked, delete confirmed
+    let mut toggle: Option<(String, bool)> = None;
+    let mut ask: Option<Option<String>> = None;
+    let mut delete: Option<String> = None;
+    let list = Rect::new(inner.x - 6.0, y, inner.w + 12.0, inner.bottom() - y);
+    l.ui.scroll_area("mods-list", list, &mut |ui, v| {
+        if shown.is_empty() {
+            let t = if empty { "No mods yet. Choose a folder or an archive on the left, or drop one onto the window." } else { "No mod matches." };
+            ui.paragraph(t, Vec2::new(v.x + 8.0, v.y + 6.0), v.w - 16.0, 12.5, Weight::Regular, TEXT_DIM);
+            return 40.0;
         }
+        let rh = 54.0;
+        for (k, m) in shown.iter().enumerate() {
+            let r = Rect::new(v.x + 6.0, v.y + k as f32 * rh, v.w - 16.0, rh - 6.0);
+            if r.bottom() < list.y - rh || r.y > list.bottom() + rh {
+                continue;
+            }
+            let asking = confirm.as_deref() == Some(m.id.as_str());
+            ui.p().rounded(r, 8.0, if asking { DANGER.alpha(0.12) } else { Color::WHITE.alpha(if m.enabled { 0.04 } else { 0.015 }) });
+            let icon = match m.kind {
+                Kind::Bus => "directions_bus",
+                Kind::Map => "map",
+                Kind::Archive => "inventory_2",
+                Kind::Other => "extension",
+            };
+            ui.icon(icon, Vec2::new(r.x + 22.0, r.center().y), 20.0, if m.enabled { ACCENT } else { TEXT_FAINT });
+            let tw = r.w - 230.0;
+            ui.text_in(&m.name, Rect::new(r.x + 44.0, r.y + 6.0, tw, 20.0), 13.5, Weight::Medium, if m.enabled { TEXT } else { TEXT_DIM }, Align::Left);
+            let mut sub = vec![m.paths.join(", "), fmt_bytes(m.bytes)];
+            if !m.enabled {
+                sub.insert(0, "OFF".into());
+            }
+            if m.installed > 0 {
+                sub.push(format!("installed {}", chrono_like(m.installed)));
+            } else if !m.noted {
+                sub.push("found in the content folder".into());
+            }
+            ui.text_in(&sub.join(" · "), Rect::new(r.x + 44.0, r.y + 26.0, tw, 16.0), 11.0, Weight::Regular, TEXT_FAINT, Align::Left);
+            if busy.as_deref() == Some(m.id.as_str()) {
+                ui.text_in("…", Rect::new(r.right() - 60.0, r.y, 40.0, r.h), 16.0, Weight::Bold, TEXT_DIM, Align::Center);
+                continue;
+            }
+            if asking {
+                // the question, in the row: deleting cannot be undone
+                if ui.button(&format!("mod-del-yes-{}", m.id), Rect::new(r.right() - 96.0, r.y + 9.0, 88.0, 30.0), "Delete", Some("delete"), ButtonKind::Danger) {
+                    delete = Some(m.id.clone());
+                }
+                if ui.button(&format!("mod-del-no-{}", m.id), Rect::new(r.right() - 190.0, r.y + 9.0, 86.0, 30.0), "Keep", None, ButtonKind::Normal) {
+                    ask = Some(None);
+                }
+                continue;
+            }
+            let mut on = m.enabled;
+            if ui.toggle(&format!("mod-on-{}", m.id), Rect::new(r.right() - 96.0, r.y + 10.0, 50.0, 28.0), &mut on, "") {
+                toggle = Some((m.id.clone(), on));
+            }
+            let dr = Rect::new(r.right() - 38.0, r.y + 10.0, 28.0, 28.0);
+            if ui.icon_button(&format!("mod-del-{}", m.id), dr.center(), 17.0, "delete", "Delete this mod (asks first; switch it off instead to keep it)") {
+                ask = Some(Some(m.id.clone()));
+            }
+        }
+        shown.len() as f32 * rh
+    });
+    if let Some((id, on)) = toggle {
+        l.state.mod_toggle(id, on);
+    }
+    if let Some(a) = ask {
+        l.pages.mod_confirm = a;
+    }
+    if let Some(id) = delete {
+        l.pages.mod_confirm = None;
+        l.state.mod_remove(id);
     }
 }
 
@@ -2803,14 +2950,18 @@ mod settings_tests {
     fn by_tab() -> Vec<Vec<&'static str>> {
         let mut graphics = vec![
             "s-gp-sel", "s-gp-load", "s-gp-del", "s-gp-name", "s-gp-save",
-            "s-preset", "s-graphics", "s-msaa", "s-scale", "s-af", "s-shadow", "set-ssao", "set-shadows", "s-casters", "set-detail_textures", "s-night", "s-led", "s-led-mip", "set-shadow_blobs", "set-reflections", "set-clouds", "s-cloud-quality", "set-windy_trees",
+            "s-preset", "s-graphics", "s-msaa", "s-scale", "s-af", "s-shadow", "set-ssao", "set-shadows", "s-casters", "set-detail_textures", "s-night", "s-led", "s-led-mip", "set-shadow_blobs", "set-reflections", "set-clouds", "s-cloud-quality", "s-rain-quality", "set-windy_trees",
             "set-fullscreen", "s-res", "set-vsync", "s-fps", "s-view", "s-maxobj", "s-minobj", "s-mirror", "s-mirror-refresh", "s-texmem", "set-texture_compression", "set-gpu_texture_compression",
         ];
         if !cfg!(target_os = "macos") {
             graphics.push("s-api");
         }
         let driving = vec![
+<<<<<<< HEAD
             "s-keys", "set-steering_linear", "set-old_steering", "set-red_steer_spd", "s-mouse", "s-mouse-pedal", "set-mouse_smooth", "set-mouse_right_off", "set-blinker_cancel", "set-brake_hold", "set-auto_clutch", "set-auto_shift", "set-momentary_gears", "s-go-keys",
+=======
+            "s-keys", "set-steering_linear", "set-old_steering", "set-red_steer_spd", "s-mouse", "s-mouse-pedal", "set-mouse_smooth", "set-mouse_hold", "set-mouse_right_off", "set-blinker_cancel", "set-brake_hold", "set-auto_clutch", "set-auto_shift", "set-momentary_gears", "s-go-keys",
+>>>>>>> c4738ed6f43f11b4c06ead299af7ac74280d5c5b
             "s-wrange", "s-wlock", "s-pad-steer-smooth", "s-pad-steer-speed", "s-pad-deadzone", "set-pad_steer_linear", "s-pad-type", "set-pad_buttons", "set-arrows_switch_cams", "s-pedt", "s-pedb", "set-ff_enabled", "set-ff_invert", "s-ffroad", "s-ffeng", "s-fffade", "s-wreset", "s-go-pads",
         ];
         let mut camera = vec![
@@ -3002,6 +3153,9 @@ mod pad_action_tests {
         assert!(super::PAD_GAME_ACTIONS.contains(&"view_reset_all_directions"));
         assert!(super::PAD_GAME_ACTIONS.contains(&"voice_radio"));
         assert_eq!(super::known_action("voice_radio").as_deref(), Some("Multiplayer: bus radio (hold)"));
+        // the main menu, which a controller has no Esc for
+        assert!(super::PAD_GAME_ACTIONS.contains(&"open_menu"));
+        assert_eq!(super::known_action("open_menu").as_deref(), Some("Open / close the main menu"));
         for a in super::PAD_GAME_ACTIONS {
             let held = a.starts_with("view_look_") || a == "voice_radio";
             let handled = held

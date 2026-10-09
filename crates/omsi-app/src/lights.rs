@@ -140,7 +140,7 @@ pub fn vehicle_lights(
             None => v.body_rotation(),
         }
     };
-    coronas.extend(crate::scene::model_lights_faded(&ty.model, &mesh_xf, v.position, &value_of, &v.light_fade));
+    crate::scene::model_lights_extend(&ty.model, &mesh_xf, v.position, &value_of, &v.light_fade, coronas);
     // An articulated vehicle is one visual bus, but its rear section has its own
     // `[light_enh_2]`/corona declarations and animated meshes.  The old collector only
     // visited the leading section, which made rear lamps, destination lights and section-
@@ -152,13 +152,7 @@ pub fn vehicle_lights(
                 None => t.body_rotation(),
             }
         };
-        coronas.extend(crate::scene::model_lights_faded(
-            &t.ty.model,
-            &part_mesh_xf,
-            t.position,
-            &value_of,
-            &t.light_fade,
-        ));
+        crate::scene::model_lights_extend(&t.ty.model, &part_mesh_xf, t.position, &value_of, &t.light_fade, coronas);
     }
     let body = v.body_rotation();
     // headlights: the spotlight selected by Spot_Select
@@ -312,6 +306,7 @@ fn push_spot(lights: &mut Vec<PointLight>, at: DVec3, d: Vec3, vals: &[f32; 12],
         // road lamp's profile is for one aimed along the road)
         beam: if d.normalize_or_zero().z.abs() >= 0.5 { 0.0 } else if vals[9] >= FULL_BEAM_RANGE { -1.0 } else { 1.0 },
         housed: false,
+        shadow_owner: None,
         mode: LightMode::Enhanced,
     });
 }
@@ -644,6 +639,10 @@ pub fn set_corona_root(root: &std::path::Path) {
     let mut g = CORONA_TEXTURES.lock().unwrap_or_else(|e| e.into_inner());
     let t = g.get_or_insert_with(|| CoronaTextures { ids: Default::default(), pending: Vec::new(), root: None });
     t.root = Some(root.to_path_buf());
+    // (the game's own pictures are looked for in the new folder)
+    for id in [&CONE_ID, &GLOW_ID, &STAR_ID] {
+        id.store(UNKNOWN_ID, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 fn texture_id_of(path: std::path::PathBuf) -> u16 {
@@ -662,10 +661,12 @@ fn texture_id_of(path: std::path::PathBuf) -> u16 {
 /// folder's `texture\`, the folder, the vehicle's `texture\`, the game's `Texture\`); 0 (the
 /// standard glow) when there is no such file.
 pub fn corona_texture_id(model_dir: &std::path::Path, name: &str) -> u16 {
-    // (every lit lamp of every vehicle asks every frame: looked up once)
-    static KNOWN: std::sync::Mutex<Option<std::collections::HashMap<(std::path::PathBuf, String), u16>>> = std::sync::Mutex::new(None);
-    let key = (model_dir.to_path_buf(), name.to_string());
-    if let Some(&id) = KNOWN.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&key)) {
+    // (every lit lamp of every vehicle asks every frame: looked up once, and found again by
+    // the folder and the name as they are - a key made of copies of them was two
+    // allocations a lamp a frame)
+    type Known = std::collections::HashMap<std::path::PathBuf, std::collections::HashMap<String, u16>>;
+    static KNOWN: std::sync::Mutex<Option<Known>> = std::sync::Mutex::new(None);
+    if let Some(&id) = KNOWN.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(model_dir)).and_then(|m| m.get(name)) {
         return id;
     }
     let root = CORONA_TEXTURES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|t| t.root.clone()).unwrap_or_default();
@@ -677,40 +678,52 @@ pub fn corona_texture_id(model_dir: &std::path::Path, name: &str) -> u16 {
             break;
         }
     }
-    KNOWN.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(key, id);
+    KNOWN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(Default::default)
+        .entry(model_dir.to_path_buf())
+        .or_default()
+        .insert(name.to_string(), id);
     id
 }
 
+/// The id of a game picture not looked for yet in the current game folder.
+const UNKNOWN_ID: u32 = u32::MAX;
+static CONE_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(UNKNOWN_ID);
+static GLOW_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(UNKNOWN_ID);
+static STAR_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(UNKNOWN_ID);
+
 /// One of the game's own light pictures in `Texture\` (0, the built-in glow, if missing).
-fn stock_texture_id(name: &str) -> u16 {
+fn stock_texture_id(name: &str, known: &std::sync::atomic::AtomicU32) -> u16 {
     // (asked for every light of every vehicle every frame: the file is looked up once per
-    // game folder, not each time - the lookups were a fifth of a frame's CPU time)
-    static KNOWN: std::sync::Mutex<Option<std::collections::HashMap<(std::path::PathBuf, String), u16>>> = std::sync::Mutex::new(None);
-    let root = CORONA_TEXTURES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|t| t.root.clone()).unwrap_or_default();
-    let key = (root, name.to_string());
-    if let Some(&id) = KNOWN.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&key)) {
-        return id;
+    // game folder, not each time - the lookups were a fifth of a frame's CPU time - and
+    // kept where no lock and no key has to be made to read it again)
+    let id = known.load(std::sync::atomic::Ordering::Relaxed);
+    if id != UNKNOWN_ID {
+        return id as u16;
     }
-    let p = omsi_cfg::resolve_path(&key.0, &format!("Texture/{name}"));
+    let root = CORONA_TEXTURES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|t| t.root.clone()).unwrap_or_default();
+    let p = omsi_cfg::resolve_path(&root, &format!("Texture/{name}"));
     let id = if omsi_cfg::vfs::is_file(&p) { texture_id_of(p) } else { 0 };
-    KNOWN.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(key, id);
+    known.store(id as u32, std::sync::atomic::Ordering::Relaxed);
     id
 }
 
 /// The fog cone's picture (`Texture\light_cone.bmp`).
 pub fn cone_texture_id() -> u16 {
-    stock_texture_id("light_cone.bmp")
+    stock_texture_id("light_cone.bmp", &CONE_ID)
 }
 
 /// A light's glow when it names no bitmap of its own, and the halo round it in fog
 /// (`Texture\licht.bmp`, the original).
 pub fn glow_texture_id() -> u16 {
-    stock_texture_id("licht.bmp")
+    stock_texture_id("licht.bmp", &GLOW_ID)
 }
 
 /// The star of a light with effect bit 1 (`Texture\light_effect1.bmp`).
 pub fn star_texture_id() -> u16 {
-    stock_texture_id("light_effect1.bmp")
+    stock_texture_id("light_effect1.bmp", &STAR_ID)
 }
 
 /// Upload the pictures asked for since the last frame.

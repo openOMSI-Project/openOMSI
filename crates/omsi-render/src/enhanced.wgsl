@@ -18,6 +18,18 @@ fn d_ggx(nh: f32, a: f32) -> f32 {
     return a2 / (PI * d * d);
 }
 
+// The microfacets of a film of water over a road: the slopes of a water surface are
+// Gaussian (Cox and Munk 1954), the Beckmann distribution. Its tail falls off as
+// exp(-tan^2 / a^2), where GGX's falls as a^2 / tan^4: under GGX a headlamp - a hundred
+// thousand candela towards the road - kept a highlight brighter than the lit road some ten
+// degrees off its mirror direction, and its reflection ran as one white line from the lamp
+// down to the camera.
+fn d_beckmann(nh: f32, a: f32) -> f32 {
+    let c2 = max(nh * nh, 1e-4);
+    let a2 = a * a;
+    return exp(-(1.0 - c2) / (c2 * a2)) / (PI * a2 * c2 * c2);
+}
+
 // Height-correlated Smith visibility (G / (4 n.l n.v)).
 fn v_smith(nv: f32, nl: f32, a: f32) -> f32 {
     let a2 = a * a;
@@ -71,10 +83,10 @@ fn rain_env_enhanced(d: vec3<f32>, lod: f32) -> vec3<f32> {
     return mix(surround, e, smoothstep(-0.05, 0.35, d.z));
 }
 
-// A fixed, deterministic PCF kernel (shader.wgsl's SHADOW_OFFSETS). The old PCSS blocker
+// A fixed, deterministic PCF kernel (shader.wgsl's `shadow_tent`). The old PCSS blocker
 // search was unstable for alpha-tested foliage: a few leaves entering or leaving its
 // 12-sample search changed the penumbra radius, producing checkerboard patches and
-// camera-driven strips. The offsets are fixed in shadow-map space, so the only thing that
+// camera-driven strips. The filter is fixed in shadow-map space, so the only thing that
 // can change is the actual caster. `thin`: foliage, whose normals OMSI points up for even
 // lighting - no receiver plane can be taken from them, a leaf compares at its own depth.
 fn sun_shadow_soft(world_in: vec3<f32>, n: vec3<f32>, thin: bool) -> f32 {
@@ -86,7 +98,8 @@ fn sun_shadow_soft(world_in: vec3<f32>, n: vec3<f32>, thin: bool) -> f32 {
     let ndl = clamp(dot(n, camera.sun_dir.xyz), 0.0, 1.0);
     // (a veil of high cloud spreads the sun into an aureole a few degrees wide: the light
     // comes from a larger source, and the shadow's edge widens with it)
-    let texel = camera.shadow.y * (1.0 + 3.0 * enh.cloud_sun[1].w);
+    // (the tent's four gathers step apart for it: see `shader.wgsl`'s `shadow_tent_near`)
+    let widen = 1.0 + 3.0 * enh.cloud_sun[1].w;
     let close = shadow_close(world, n, ndl, thin);
     if (close.y >= 0.999) {
         return close.x;
@@ -116,7 +129,7 @@ fn sun_shadow_soft(world_in: vec3<f32>, n: vec3<f32>, thin: bool) -> f32 {
     // a pixel) halved the enhanced picture's frame rate against shadows off.
     var near_value = 1.0;
     if (near_weight > 0.001) {
-        near_value = shadow_pcf_near(near_uv, near_lp.z, near_slope, texel);
+        near_value = shadow_pcf_near(near_uv, near_lp.z, near_slope, widen);
     }
     near_value = mix(near_value, close.x, close.y);
     if (near_weight >= 0.999) {
@@ -127,7 +140,7 @@ fn sun_shadow_soft(world_in: vec3<f32>, n: vec3<f32>, thin: bool) -> f32 {
     let far_valid = fuv.x >= 0.0 && fuv.x <= 1.0 && fuv.y >= 0.0 && fuv.y <= 1.0 && flp.z >= 0.0 && flp.z <= 1.0;
     var far_safe = 1.0;
     if (far_valid) {
-        let far_value = shadow_pcf_far(fuv, flp.z, far_slope, texel);
+        let far_value = shadow_pcf_far(fuv, flp.z, far_slope, widen);
         let far_edge = max(abs(fuv.x - 0.5), abs(fuv.y - 0.5));
         far_safe = mix(1.0, far_value, clamp((0.5 - far_edge) * 12.0, 0.0, 1.0));
     }
@@ -209,7 +222,10 @@ fn lamp_shadow_at(li: u32, p: vec3<f32>, n: vec3<f32>, thin: bool) -> f32 {
 
 // The point and spot lights of the pixel's grid cell: diffuse and specular.
 // `thin`: foliage, lit from whichever side the lamp is on (see the sun below).
-fn lamp_light(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, sf: Surface, thin: bool, shadows: bool) -> vec3<f32> {
+// `film`: a wet road's film of water - x how much of the surface it is (0: none), y how
+// rough it is, z the share of it that mirrors - with which the lamps are reflected as the
+// sky is (`refl_rough`, `wet_share` in fs_enhanced), not by the dry surface's own lobe.
+fn lamp_light(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, sf: Surface, thin: bool, shadows: bool, film: vec3<f32>) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
     // the lamps' light on the ground round the point (a horizontal surface's, unshadowed:
     // the ground the point looks down at is wider than its own shadow)
@@ -227,6 +243,7 @@ fn lamp_light(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, sf: Surface, thin: bool,
         return sum;
     }
     let a = max(sf.rough * sf.rough, 0.02);
+    let a_film = max(film.y * film.y, 0.02);
     let nv = max(dot(n, v), 1e-4);
     let base = (u32(y) * side + u32(x)) * CELL_CAP;
     for (var j = 0u; j < CELL_CAP; j = j + 1u) {
@@ -289,7 +306,12 @@ fn lamp_light(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, sf: Surface, thin: bool,
             continue;
         }
         let h = normalize(ld + v);
-        let spec = d_ggx(max(dot(n, h), 0.0), a) * v_smith(nv, nl, a) * f_schlick(sf.f0, dot(v, h));
+        let nh = max(dot(n, h), 0.0);
+        let fr = f_schlick(sf.f0, dot(v, h));
+        var spec = d_ggx(nh, a) * v_smith(nv, nl, a) * fr;
+        if (film.x > 0.0) {
+            spec = mix(spec, d_beckmann(nh, a_film) * v_smith(nv, nl, a_film) * fr * film.z, film.x);
+        }
         sum = sum + irr * nl * (sf.albedo / PI + spec);
     }
     // What the lit ground throws back up: a diffuse reflector of the street's albedo (asphalt
@@ -1098,7 +1120,8 @@ fn shade_enhanced(in: FsIn, puddle_weight: ptr<function, vec2<f32>>, capture: bo
     // the tile light map on top)
     // (no shadows inside the player's own vehicle, whose cab the depth hardly shows, nor in
     // the probe's capture)
-    let lamps = lamp_light(in.world, n, v, sf, thin, !capture) * select(1.0, 0.0, material.params.y > 0.2 && material.params.y < 0.3);
+    let film = select(vec3<f32>(0.0), vec3<f32>(wet_road, refl_rough, wet_share), wet_only && wet_road > 0.0);
+    let lamps = lamp_light(in.world, n, v, sf, thin, !capture, film) * select(1.0, 0.0, material.params.y > 0.2 && material.params.y < 0.3);
     // [interiorlight]: OMSI adds its lamps' light to the lit meshes whatever the daylight,
     // so a switched-on saloon is brighter by day as well and only stands out more at night.
     // Taken as a lamp against the daylight exposure it vanished by day altogether.
@@ -1169,8 +1192,10 @@ fn shade_enhanced(in: FsIn, puddle_weight: ptr<function, vec2<f32>>, capture: bo
         // white light map's, so it goes out with that map's variable (the busbar, the
         // lights) as the Omsi.exe stage does.
         let lm_gate = select(1.0, clamp(in.params2.x, 0.0, 1.0), material.params2.x > 0.5);
-        // (in the cab - a dashboard's LCD lit by a white map reads as a panel - it dims at night)
-        emit = emit + tex.rgb * enh.led.x * alpha * lm_gate * max(enh.exposure.z * 2.0, 0.8) * mix(1.0, display_dim(1.0), 1.0 - outside);
+        // (in the cab - a dashboard's LCD lit by a white map reads as a panel - it dims at night;
+        // not a page's destination sign (-3), which is read from the street through the windscreen)
+        let cab_dim = select(1.0 - outside, 0.0, material.emissive.w < -2.5);
+        emit = emit + tex.rgb * enh.led.x * alpha * lm_gate * max(enh.exposure.z * 2.0, 0.8) * mix(1.0, display_dim(1.0), cab_dim);
     } else if (material.emissive.w < -0.5) {
         // a display's text (see MaterialExtra::display)
         emit = emit + tex.rgb * 0.35 * max(enh.exposure.z * 2.0, 0.8) * display_dim(1.0);

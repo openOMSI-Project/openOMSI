@@ -5,7 +5,7 @@ use super::*;
 impl Renderer {
     /// The near cascade (with the close one beside it in the atlas) and the far cascade,
     /// each when it is redrawn this frame.
-    pub(crate) fn encode_shadow_maps(&self, shadow_encoder: &mut wgpu::CommandEncoder, scene: &Scene, sh: &ShadowPlan, shadow_batches: &[Vec<Batch>; 4], timers: &mut PassTimers) {
+    pub(crate) fn encode_shadow_maps(&self, shadow_encoder: &mut wgpu::CommandEncoder, scene: &Scene, sh: &ShadowPlan, shadow_batches: &[Vec<Batch>; SHADOW_LISTS], timers: &mut PassTimers) {
         let (draw_shadows, redraw_near, redraw_far) = (sh.draw_shadows, sh.redraw_near, sh.redraw_far);
         for cascade in [0usize, 1] {
             if !draw_shadows || (cascade == 1 && !redraw_far) {
@@ -71,7 +71,7 @@ impl Renderer {
 
     // the street lamps' maps: tiles of a quarter of the shadow size under the far map,
     // each cleared and drawn every frame
-    pub(crate) fn encode_lamp_shadows(&self, shadow_encoder: &mut wgpu::CommandEncoder, scene: &Scene, f: &FrameCtx, shadow_batches: &[Vec<Batch>; 4], timers: &mut PassTimers) {
+    pub(crate) fn encode_lamp_shadows(&self, shadow_encoder: &mut wgpu::CommandEncoder, scene: &Scene, f: &FrameCtx, shadow_batches: &[Vec<Batch>; SHADOW_LISTS], timers: &mut PassTimers) {
         let lamp_shadows = &f.lamp_shadows;
         if !lamp_shadows.is_empty() {
             let mut pass = shadow_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -93,7 +93,7 @@ impl Renderer {
                 pass.set_pipeline(&self.shadow_clear_pipeline);
                 pass.draw(0..3, 0..1);
                 pass.set_bind_group(0, scene.shadow_bind_group.as_ref().unwrap(), &[]);
-                encode_batches(&mut pass, scene, &shadow_batches[3], |pipe| {
+                encode_batches(&mut pass, scene, &shadow_batches[3 + k], |pipe| {
                     &self.shadow_pipelines[6 + 2 * k + pipe as usize]
                 });
             }

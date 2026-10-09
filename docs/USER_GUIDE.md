@@ -66,7 +66,7 @@ whole start-up by itself (main switch, ignition, starter, gearbox to neutral); `
 is the same thing for an offscreen run.
 
 **Updates.** When the launcher starts it asks
-[github.com/openOMSI-Project/openOMSI](https://github.com/openOMSI-Project/openOMSI) for the latest release
+[github.com/openOMSI-org/openOMSI](https://github.com/openOMSI-org/openOMSI) for the latest release
 and, when there is a newer one, offers it: **Update now** downloads it (checked against the
 SHA-256 GitHub lists), puts the new program in place of the old one and starts the launcher
 again - on Windows `openomsi.exe` and `openomsi-launcher.exe`, on macOS the `openOMSI.app`
@@ -108,7 +108,11 @@ Settings → Driving → *Mouse steering sensitivity* makes it more or less sens
 braking: above 100 % the pedal reaches full sooner and below 100 % it takes more travel.
 Mouse steering works in the driver's, the passenger and the outside view; the wheel follows
 the cursor smoothly (a short easing, no steps). With *Smooth mouse steering* off (Settings →
-Driving) the wheel and the pedals are where the cursor says at once, as in OMSI.
+Driving) the wheel and the pedals are where the cursor says at once, as in OMSI. While the mouse
+steers the cursor is held, so the wheel reaches its full lock past the window's edges and a
+cross shows where it steers; with *Hold the cursor while the mouse steers* off the system's
+crosshair stays free (it follows the hand without the frame's delay, and a graphics tablet's
+pen works with it) and the window's edges are the lock, as in OMSI.
 
 Two switches there change the steering keys (both off by default): *Steering linearity* turns
 the wheel at OMSI's own steady pace (the curvature grows by the same amount every millisecond
@@ -303,7 +307,8 @@ material its own light outright - `[matl_glow] <texture> <value>` (openOMSI's ow
 docs/FORMATS.md): the texture is a greyscale mask of where it shines (the light is the
 material's own colour) and `value` is on this slider's scale, so `6` is as bright as its default
 and `20` brighter than its top; the slider does not change it. `mouse_sens` (mouse steering,
-1 = OMSI's), `mouse_smooth` (0: the mouse's wheel follows the cursor without easing),
+1 = OMSI's), `mouse_smooth` (0: the mouse's wheel follows the cursor without easing), `mouse_hold` (0: the
+cursor stays free while the mouse steers),
 `ui_scale` (the size of the game's interface over the picture - its texts,
 the menu, the timetable, the navigator and the city map - from 0.5 to 2, 1 by default, on
 top of the screen's own scaling; on a window taller than 1080 lines the interface grows with
@@ -336,7 +341,7 @@ Radeon HD 5000/6000). It is tried last, after the other three failed, and only w
 `libEGL.dll` and `libGLESv2.dll` (Google's ANGLE, BSD licence, with its Direct3D 11 renderer)
 are next to `openomsi.exe`; without them it is skipped (the log says so). The Windows package
 is to ship them, built from ANGLE's own source by
-[angle-openomsi](https://github.com/openOMSI-Project/angle-openomsi); with them the log names the
+[angle-openomsi](https://github.com/openOMSI-org/angle-openomsi); with them the log names the
 adapter `ANGLE (…Direct3D11…)` on the `Gl` backend.
 
 `drive_keys` is a control preset: `simple` (W/S/A/D and the arrow keys drive; the default),
@@ -433,6 +438,13 @@ their `spray.osc`). They get that spray only on a road wet through (`StreetCond`
 OMSI, and the puddles' spray on top. Spray is thrown
 within 100 m of the camera (less of it farther off), at most 1400 puffs at once; none shows
 inside the bus the camera is in.
+
+Rain costs frames, so Graphics → *Rain quality* (`rain_quality`) sets how much of it is drawn:
+**High** (the default) paints the drops on the glass 30 times a second, lets every vehicle
+throw spray and fills the air with the full curtain of falling streaks; **Medium** paints the
+glass 15 times a second, keeps only your own bus's spray and draws half the streaks; **Low**
+shows OMSI 2's own texture rain on the glass instead of the drops (from the next bus loaded),
+throws no spray and draws a quarter of the streaks.
 
 The vanilla look stays the default. The navigator (`crates/omsi-app/src/navigator.rs`) sits in a corner of the screen (lower
 left by default), after the Route Advisor of Euro Truck Simulator 2: small, dark and half

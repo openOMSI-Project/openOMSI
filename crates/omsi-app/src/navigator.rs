@@ -517,13 +517,13 @@ impl Navigator {
             Some(n) => {
                 // (only `draw` borrows it, for the length of a frame)
                 if let Some(n) = std::sync::Arc::get_mut(n) {
-                    n.extend(lanes, 1.5);
+                    n.extend(lanes, omsi_sim::traffic::LINK_TOLERANCE);
                     n.build_grid();
                 }
             }
             None => {
                 let mut n = Network { lanes, ..Default::default() };
-                n.link(1.5);
+                n.link(omsi_sim::traffic::LINK_TOLERANCE);
                 n.build_grid();
                 self.own_net = Some(std::sync::Arc::new(n));
             }

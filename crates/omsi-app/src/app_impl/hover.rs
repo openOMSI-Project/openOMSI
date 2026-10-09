@@ -114,6 +114,18 @@ impl App {
             _ => (None, false),
         };
         let (found, hand) = found;
+        let (found, hand) = if let (Some(found), true) = (found.as_ref(), hand) {
+            (Some(found.clone()), true)
+        } else if let (Some(w), Some((o, d, spread))) = (self.world.as_ref(), self.cursor_ray_now()) {
+            let blocked = self.player.as_ref().and_then(|p| p.opaque_body_hit(o, d));
+            if let Some(hit) = w.scenery_object_hit(o, d, crate::input_script::SCENERY_OBJECT_REACH, spread).filter(|h| blocked.map_or(true, |t| t >= h.t)) {
+                (Some((hit.event, true)), true)
+            } else {
+                (found, hand)
+            }
+        } else {
+            (found, hand)
+        };
         self.menus.hover_hand = hand;
         match found {
             Some((name, true)) => {

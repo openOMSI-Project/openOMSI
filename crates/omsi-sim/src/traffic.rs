@@ -163,6 +163,21 @@ impl Lane {
         *self.dist.last().unwrap_or(&0.0)
     }
 
+    /// A random road driver's forward choice across two short, reciprocally linked
+    /// paths. A return whose entry and exit have already been passed folds the planned
+    /// way back on itself. This checks the driving choice, not the network topology.
+    fn continues_from(&self, from: &Lane, tol: f64) -> bool {
+        if self.kind != LaneKind::Street || self.length() as f64 > tol || from.length() as f64 > tol {
+            return true;
+        }
+        let end = from.end();
+        let backwards = (self.start() - end).truncate().dot(heading_dir(self.start_heading() as f64)) < 0.0
+            && (self.end() - end).truncate().dot(heading_dir(self.end_heading() as f64)) <= 0.0;
+        let forward_gap = (from.start() - self.end()).truncate().length_squared();
+        let return_gap = (self.start() - from.end()).truncate().length_squared();
+        !(backwards && forward_gap < return_gap)
+    }
+
     /// Measure the lane again after its points were moved (an object's tilt).
     pub fn refresh(&mut self) {
         self.dist = cumulative(&self.points);
@@ -1157,6 +1172,10 @@ impl Network {
 /// Growing the network while the map streams in: the lanes of newly loaded tiles are
 /// appended (existing indices stay valid for the cars and routes that hold them) and linked
 /// to what is there, with the same rules as [`Network::link`].
+/// How near (m) a lane's end and the next one's start must lie to be linked: what the game
+/// links its road network with, and what a driving choice measures short paths against.
+pub const LINK_TOLERANCE: f64 = 1.5;
+
 impl Network {
     /// Append `new` lanes and link them. Returns the range of their indices.
     pub fn extend(&mut self, new: Vec<Lane>, tol: f64) -> std::ops::Range<usize> {
@@ -1422,6 +1441,111 @@ mod extend_tests {
         assert_eq!(grown.crossings.len(), 4);
         assert_eq!(grown.find(LaneKey { tile: (0, 1), id: 3, path: 0 }, None), Some(2));
         assert_eq!(grown.nearest_lane(DVec3::new(0.5, 350.0, 0.0), LaneKind::Street).map(|n| n.0), Some(3));
+    }
+
+    #[test]
+    fn short_road_choices_progress_without_changing_linking_or_reach() {
+        for heading in [0.0, 129.0, 309.0] {
+            let mut p = DVec3::new(-1200.0, -600.0, 20.0);
+            let mut all = Vec::new();
+            for length in [30.0, 0.47, 1.0, 25.0] {
+                let lane = LaneBuilder::arc(p, heading, length, 0.0, length * 0.05, LaneKind::Street, 3.0);
+                p = lane.end();
+                all.push(lane);
+            }
+            let mut whole = Network { lanes: all.clone(), ..Default::default() };
+            whole.link(1.5);
+            for i in 0..3 {
+                assert!(whole.lanes[i].next.contains(&(i + 1)), "missing forward joint {i}");
+                let mut driver = AiState::new(i, 0.0, 7);
+                assert!(driver.choose_after(&whole, i).is_some_and(|j| j > i), "backward choice {i}");
+            }
+            assert!(whole.lanes[3].next.is_empty());
+            assert!(whole.lanes[2].next.contains(&1), "original graph must be preserved");
+            assert_eq!(whole.reach[0], REACH_MAX);
+            // Both new->old and old->new joins must use the same test as link().
+            for split in 1..all.len() {
+                let mut grown = Network { lanes: all[..split].to_vec(), ..Default::default() };
+                grown.link(1.5);
+                grown.extend(all[split..].to_vec(), 1.5);
+                for i in 0..all.len() {
+                    let mut got = grown.lanes[i].next.clone();
+                    let mut want = whole.lanes[i].next.clone();
+                    got.sort_unstable();
+                    want.sort_unstable();
+                    assert_eq!(got, want, "heading {heading}, split {split}, lane {i}");
+                }
+                assert_eq!(grown.reach, whole.reach);
+                let mut driver = AiState::new(2, 0.0, 7);
+                assert_eq!(driver.choose_after(&grown, 2), Some(3));
+            }
+        }
+    }
+
+    #[test]
+    fn short_forward_paths_keep_gaps_and_overlapping_starts() {
+        for heading in [0.0, 129.0, 309.0] {
+            let a = LaneBuilder::arc(DVec3::ZERO, heading, 30.0, 0.0, 0.0, LaneKind::Street, 3.0);
+            for gap in [-0.4, 0.0, 0.4] {
+                let start = a.end() + heading_dir(heading).extend(0.0) * gap;
+                let b = LaneBuilder::arc(start, heading, 1.0, 0.0, 0.0, LaneKind::Street, 3.0);
+                let mut net = Network { lanes: vec![a.clone(), b], ..Default::default() };
+                net.link(1.5);
+                assert_eq!(net.lanes[0].next, vec![1], "heading {heading}, gap {gap}");
+                let mut driver = AiState::new(0, 0.0, 7);
+                assert_eq!(driver.choose_after(&net, 0), Some(1));
+            }
+            // A sharp, short turn can end behind its entry tangent. When its start
+            // is the joint itself, it has not been passed and remains a valid path.
+            let turn = LaneBuilder::arc(a.end(), heading, 1.0, 0.3, 0.0, LaneKind::Street, 3.0);
+            let mut net = Network { lanes: vec![a, turn], ..Default::default() };
+            net.link(1.5);
+            assert_eq!(net.lanes[0].next, vec![1], "short turn at heading {heading}");
+            let mut driver = AiState::new(0, 0.0, 7);
+            assert_eq!(driver.choose_after(&net, 0), Some(1));
+        }
+    }
+
+    #[test]
+    fn short_merge_paths_and_nonroad_connections_keep_their_existing_links() {
+        // Two approaches end together. The short approach starts behind the long
+        // one's endpoint, but there is no return link and no two-path routing cycle.
+        let a = straight(0.0, 0.0, 30.0, 1, (0, 0));
+        let b = straight(0.0, 29.0, 29.999, 2, (0, 0));
+        let mut net = Network { lanes: vec![a, b], ..Default::default() };
+        net.link(1.5);
+        assert_eq!(net.lanes[0].next, vec![1]);
+        assert!(net.lanes[1].next.is_empty());
+        let mut driver = AiState::new(0, 0.0, 7);
+        assert_eq!(driver.choose_after(&net, 0), Some(1));
+
+        // Short paths whose ends are near each other but do not have the inverse
+        // join also retain their connection.
+        let mut net = Network {
+            lanes: vec![straight(0.0, 0.0, 1.4, 1, (0, 0)), straight(1.4, 0.9, 1.2, 2, (0, 0))],
+            ..Default::default()
+        };
+        net.link(1.5);
+        assert_eq!(net.lanes[0].next, vec![1]);
+        assert!(net.lanes[1].next.is_empty());
+        let mut driver = AiState::new(0, 0.0, 7);
+        assert_eq!(driver.choose_after(&net, 0), Some(1));
+
+        for kind in [LaneKind::Sidewalk, LaneKind::Rail, LaneKind::Air] {
+            let mut all = vec![straight(0.0, 0.0, 0.47, 1, (0, 0)), straight(0.0, 0.47, 1.47, 2, (0, 1))];
+            for l in &mut all { l.kind = kind; }
+            let mut net = Network { lanes: all.clone(), ..Default::default() };
+            net.link(1.5);
+            assert_eq!(net.lanes[0].next, vec![1]);
+            assert_eq!(net.lanes[1].next, vec![0]);
+            let mut driver = AiState::new(1, 0.0, 7);
+            assert_eq!(driver.choose_after(&net, 1), Some(0));
+            let mut grown = Network::default();
+            grown.extend(all[..1].to_vec(), 1.5);
+            grown.extend(all[1..].to_vec(), 1.5);
+            assert_eq!(grown.lanes[0].next, net.lanes[0].next);
+            assert_eq!(grown.lanes[1].next, net.lanes[1].next);
+        }
     }
 
     #[test]
@@ -2059,6 +2183,10 @@ impl AiState {
                         None => nl.density,
                     };
                     nl.allows(self.veh_type) && d > 0.0
+                        // Reject the short return only when the graph links both ways.
+                        // Keep the graph itself intact: reach and upstream route choices
+                        // retain their existing behavior.
+                        && (!nl.next.contains(&lane) || nl.continues_from(l, LINK_TOLERANCE))
                 })
                 .collect()
         };
@@ -3198,6 +3326,36 @@ mod tests {
             car.plan_next(&net);
             assert_eq!(car.planned_next, Some(2), "seed {seed}");
         }
+    }
+
+    #[test]
+    fn rejecting_a_short_return_preserves_reach_and_existing_exit_choices() {
+        // Filter the erroneous driving choice without removing graph links.
+        let a = LaneBuilder::arc(DVec3::ZERO, 0.0, 30.0, 0.0, 0.0, LaneKind::Street, 3.0);
+        let finite = LaneBuilder::arc(a.end(), 10.0, 20.0, 0.0, 0.0, LaneKind::Street, 3.0);
+        let short = LaneBuilder::arc(finite.end(), 10.0, 0.47, 0.0, 0.0, LaneKind::Street, 3.0);
+        let next = LaneBuilder::arc(short.end(), 10.0, 1.0, 0.0, 0.0, LaneKind::Street, 3.0);
+        let exit = LaneBuilder::arc(next.end(), 10.0, 280.0, 0.0, 0.0, LaneKind::Street, 3.0);
+        let on = LaneBuilder::arc(DVec3::new(0.0, 30.0, 0.0), 350.0, 700.0, 0.0, 0.0, LaneKind::Street, 3.0);
+        let mut net = Network { lanes: vec![a, finite, short, next, exit, on], ..Default::default() };
+        net.link(1.5);
+        assert_eq!(net.lanes[0].next.len(), 2);
+        assert!(net.lanes[3].next.contains(&2));
+        assert_eq!(net.reach[1], REACH_MAX);
+        assert!(net.reach[5] >= DEAD_END);
+        let mut at_joint = AiState::new(3, 0.0, 7);
+        assert_eq!(at_joint.choose_after(&net, 3), Some(4));
+        let mut selected = [0; 2];
+        for seed in 1..128 {
+            let mut car = AiState::new(0, 0.0, seed);
+            car.plan_next(&net);
+            match car.planned_next {
+                Some(1) => selected[0] += 1,
+                Some(5) => selected[1] += 1,
+                other => panic!("unexpected exit {other:?}"),
+            }
+        }
+        assert!(selected.iter().all(|&n| n > 0), "an open exit disappeared: {selected:?}");
     }
 
     #[test]

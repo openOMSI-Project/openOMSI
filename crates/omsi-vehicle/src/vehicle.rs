@@ -164,7 +164,7 @@ pub fn parse_attachment(r: &mut omsi_cfg::CfgReader) -> Attachment {
             "attach_trans" => a.ops.push((w, r.f32s::<3>().to_vec())),
             "attach_rot_x" | "attach_rot_y" | "attach_rot_z" => a.ops.push((w, vec![r.f32()])),
             _ => {
-                if omsi_cfg::keyword_of(l).is_some() || r.at_end() {
+                if r.keyword(l).is_some() || r.at_end() {
                     r.seek(save);
                     break;
                 }
@@ -181,7 +181,7 @@ fn parse_axle(r: &mut omsi_cfg::CfgReader) -> Axle {
     // driven, inertia. Read that way, the Golf's wheels are 0.503 m, not the default 1 m
     // that made every AI car's wheels turn at half their speed.
     let first = r.lines().get(r.pos()).map(|l| l.trim().to_string()).unwrap_or_default();
-    if omsi_cfg::keyword_of(&first).is_none() && first.parse::<f32>().is_ok() {
+    if r.keyword(&first).is_none() && first.parse::<f32>().is_ok() {
         let mut vals = Vec::new();
         while vals.len() < 9 && !r.at_end() {
             let save = r.pos();
@@ -223,7 +223,7 @@ fn parse_axle(r: &mut omsi_cfg::CfgReader) -> Axle {
             }
             "achse_inertia_inv" => a.inertia_inv = r.f32(),
             _ => {
-                if omsi_cfg::keyword_of(l).is_some() || r.at_end() {
+                if r.keyword(l).is_some() || r.at_end() {
                     r.seek(save);
                     break;
                 }
@@ -272,7 +272,10 @@ impl Vehicle {
     /// `[rail_body_osc]` (`rail_drive::is_rail` reads the same three; a rail car has all of
     /// a bogie, and Omsi.exe's `[type] 2` marks the same vehicles).
     pub fn is_rail(&self) -> bool {
-        self.boogies.is_some() || !self.contact_shoes.is_empty() || self.rail_body_osc.is_some()
+        matches!(self.kind, VehicleKind::Other(2))
+            || self.boogies.is_some()
+            || !self.contact_shoes.is_empty()
+            || self.rail_body_osc.is_some()
     }
 
     pub fn parse(file: &CfgFile) -> Vehicle {
@@ -405,7 +408,7 @@ impl Vehicle {
 
 /// Content paths name files case-insensitively (a mod writes `[couple_back]` however it
 /// likes, and a case-insensitive file system hands the spelling back unchanged).
-fn same_file(a: &Path, b: &Path) -> bool {
+pub fn same_file(a: &Path, b: &Path) -> bool {
     let (x, y) = (a.canonicalize().unwrap_or_else(|_| a.to_path_buf()), b.canonicalize().unwrap_or_else(|_| b.to_path_buf()));
     x.to_string_lossy().eq_ignore_ascii_case(&y.to_string_lossy())
 }
@@ -422,7 +425,7 @@ pub fn offered_vehicles(files: &[PathBuf]) -> Vec<(PathBuf, Vehicle)> {
         .filter_map(|f| Vehicle::load(f).ok().map(|v| (f.clone(), v)))
         .collect();
     let coupled: Vec<PathBuf> = loaded.iter().filter_map(|(_, v)| v.couple_back_path()).collect();
-    loaded.into_iter().filter(|(f, v)| v.is_selectable() && !(v.coupling_front.is_some() && coupled.iter().any(|c| same_file(c, f)))).collect()
+    loaded.into_iter().filter(|(f, v)| v.is_selectable() && !(!v.is_rail() && v.coupling_front.is_some() && coupled.iter().any(|c| same_file(c, f)))).collect()
 }
 
 /// The vehicles that couple `rear` behind them (`[couple_back]`), looked for in its folder
@@ -682,6 +685,41 @@ mod tests {
         // the player's bus too (#1584): the list's plate, prefix + number where it has none
         assert_eq!(v.chosen_plate_of_number("E1"), "AB12 CDE");
         assert_eq!(v.chosen_plate_of_number("E2"), "B-V E2");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rail_vehicle_is_recognized_by_type_or_rail_features() {
+        let v_type2 = Vehicle::parse(&CfgFile::from_str("train.ovh", "[type]\n2\n"));
+        assert!(v_type2.is_rail());
+
+        let v_bogie = Vehicle::parse(&CfgFile::from_str("tram.ovh", "[boogies]\n5.0\n0\n1\n"));
+        assert!(v_bogie.is_rail());
+
+        let v_bus = Vehicle::parse(&CfgFile::from_str("bus.bus", "[friendlyname]\nMAN\nSD200\nStandard\n"));
+        assert!(!v_bus.is_rail());
+    }
+
+    #[test]
+    fn ai_vehicle_with_indented_friendlyname_is_not_selectable() {
+        let text = "\t[friendlyname]\r\nSolaris\r\nUrbino\r\nWhite\r\n\t[type]\r\n0\r\n";
+        let v = Vehicle::parse(&CfgFile::from_str("test.ovh", text));
+        assert!(!v.is_selectable());
+    }
+
+    #[test]
+    fn rail_vehicles_with_couplings_are_offered() {
+        let dir = std::env::temp_dir().join(format!("omsi-rail-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        // Lead rail car with front and rear couplings
+        std::fs::write(dir.join("Tram_1.ovh"), "[friendlyname]\nTatra\nKT4D\nDefault\n[type]\n2\n[coupling_front]\n0\n5\n0.3\n[coupling_back]\n0\n-5\n0.3\n").unwrap();
+        // Consist vehicle coupling Tram_1
+        std::fs::write(dir.join("Tram_Consist.ovh"), "[couple_back]\nTram_1.ovh\nfalse\n").unwrap();
+        let files = vec![dir.join("Tram_1.ovh"), dir.join("Tram_Consist.ovh")];
+        let offered = offered_vehicles(&files);
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered[0].0.file_name().unwrap(), "Tram_1.ovh");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

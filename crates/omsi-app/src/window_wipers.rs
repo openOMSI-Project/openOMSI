@@ -56,6 +56,9 @@ struct Film {
     wet: Vec<f32>,
     unwiped: f32,
     local: bool,
+    /// A blade has swept this pane: the washer's water lands only on such a one (it wetted
+    /// every window of the bus, #1884).
+    swept: bool,
     image: omsi_texture::Image,
     bounds: [f32; 4],
 }
@@ -228,6 +231,7 @@ impl WindowWipers {
                         wet: vec![wetness; SIZE * SIZE],
                         unwiped: wetness,
                         local: false,
+                        swept: false,
                         image,
                         bounds,
                     });
@@ -279,6 +283,7 @@ impl WindowWipers {
         for film in &mut self.films {
             let liquid = vehicle.host.precip_type != 2.0 || vehicle.host.temperature > 0.0;
             let previous_wetness = film.unwiped;
+            let pane_washer = if film.swept { washer } else { 0.0 };
             if dt > 0.0 {
                 // Gravity follows the pane's actual inclination. Relative airflow can
                 // carry mobile water sideways/upwards; small pinned beads stay put.
@@ -290,8 +295,8 @@ impl WindowWipers {
                 let rain = vehicle.host.precip_rate * (1.0 + normal_air * 0.035).min(2.0);
                 let rate = if !liquid && rain > 0.0 {
                     rain * (0.09 + vehicle.host.precip_rate * 0.10) * SNOW_SETTLING
-                } else if rain > 0.0 || washer > 0.0 {
-                    rain * (0.09 + vehicle.host.precip_rate * 0.10) + washer * 0.8
+                } else if rain > 0.0 || pane_washer > 0.0 {
+                    rain * (0.09 + vehicle.host.precip_rate * 0.10) + pane_washer * 0.8
                 } else if !liquid {
                     0.0 // settled snow neither runs off nor dries in the frost
                 } else {
@@ -330,7 +335,7 @@ impl WindowWipers {
                     let bounds = film.bounds;
                     film.drops.advance(
                         dt,
-                        rain + washer,
+                        rain + pane_washer,
                         pane_project(gravity, bounds[2] < 0.0),
                         air_force,
                         if bounds[2] > 0.0 {
@@ -354,6 +359,11 @@ impl WindowWipers {
                 let dry = !film.local && film.unwiped <= 0.004;
                 let drops = liquid && !film.drops.drops.is_empty();
                 for blade in &self.blades {
+                    // (a dry pane is not wiped, so whether the blade reaches it at all is
+                    // looked at here, while the washer runs)
+                    if !film.swept && washer > 0.0 && vehicle.mesh_props[blade.mesh].visible {
+                        film.swept = blade_reaches(&film.points, blade.current.map(|p| inverse.transform_point3(p)));
+                    }
                     if !vehicle.mesh_props[blade.mesh].visible || (dry && !drops) {
                         continue;
                     }
@@ -374,7 +384,9 @@ impl WindowWipers {
                     for k in 0..steps {
                         let (from, to) = (at(k), at(k + 1));
                         if !dry {
-                            film.local |= wipe(&mut film.wet, &film.points, film.bounds, from, to);
+                            let wiped = wipe(&mut film.wet, &film.points, film.bounds, from, to);
+                            film.local |= wiped;
+                            film.swept |= wiped;
                         }
                         if drops {
                             wipe_drops(film, from, to);
@@ -395,9 +407,11 @@ impl WindowWipers {
                     );
                 }
             }
+            // (painted and uploaded 30 times a second; 15 at a lower rain quality)
+            let every = if crate::rain::quality() >= 2 { 1.0 / 30.0 } else { 1.0 / 15.0 };
             film.paint_time += dt;
-            if film.paint_time >= 1.0 / 30.0 {
-                film.paint_time %= 1.0 / 30.0;
+            if film.paint_time >= every {
+                film.paint_time %= every;
                 if liquid {
                     // Also discard initial seeds which landed outside the mesh's slot.
                     let bounds = film.bounds;
@@ -685,6 +699,17 @@ fn film_points_in_cab(
             1.0 / size.y,
         ],
     ))
+}
+
+/// Whether a blade standing at `blade` (its two ends, in the pane's frame) lies on the pane:
+/// some point of the pane within ten centimetres of it.
+fn blade_reaches(points: &[Vec3], blade: [Vec3; 2]) -> bool {
+    let [a, b] = blade;
+    let len2 = a.distance_squared(b).max(1e-6);
+    points.iter().filter(|p| p.is_finite()).any(|p| {
+        let t = ((*p - a).dot(b - a) / len2).clamp(0.0, 1.0);
+        p.distance_squared(a.lerp(b, t)) < 0.1 * 0.1
+    })
 }
 
 /// Only visit the small rectangle crossed this frame; stationary blades cost no scan.

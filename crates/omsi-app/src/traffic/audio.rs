@@ -9,14 +9,16 @@ impl Traffic {
     /// driving past through the wet sounds like. `muffled`: the listener (the player) sits in
     /// a cabin right now, so every AI car's sound is heard through that bodywork and glass -
     /// a passing car's horn does not simply sound like the street outside once the windows
-    /// are shut.
+    /// are shut. `riding`: the AI bus the player rides in on foot - heard from inside it.
     pub fn update_audio(
         &mut self,
         audio: &omsi_audio::AudioEngine,
         listener: DVec3,
         street_cond: f32,
         muffled: bool,
+        riding: Option<u64>,
     ) {
+        self.update_riding_audio(audio, riding);
         let freed = audio.trim_clips(std::time::Duration::from_secs(60));
         if freed > 0 && omsi_cfg::flags::OMSI_PROFILE.is_set() {
             log::info!(
@@ -30,7 +32,8 @@ impl Traffic {
         let near = 250.0;
         for c in &mut self.sim.cars {
             let d = (c.vehicle.position - listener).length();
-            if d > near * 1.2 {
+            // (the bus ridden in is heard from inside, by `update_riding_audio`)
+            if d > near * 1.2 || riding == Some(c.id) {
                 if let Some(mut s) = self.sounds.remove(&c.id) {
                     s.stop_all(audio);
                 }
@@ -118,6 +121,63 @@ impl Traffic {
                 for (t, f) in &fired_files {
                     ss.play_file_trigger(audio, t, f, &|n| v.var(n), &xf);
                 }
+            }
+        }
+    }
+
+    /// The AI bus ridden in on foot: its full `[sound]` set from inside ([viewpoint] 2, the
+    /// outside sounds through what it has open - its own `Snd_OutsideVol`), instead of its
+    /// `[sound_ai]` heard as from the street (#1286: a passenger heard next to nothing).
+    fn update_riding_audio(&mut self, audio: &omsi_audio::AudioEngine, riding: Option<u64>) {
+        if self.riding_sounds.as_ref().map(|r| r.0) != riding {
+            if let Some((_, mut s)) = self.riding_sounds.take() {
+                s.stop_all(audio);
+            }
+        }
+        let Some(id) = riding else { return };
+        let Some(c) = self.sim.cars.iter_mut().find(|c| c.id == id) else {
+            if let Some((_, mut s)) = self.riding_sounds.take() {
+                s.stop_all(audio);
+            }
+            return;
+        };
+        if let Some(mut s) = self.sounds.remove(&id) {
+            s.stop_all(audio);
+        }
+        if self.riding_sounds.is_none() {
+            let def = &c.vehicle.ty.def;
+            let Some(rel) = def.sound.clone().or_else(|| def.sound_ai.clone()) else { return };
+            let path = omsi_cfg::resolve_path(def.dir(), &rel);
+            let Some(cfg) = self
+                .sound_cfgs
+                .entry(path.clone())
+                .or_insert_with(|| omsi_vehicle::SoundCfg::load(&path).map_err(|e| log::warn!("{e}")).ok().map(Arc::new))
+                .clone()
+            else {
+                return;
+            };
+            let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            if !audio.clips_ready(&omsi_audio::SoundSet::clip_paths(&cfg, &dir)) {
+                return;
+            }
+            let mut ss = omsi_audio::SoundSet::new(audio, &cfg.chosen_for(&c.vehicle.number()), &dir);
+            ss.master = crate::sound_gain(&crate::SOUND_AI);
+            self.riding_sounds = Some((id, ss));
+        }
+        if let Some((_, ss)) = self.riding_sounds.as_mut() {
+            let fired = std::mem::take(&mut c.vehicle.host.fired_triggers);
+            c.vehicle.host.fired_trigger_vars.clear();
+            let fired_files = std::mem::take(&mut c.vehicle.host.fired_file_triggers);
+            let v = &c.vehicle;
+            ss.set_inside(true);
+            ss.set_muffled(true);
+            ss.set_listener_vehicle(true);
+            // (how open this bus is to the street, for its own outside sounds and the traffic's)
+            omsi_audio::soundset::set_outside_open(Some(v.var("Snd_OutsideVol").unwrap_or(0.0)));
+            let xf = v.world_transform();
+            ss.update(audio, &|n| v.var(n), &xf, &fired);
+            for (t, f) in &fired_files {
+                ss.play_file_trigger(audio, t, f, &|n| v.var(n), &xf);
             }
         }
     }

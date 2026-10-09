@@ -81,7 +81,13 @@ impl World {
         let key = (p.tx, p.ty);
         let (tx, ty) = key;
         let (x0, y0) = (tx as f64 * tile_size(), ty as f64 * tile_size());
-        let (ts, hole_rims, wheel_meshes) = self.tile_surface(p, staged, layout, debug_raster);
+        let (mut ts, hole_rims, wheel_meshes) = self.tile_surface(p, staged, layout, debug_raster);
+        // (before the paint is cut: under a road the ground's layer is never asked for)
+        ts.sound = self.ground_sound(p);
+        if omsi_cfg::flags::OMSI_DEBUG_SURFACES.is_set() {
+            let faces: Vec<String> = ts.drive.surface_examples().iter().map(|(id, n, m)| format!("{id}: {n} faces e.g. ({:.0}, {:.0}, {:.1})", x0 + m.x as f64, y0 + m.y as f64, m.z)).collect();
+            log::info!("tile ({tx}, {ty}): wheel faces by surface {}", faces.join(", "));
+        }
         let tile_terrain = self.terrains.read().get(&key).cloned();
         p.hole_walls = tile_terrain
             .as_ref()
@@ -295,13 +301,14 @@ impl World {
                         let dirs = ot.texture_dirs(&self.root);
                         let dirs: Vec<&Path> = dirs.iter().map(|p| p.as_path()).collect();
                         let maps: Vec<_> = ot.meshes.get(k).map(|m| m.1.iter().map(|m| surf_map(&m.texture, &dirs)).collect()).unwrap_or_default();
+                        let ids: Vec<u8> = ot.meshes.get(k).map(|m| m.1.iter().map(|m| surface_id(&m.texture, &dirs)).collect()).unwrap_or_default();
                         ts.add_drive_mesh_surf(
                             mesh,
                             &pose.rot,
                             pose.pos,
                             tx,
                             ty,
-                            omsi_geometry::SurfFaces::of(mesh, &maps).as_ref(),
+                            omsi_geometry::SurfFaces::tagged(mesh, &maps, &ids).as_ref(),
                         );
                         wheel_meshes += 1;
                     }
@@ -400,6 +407,44 @@ fn ground_cut_check(
     }
     check
 }
+
+impl World {
+    /// What the ambience hears of a tile: the surface of its ground layers where they show,
+    /// its trees and how many objects stand on it.
+    fn ground_sound(&self, p: &Prepared) -> omsi_geometry::GroundSound {
+        let root = [self.root.as_path()];
+        let ids: Vec<u8> = self.global.ground_textures.iter().map(|g| surface_id(&g.texture, &root)).collect();
+        // (a map without ground textures is a meadow)
+        let base = ids.first().copied().unwrap_or(4);
+        let layers: Vec<(u8, usize, usize, &[u8])> = p
+            .paint_masks
+            .iter()
+            .filter_map(|(layer, img)| Some((*ids.get(*layer)?, img.width as usize, img.height as usize, img.rgba.as_slice())))
+            .collect();
+        let mut g = omsi_geometry::GroundSound::from_layers(GROUND_SOUND_CELLS, base, &layers);
+        let (x0, y0) = (p.tx as f64 * tile_size(), p.ty as f64 * tile_size());
+        g.trees = p.trees.iter().map(|t| [(t.2.x - x0) as f32, (t.2.y - y0) as f32, t.3 as f32]).collect();
+        g.objects = p.objects.len() as u32;
+        if omsi_cfg::flags::OMSI_DEBUG_SURFACES.is_set() {
+            // where each surface of the ground shows on this tile (a place to try it)
+            let n = g.size;
+            let cell = tile_size() / n as f64;
+            let mut seen: Vec<String> = Vec::new();
+            for id in 0..=8u8 {
+                let cells: Vec<usize> = (0..n * n).filter(|k| g.ids[*k] == id).collect();
+                if let Some(k) = cells.get(cells.len() / 2) {
+                    seen.push(format!("{id}: {:.0} % e.g. ({:.0}, {:.0})", cells.len() as f32 * 100.0 / (n * n) as f32, x0 + (k % n) as f64 * cell + cell / 2.0, y0 + (k / n) as f64 * cell + cell / 2.0));
+                }
+            }
+            log::info!("tile ({}, {}): ground surfaces {}; {} trees, {} objects", p.tx, p.ty, seen.join(", "), g.trees.len(), g.objects);
+        }
+        g
+    }
+}
+
+/// Cells per tile edge of the ground's surface classes (some 5 m on a Berlin tile: the
+/// painted car parks and paths are wider than that).
+const GROUND_SOUND_CELLS: usize = 64;
 
 /// The painted ground layers of a tile without what the roads cut away (`p.paint`), and
 /// the same masks uncut for the walls of the holes (`p.wall_paint`).

@@ -79,6 +79,7 @@ impl TrafficSim {
             target,
             lights_only: false,
             spawn_radius: 400.0,
+            starved_since: None,
             time: 0.0,
             camera: None,
             lights,
@@ -87,6 +88,7 @@ impl TrafficSim {
             root: root.to_path_buf(),
             held_at_red: 0,
             stop_wishes: None,
+            bus_loads: hashbrown::HashMap::new(),
             player_still: 0.0,
             day_time: 0.0,
             time_scale: 1.0,
@@ -124,6 +126,7 @@ impl TrafficSim {
             player_signalling: 0.0,
             way_users: Vec::new(),
             others: Vec::new(),
+            other_blinkers: HashMap::new(),
             tick_split: [0.0; 3],
             others_still: HashMap::new(),
             geo_prev: Vec::new(),
@@ -135,7 +138,10 @@ impl TrafficSim {
             mirror: false,
             count_near: None,
             lan_centers: Vec::new(),
+            lan_eyes: Vec::new(),
             retired: Vec::new(),
+            stats: stats::TrafficStats::from_env(),
+            others_now: Vec::new(),
         };
         t.sort_parked(parked_cars, lanes);
         t

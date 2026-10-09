@@ -41,6 +41,10 @@ pub(super) fn terrain_height(world: &World, x: f64, y: f64) -> Option<f64> {
     ) as f64)
 }
 
+/// How long fewer than half the cars asked for may drive about the player before one is let
+/// appear in view far off (s, see `wake_dormant`).
+const STARVED_AFTER: f32 = 20.0;
+
 impl Traffic {
     /// Is a vehicle of radius `r` at `p` hidden from the viewer by buildings (or a hill)?
     /// Every line of sight to it must be: to its middle, to both ends whichever way it
@@ -118,20 +122,10 @@ impl Traffic {
     /// the mirrors look back, and the head turns: buses appeared 160 m behind the player
     /// in plain sight of the mirrors, and a bus waiting at the edge of the loaded route
     /// vanished beside the player's bus because the camera was looking ahead. Further off:
-    /// beyond what is drawn, out of the picture, or behind something.
+    /// beyond what is drawn, out of the picture, or behind something (`Viewer::hides`). A
+    /// LAN host asks it of every other player's bus too (`TrafficSim::unseen`).
     pub fn hidden(&self, world: &World, p: DVec3, r: f64) -> bool {
-        let Some(v) = self.sim.viewer else { return true };
-        let d = (p - v.pos).length();
-        if d < NEVER_VANISH_WITHIN {
-            return false;
-        }
-        if !v.draws(d, r) {
-            return true;
-        }
-        if d < NEAR_HIDE {
-            return self.occluded(world, &v, p, r);
-        }
-        !v.frames(p, r) || self.occluded(world, &v, p, r)
+        self.sim.unseen(p, r, |v| self.occluded(world, v, p, r))
     }
 
     /// Spawn cars until `target` are within `spawn_radius` of `center`; despawn far ones.
@@ -212,7 +206,8 @@ impl Traffic {
                 && c.stopped > if c.is_bus() { 20.0 } else { 0.5 }
                 && c.state.route.is_empty()
                 && self.sim.net.lanes[c.state.lane].next.is_empty();
-            let from_eye = self.sim.viewer.map(|v| (p - v.pos).length()).unwrap_or(dist);
+            // (the other players of a LAN session look too)
+            let from_eye = self.sim.nearest_eye(p).unwrap_or(dist);
             // a timetable bus waiting where the loaded part of its route ends
             let at_edge = c.route_open()
                 && c.state.speed < 0.1
@@ -411,12 +406,15 @@ impl Traffic {
         let total_w = acc.max(1e-3);
         let mut attempts = 0;
         let counted_near = self.sim.count_near.take();
+        // (a car that has given up counts while it is still on the road: left out, every
+        // car that gave up in a jam was replaced at once while it still stood there, the
+        // new ones queued up behind it and gave up in their turn, and on Spandau the 180
+        // cars asked for grew to 550 within half an hour, the town locked solid)
         let unscheduled = self
             .cars
             .iter()
             .filter(|c| {
                 !c.is_bus()
-                    && !c.gone
                     && counted_near
                         .map(|(p, r)| (c.vehicle.position - p).length() < r)
                         .unwrap_or(true)
@@ -505,10 +503,23 @@ impl Traffic {
         if self.sim.dormant.is_empty() {
             return;
         }
-        let active = self.sim.cars.iter().filter(|c| !c.is_bus() && !c.gone).count();
+        // (those that gave up and still stand on the road count, see `populate_kind`)
+        let active = self.sim.cars.iter().filter(|c| !c.is_bus()).count();
         let mut budget = (target as f32 * 1.25).ceil() as usize;
         budget = budget.saturating_sub(active);
         let centers: Vec<DVec3> = std::iter::once(center).chain(self.sim.lan_centers.iter().copied()).collect();
+        // Open country: nothing within NEAR_HIDE is behind anything, and a car coming along
+        // the road is in plain view from the edge of the range on - it was never woken, and
+        // Grundorf's traffic fell from 19 cars to 1 in three minutes. Starved for a while, a
+        // car is let appear in view, though only farther off than NEAR_HIDE (a few pixels
+        // there), as OMSI puts its cars on the road.
+        let now = self.sim.time;
+        if active * 2 < target {
+            self.sim.starved_since.get_or_insert(now);
+        } else {
+            self.sim.starved_since = None;
+        }
+        let starved = self.sim.starved_since.is_some_and(|t| now - t > STARVED_AFTER);
         let mut i = 0;
         while i < self.sim.dormant.len() && budget > 0 {
             let (p, h, ty) = {
@@ -523,7 +534,7 @@ impl Traffic {
             // the mirror or just round the corner)
             let ok = near
                 && world.has_ground(p.x, p.y)
-                && self.may_appear(world, p)
+                && (self.may_appear(world, p) || starved && self.sim.nearest_eye(p).is_none_or(|d| d > omsi_sim::ai_traffic::viewer::NEAR_HIDE))
                 && !self.sim.cars.iter().any(|c| (c.vehicle.position - p).length() < 14.0)
                 && self.spawn_clear(&ty, p, h);
             if ok {

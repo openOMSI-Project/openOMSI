@@ -8,6 +8,7 @@ use crate::app_events::steps;
 
 mod checks;
 mod picture;
+mod record;
 mod report;
 mod setup;
 mod step;
@@ -77,6 +78,8 @@ struct Offscreen<'a> {
     ground_gap: Option<crate::ground_gap::GroundGap>,
     spray: puddles::Spray,
     real_time: RealTime,
+    /// `OMSI_RECORD`: the film being written (see `record`).
+    recorder: Option<record::Recorder>,
 }
 
 pub(crate) fn run_offscreen(
@@ -91,6 +94,7 @@ pub(crate) fn run_offscreen(
             break;
         }
     }
+    run.finish_recording()?;
     run.finish()
 }
 

@@ -121,6 +121,9 @@ impl App {
     /// The player's duty, the personnel file's step, the placing of vehicles, the host's map
     /// edits and `--on-foot`.
     pub(super) fn frame_duty(&mut self, dt: f32) {
+        if self.session.duty.is_none() {
+            self.session.career.no_trip();
+        }
         if let (Some(d), Some(p), Some(w), false) = (
             self.session.duty.as_mut(),
             self.player.as_mut(),
@@ -151,6 +154,11 @@ impl App {
                 let args = vec![Num(crash as f64 / 1000.0), Num(p.vehicle.physics.velocity_kmh().abs() as f64)];
                 crate::plugins::queue_event(&mut self.integrations.plugin_events, "crash", args);
             }
+        }
+        for j in self.session.career.take_jolts() {
+            use crate::plugins::num_f32;
+            let args = vec![num_f32(j.along), num_f32(j.across), num_f32(j.speed_kmh), omsi_plugin::InfoValue::Num(j.riders as f64)];
+            crate::plugins::queue_event(&mut self.integrations.plugin_events, "jolt", args);
         }
         if !self.paused {
             crate::admin::guard_fall(self, dt);

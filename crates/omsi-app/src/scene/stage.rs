@@ -730,7 +730,7 @@ impl World {
                 };
                 // (every spline the game draws: Omsi.exe asks them all, roads or not)
                 if !heightprofile_ground() {
-                    out.drive.push((shape.clone(), bounds, omsi_geometry::SurfFaces::of(&mesh, &st.surf)));
+                    out.drive.push((shape.clone(), bounds, omsi_geometry::SurfFaces::tagged(&mesh, &st.surf, &st.surface)));
                 }
                 let drivable = st.def.paths.iter().any(|pd| pd.kind == 0 || pd.kind == 1);
                 let overlay = !st.def.profiles.is_empty()

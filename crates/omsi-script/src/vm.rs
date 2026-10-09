@@ -498,7 +498,15 @@ fn exec_cold(s: &mut Stacks, op: &Op, p: &Program, state: &mut State, host: &mut
             s.push(v)
         }
 
-        _ => unreachable!("numeric ops run in exec_hot"),
+        // (every numeric op is exec_hot's: this cannot be reached unless the program's
+        // memory was damaged - it was, once, on an Exynos phone, and the panic ended the
+        // game, #1812; a script that does a step less beats a game that stops)
+        other => {
+            static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                log::error!("script: instruction {other:?} reached the string/host dispatch; skipped");
+            }
+        }
     }
 }
 

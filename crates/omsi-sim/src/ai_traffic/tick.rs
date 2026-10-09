@@ -72,16 +72,19 @@ impl TrafficSim {
             .map(|(i, c)| (c.id, i))
             .collect();
         let debug = omsi_cfg::flags::OMSI_DEBUG_TRAFFIC.is_set();
+        self.stats_before();
         let (by_lane, coming, mut reservations) = self.occupancy();
         self.request_lights(player);
         let walkers = self.walker_requests();
         self.run_light_programs(dt);
         let (others, player_standing) = self.track_players(dt, player);
+        self.others_now = others.iter().map(|o| o.1).collect();
         let t_plan = std::time::Instant::now();
         let mut remove = Vec::new();
         let mut frames: Vec<Option<AiFrame>> = vec![None; self.cars.len()];
         let feet = self.footprints();
         self.break_lead_pairs();
+        self.break_rings();
         let ts = TickScene { dt, debug, player, player_standing, others, feet, by_lane, coming, walkers };
         for (i, frame) in frames.iter_mut().enumerate() {
             match self.plan_car(i, &ts, &mut reservations) {
@@ -99,6 +102,7 @@ impl TrafficSim {
             t_par.elapsed().as_secs_f64(),
         ];
         self.debug_tick(debug, player, &others, &frames);
+        self.stats_after(dt, &remove);
         for i in remove.into_iter().rev() {
             let c = self.cars.swap_remove(i);
             // its sounds stop and the renders go back to the world at the next sync
@@ -210,12 +214,26 @@ impl TrafficSim {
             .flat_map(|c| c.approach.iter().flatten().copied())
             .fold(160.0f32, f32::max)
             .min(1200.0);
+        let mut indicating: Vec<(PlayerBox, u8)> = Vec::new();
         for c in &self.cars {
+            // (a car indicating stands on the paths marked with its turn: the rear sections
+            // of an articulated bus too)
+            if matches!(c.state.blinker, 1 | 2) {
+                let v = &c.vehicle;
+                let bb = v.ty.def.bounding_box.unwrap_or(model::DEFAULT_BOX);
+                indicating.push((light_paths::box_outline(v.position, v.heading, bb, c.state.speed), c.state.blinker as u8));
+                for t in &v.trailers {
+                    if let Some(bb) = t.ty.def.bounding_box {
+                        indicating.push((light_paths::box_outline(t.position, t.heading, bb, c.state.speed), c.state.blinker as u8));
+                    }
+                }
+            }
             for (l, d) in self.way_lanes(&c.state, reach) {
                 if let Some((ci, li)) = self.net.lanes[l].traffic_light {
                     if let Some(ctl) = self.lights.get_mut(ci) {
                         let gap = d - c.state.front;
-                        if gap <= ctl.approach_dist(li) && d > -self.net.lanes[l].length() {
+                        // (asked until its rear has left the lane, not its middle)
+                        if gap <= ctl.approach_dist(li) && d + self.net.lanes[l].length() + c.state.rear >= 0.0 {
                             if let Some(r) = ctl.request.get_mut(li) {
                                 *r = true;
                             }
@@ -232,6 +250,11 @@ impl TrafficSim {
             .map(|p| (p.0, p.1))
             .chain(self.others.iter().map(|(_, b)| (b.0, b.1)))
             .collect();
+        indicating.extend(player.iter().map(|p| (*p, self.player_blinker)));
+        indicating.extend(self.others.iter().map(|(id, b)| (*b, self.other_blinkers.get(id).copied().unwrap_or(0))));
+        for (b, blinker) in &indicating {
+            self.request_indicated(b, *blinker);
+        }
         for &(pos, heading) in &askers {
             // (off the lanes - a depot yard, a car park - a gate's lane that starts just
             // ahead, the way the bus is facing, is asked all the same: standing a few metres
@@ -763,6 +786,7 @@ impl TrafficSim {
                 walkers,
             ),
             None => {
+                self.cars[i].exit_wait = false;
                 let old = std::mem::take(&mut self.cars[i].reserved);
                 for l in old {
                     if let Some(list) = reservations.get_mut(&l) {
@@ -1085,6 +1109,9 @@ impl TrafficSim {
         if (stood > 60.0 && !car.yielding || stood > 150.0) && !car.is_bus() && !car.light_hold && !car.gone
         {
             car.gone = true;
+            if let Some(s) = self.stats.as_mut() {
+                s.window.gave_up += 1;
+            }
             if debug {
                 log::info!(
                     "t={:.1}: car {} stood for {:.0} s: taken off once out of sight",
@@ -1107,6 +1134,13 @@ impl TrafficSim {
             ),
             (true, _) => (why.0, why.1 - car.state.front),
             _ => ("", 0.0),
+        };
+        // whom it stands for (the waits-for graph of `stats`)
+        car.waits_on = match car.why.0 {
+            "lead" | "keep_back" => lead_id,
+            "player" => Some(stats::WAITS_ON_PLAYER),
+            "yield" => car.yield_to,
+            _ => None,
         };
         if car.fresh > 0.0 {
             car.fresh -= dt;

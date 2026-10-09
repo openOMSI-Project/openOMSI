@@ -82,6 +82,13 @@ fn placing_mark() -> PathBuf {
     omsi_launcher_lib::data_dir().join("showroom-placing.txt")
 }
 
+/// The launcher ends in order (closed, or a test's time is up) while a preview is being
+/// placed: that is no hang, and the bus must not be left out of the previews from then on
+/// (a test ended mid-placing put the bus it showed into `showroom-skip.txt`).
+pub(super) fn clear_placing_mark() {
+    let _ = std::fs::remove_file(placing_mark());
+}
+
 fn args_for(look: &Look) -> Args {
     let mut v = vec!["omsi".to_string(), "--root".into(), look.root.to_string_lossy().to_string()];
     if !look.map.is_empty() {

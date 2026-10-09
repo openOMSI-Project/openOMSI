@@ -3,10 +3,12 @@
 
 use super::*;
 
-/// Seconds a car held only by a full exit waits before it squeezes in (see `junction`).
 /// Seconds a car waits at a junction's line before it keeps a claim on its way through
-/// while waiting (see `Traffic::junction`).
-pub const LONG_WAIT_CLAIM: f32 = 45.0;
+/// while waiting (see `TrafficSim::junction_stop`). (45 s once: a side road's queue had
+/// grown long behind the driver by then, and drivers make themselves seen sooner.)
+pub const LONG_WAIT_CLAIM: f32 = 25.0;
+/// Seconds a car held only by a full exit waits before it squeezes in (see
+/// `TrafficSim::junction_stop`).
 pub const GRIDLOCK_WAIT: f32 = 45.0;
 
 /// What `Traffic::weigh_crossings` found at a junction: somebody physically in the way
@@ -20,6 +22,10 @@ pub struct Weighing {
     why: Vec<String>,
     stop_at: Option<f32>,
     contested: bool,
+    /// The first vehicle (by id) found in the way or with the right of way.
+    by: Option<u64>,
+    /// Somebody who has waited long at the line pulls out across this car's way.
+    courtesy: bool,
 }
 
 /// Where a vehicle meets a crossing lane on its way: its lane in the sequence, the distance
@@ -85,11 +91,27 @@ pub fn crossing_arrival(st: &AiState, distance: f32, claimed: bool, waits_short:
     }
 }
 
-/// The nearest vehicle in the part of the chosen exit that must be clear for this car.
+/// Metres of room beyond what it needs that a car waiting for a full exit wants before it
+/// goes (see `TrafficSim::junction_stop`).
+pub const EXIT_HYSTERESIS: f32 = 3.0;
+
+/// Comfortable braking of a vehicle on a junction's exit, for where it will have stopped
+/// (m/s², see `queued_exit_vehicle`).
+pub const EXIT_BRAKE: f32 = 2.0;
+
+/// The nearest vehicle in the part of the chosen exit that must be clear for this car:
+/// (the room left before its rear, its speed, its lane).
 ///
 /// `way` distances are measured from the car's present lane origin; `rear` is measured
 /// from the occupied lane's start. Combining both lets a queue be found across short,
 /// consecutive path objects instead of only on the first lane after a junction.
+/// A vehicle that is still moving counts where it would have stopped braking gently now
+/// (its speed² / 2 `EXIT_BRAKE` further on): a queue crawling along the exit leaves no
+/// more room than one standing there. Counted only once it stood (below 1.5 m/s), a queue
+/// creeping on at walking pace let car after car into a junction they could not leave;
+/// the queue stopped and they stood in the crossing traffic's way, which in its turn
+/// queued back into the junctions before - on Spandau's big junctions the rings of cars
+/// waiting on each other never cleared.
 pub fn queued_exit_vehicle(
     way: &[(usize, f32)],
     exit: (usize, f32),
@@ -108,9 +130,11 @@ pub fn queued_exit_vehicle(
                 .find(|&&(candidate, _)| candidate == lane)
                 .map(|&(_, distance)| distance - exit.1)?;
             let space = offset + rear;
-            (space < need).then_some((space, speed, lane))
+            let will = space + speed.max(0.0).powi(2) / (2.0 * EXIT_BRAKE);
+            (will < need).then_some((will, space, speed, lane))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, space, speed, lane)| (space, speed, lane))
 }
 
 /// A vehicle the AI does not drive, put onto the lanes for the right of way: the street
@@ -387,6 +411,7 @@ impl TrafficSim {
                 let old = std::mem::take(&mut self.cars[i].reserved);
                 release(reservations, &old);
             }
+            self.cars[i].exit_wait = false;
             return None;
         }
         // queued behind someone who is not through the junction yet: no claim
@@ -403,6 +428,13 @@ impl TrafficSim {
         // and the car standing there used to count as one that could not stop any more)
         let cannot_stop = !jn.inside && v > 1.0 && room < v * v / (2.0 * MAX_BRAKE * 0.7);
         let cannot_stop_gently = !jn.inside && v > 1.0 && room < v * v / (2.0 * st.decel * 1.5);
+        // (what is only courtesy - room for the car on the exit, a driver who has waited
+        // long - is given only braking no harder than the driver likes)
+        let cannot_stop_comfortably = !jn.inside && v > 1.0 && room < v * v / (2.0 * st.decel);
+        // (nor, a queue on the exit that only will stand, to a driver who has decided and is
+        // rolling off his line: stopped again for it, the car crept off and stood by turns,
+        // a jolt every few seconds)
+        let started = committed && v > 0.3 && room < 3.0;
         let explain = omsi_cfg::flags::OMSI_DEBUG_JUNCTION.is_set() || omsi_cfg::flags::OMSI_DEBUG_STUCK.is_set();
         let stop_at = if jn.inside { None } else { Some(entry) };
         // A driver who has waited long accepts a shorter gap (the critical gap shrinks with
@@ -410,14 +442,18 @@ impl TrafficSim {
         // of a busy main road stood at the mouth of its side road for minutes.
         let wait = self.cars[i].state.yield_time;
         let patience = 1.0 - (wait / 40.0).min(1.0) / 3.0;
-        let Weighing { hard, mut ruled, soft, mut why, stop_at, contested } =
+        let Weighing { hard, mut ruled, soft, mut why, stop_at, contested, by, courtesy } =
             self.weigh_crossings(i, jn, way, on_lane, coming, reservations, walkers, committed, patience, explain, stop_at);
         // keep the junction clear: the exit must take the whole car
         let ruled_before_exit = ruled;
         let mut exit_full = false;
+        let mut exit_car: Option<u64> = None;
         if !jn.inside {
             if let Some(exit) = jn.exit {
-                let need = st.length + st.min_gap;
+                // (a car waiting for room on the exit goes once there is clearly room: with
+                // the same measure both ways it crept off and stopped again at its line
+                // every few seconds as the queue beyond crawled and stood by turns)
+                let need = st.length + st.min_gap + if self.cars[i].exit_wait { EXIT_HYSTERESIS } else { 0.0 };
                 // A map often builds the road immediately beyond a crossing from several
                 // short path objects. Looking only at the first exit lane then calls the
                 // exit empty while a queue stands on the next 2 m piece, and a car enters
@@ -434,11 +470,23 @@ impl TrafficSim {
                     })
                 });
                 if let Some((space, speed, lane)) = queued_exit_vehicle(way, exit, need, occupied) {
-                    // (only near the crossing, as before: a car far off plans no stop for a
-                    // queue that may well have moved on by the time it gets there)
-                    if speed < 1.5 && space < need && exit.1 < 40.0 {
+                    // (a car within its distance to decide, `decide`, looks across the
+                    // junction however long it is: with the exit taken only within 40 m of
+                    // the car, a big junction's exit came into view when the car could no
+                    // longer stop for it, and it stood in the middle behind the queue)
+                    // (a queue that stands near the junction, as before, at any braking a
+                    // driver calls gentle; one that is about to stand, only if the car can
+                    // stop for it comfortably)
+                    let standing = speed < 1.5 && space < need && exit.1 < 40.0;
+                    let will_stand = space + speed.powi(2) / (2.0 * EXIT_BRAKE) < need && exit.1 - entry < 60.0;
+                    if standing || (will_stand && !cannot_stop_comfortably && !started) {
                         ruled = true;
                         exit_full = true;
+                        // (the last car of that queue on that lane)
+                        exit_car = on_lane
+                            .get(&lane)
+                            .and_then(|v| v.iter().filter(|e| !e.3 && e.0 != i).min_by(|a, b| (a.1 - self.cars[a.0].state.rear).total_cmp(&(b.1 - self.cars[b.0].state.rear))))
+                            .map(|e| self.cars[e.0].id);
                         if explain {
                             why.push(format!("exit {} full on lane {lane} ({space:.1} m)", exit.0));
                         }
@@ -446,8 +494,9 @@ impl TrafficSim {
                 }
             }
         }
-        let mut blocked =
-            (hard && !cannot_stop) || ((ruled || !soft.is_empty()) && !cannot_stop_gently);
+        let mut blocked = (hard && !cannot_stop)
+            || ((ruled || !soft.is_empty()) && !cannot_stop_gently)
+            || (courtesy && !cannot_stop_comfortably && !started);
         // held only by a full exit for long: a ring of queues each waiting for the next
         // junction's exit (round a block) never clears by itself - squeeze in, as drivers do
         // (but only into a junction nobody else needs: stopped in it with its exit still full,
@@ -475,6 +524,11 @@ impl TrafficSim {
                 }
             }
         }
+        // a ring of cars waiting on each other that this one has been chosen to break
+        // (`deadlock`): it goes, as far as its body check lets it
+        if blocked && self.cars[i].deadlock_pass > self.time {
+            blocked = false;
+        }
         let lanes: Vec<usize> = jn.lanes.iter().map(|x| x.0).collect();
         // (and every ten seconds of a long wait)
         let long_wait =
@@ -485,6 +539,13 @@ impl TrafficSim {
         if explain {
             self.cars[i].junction_why = if blocked { format!("{why:?} soft {:?}", soft.iter().map(|&j| self.cars[j].id).collect::<Vec<_>>()) } else { String::new() };
         }
+        let yield_to = if blocked {
+            by.or(exit_car).or_else(|| soft.first().map(|&j| self.cars[j].id))
+        } else {
+            None
+        };
+        self.cars[i].yield_to = yield_to;
+        self.cars[i].exit_wait = blocked && exit_full;
         // A driver who has waited long at the line makes himself seen: he keeps a claim on
         // his way through while still waiting, so the cars not yet committed to the
         // junction hold back for him and he goes once those already on their way are
@@ -571,6 +632,8 @@ impl TrafficSim {
         // somebody on, or coming to, a lane that crosses this car's way through the junction
         // (see the gridlock squeeze below)
         let mut contested = false;
+        let mut by: Option<u64> = None;
+        let mut courtesy = false;
         for &(l, dl) in &jn.lanes {
             for c in &self.net.crossings[l] {
                 let point = dl + c.at;
@@ -635,11 +698,17 @@ impl TrafficSim {
                         || o.crawl >= 8.0
                         || (o.state.speed < 1.5
                             && o.lead_info.is_some_and(|(lid, gap)| gap < 8.0 && self.cars.iter().find(|x| x.id == lid).is_some_and(|x| x.state.speed < 1.0)));
+                    // (one that has waited long at its line keeps a claim on its way while
+                    // it stands, `junction_stop`: that claim counts, standing or not.
+                    // Taken for a stalled car's, it held nobody back - a side road's car
+                    // stood for minutes at a main road whose queue crawled through the
+                    // junction without a gap, every newcomer claiming the way first)
+                    let long_claim = o.yielding && o.state.yield_time > LONG_WAIT_CLAIM && o.wait_at.is_some();
                     let claimed = reservations
                         .get(&m)
                         .map(|r| r.contains(&j))
                         .unwrap_or(false)
-                        && !stalled;
+                        && (!stalled || long_claim);
                     let theirs = dj - c.other_before - o.state.front;
                     // it waits for someone else before this meeting place (a car that gives
                     // way further on still rolls through here on its way to its line)
@@ -661,6 +730,7 @@ impl TrafficSim {
                                 || ((mine_in - theirs_in).abs() <= 0.3 && me_id > o.id));
                         if !ahead {
                             hard = true;
+                            by = by.or(Some(o.id));
                             if explain {
                                 why.push(format!("car {} in the crossing of lanes {l}/{m}", o.id));
                             }
@@ -683,11 +753,23 @@ impl TrafficSim {
                         };
                         if first && t_j < t_clear * if me_decided { 1.0 } else { patience } + 1.0 {
                             hard = true;
+                            by = by.or(Some(o.id));
                             if explain {
                                 why.push(format!("car {} ({}) arrives at {l}/{m} in {t_j:.1} s, this one in {t_mine:.1} s, clear in {t_clear:.1} s [its v {:.2} stood {:.1} crawl {:.1} yielding {} lead {:?} lane {} theirs {:.1}]", o.id, if claimed { "claimed" } else { "on it" }, o.state.speed, o.stopped, o.crawl, o.yielding, o.lead_info, o.state.lane, theirs));
                             }
                             if jn.inside {
                                 stop_at = Some(stop_at.unwrap_or(f32::MAX).min(point - c.before));
+                            }
+                        } else if long_claim && !me_decided && claimed {
+                            // A driver who has waited long at the line pulls out: whoever has
+                            // not decided yet and can still stop gently lets him go, however
+                            // far his way is from the meeting place. By arrival times alone a
+                            // stream at 25 km/h kept a car waiting at the far side of
+                            // Spandau's Rathaus junction for minutes, claim or none.
+                            courtesy = true;
+                            by = by.or(Some(o.id));
+                            if explain {
+                                why.push(format!("car {} has waited {:.0} s at its line for {l}/{m}", o.id, o.state.yield_time));
                             }
                         }
                         continue;
@@ -705,6 +787,7 @@ impl TrafficSim {
                             soft.push(j);
                         } else {
                             ruled = true;
+                            by = by.or(Some(o.id));
                             if explain {
                                 why.push(format!("car {} has the right of way at {l}/{m}, arrives in {t_j:.1} s, clear in {t_clear:.1} s", o.id));
                             }
@@ -722,6 +805,7 @@ impl TrafficSim {
                         Verdict::Free => {}
                         Verdict::Hard => {
                             hard = true;
+                            by = by.or(Some(super::stats::WAITS_ON_PLAYER));
                             if explain {
                                 why.push(format!("the player's vehicle in or at the crossing of lanes {l}/{m} (arrives in {t_j:.1} s, this one is clear in {t_clear:.1} s)"));
                             }
@@ -731,6 +815,7 @@ impl TrafficSim {
                         }
                         Verdict::Ruled => {
                             ruled = true;
+                            by = by.or(Some(super::stats::WAITS_ON_PLAYER));
                             if explain {
                                 why.push(format!("the player's vehicle has the right of way at {l}/{m}, arrives in {t_j:.1} s, clear in {t_clear:.1} s"));
                             }
@@ -761,6 +846,6 @@ impl TrafficSim {
                 }
             }
         }
-        Weighing { hard, ruled, soft, why, stop_at, contested }
+        Weighing { hard, ruled, soft, why, stop_at, contested, by, courtesy }
     }
 }

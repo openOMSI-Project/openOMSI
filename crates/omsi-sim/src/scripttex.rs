@@ -60,6 +60,21 @@ impl ScriptTexture {
         self.color = [0; 4];
     }
 
+    /// Put back a picture saved with a situation (`width` x `height`, RGBA), as if the
+    /// script had drawn it and let it go: a script that redraws only when its texts change
+    /// draws nothing after a load, and the display stayed empty (#1559). A picture of
+    /// another size than the texture's is not taken.
+    pub fn restore(&mut self, width: u32, height: u32, rgba: Vec<u8>) -> bool {
+        if (width, height) != (self.width, self.height) || rgba.len() != (width * height * 4) as usize {
+            return false;
+        }
+        self.rgba = rgba;
+        self.locked = false;
+        self.pending = Some(self.rgba.clone());
+        self.dirty = false;
+        true
+    }
+
     pub fn clear(&mut self) {
         self.rgba.iter_mut().for_each(|b| *b = 0);
         self.dirty = true;
@@ -207,6 +222,16 @@ pub struct FontTable {
 
 #[cfg(test)]
 mod tests {
+
+    /// A picture saved with a situation goes up as the script's own would (#1559).
+    #[test]
+    fn a_saved_picture_goes_up_once_restored() {
+        let mut t = ScriptTexture::new(2, 1);
+        let _ = t.take_upload();
+        assert!(!t.restore(3, 1, vec![0; 12]), "another size is not taken");
+        assert!(t.restore(2, 1, vec![9; 8]));
+        assert_eq!(t.take_upload(), Some(vec![9; 8]));
+    }
     use super::ScriptTexture;
 
     #[test]

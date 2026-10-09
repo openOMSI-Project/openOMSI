@@ -416,7 +416,7 @@ impl World {
             }
             let lamp = object_lamp(&ot, o, pos, &index);
             // lights of the placed object
-            object_lights(&mut state, &ot, pos, xf, lamp);
+            object_lights(&mut state, &ot, pos, xf, lamp, o.key);
             if debug_objects {
                 let kind = match (&o.place, o.map_object) {
                     (Placement::Attached { .. }, _) => "attachObj",
@@ -831,8 +831,38 @@ fn object_lamp(ot: &ObjectType, o: &StagedObject, pos: DVec3, index: &MapIndex) 
     }
 }
 
+/// Legacy pole fixtures can put the virtual `[maplight]` inside the emitting mesh
+/// (Spandau's Ufo Big puts it above the pole cap, inside the head). The source was
+/// authored for an unoccluded light map, not as a bulb hidden behind opaque geometry.
+/// Require a pole, an enclosing emitting mesh, and a directional emitter whose
+/// output surface is in front of the source. A maplight in a pole shaft below the
+/// lamp, or coincident with its output, is not this embedded-head case.
+fn embedded_pole_light(ot: &ObjectType, source: glam::Vec3) -> bool {
+    ot.sco.crash_mode_pole.is_some() && ot.meshes.iter().zip(&ot.mesh_def_index).any(|(mesh, &def)| {
+        let md = &ot.model.meshes[def];
+        md.light_enh_2.iter().any(|effect| {
+            !effect.omni
+                && (source - glam::Vec3::from(effect.pos)).dot(glam::Vec3::from(effect.dir)) < 0.0
+        }) && mesh_encloses_light(&mesh.0, source)
+    })
+}
+
+/// Generalized winding number: an enclosed point subtends a full sphere. This works
+/// with either winding and duplicated seams, unlike a bounding-box containment test.
+fn mesh_encloses_light(mesh: &MeshData, source: glam::Vec3) -> bool {
+    let source = source.as_dvec3();
+    let angle: f64 = mesh.indices.chunks_exact(3).map(|t| {
+        let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize].as_dvec3() - source);
+        2.0 * a.dot(b.cross(c)).atan2(
+            a.length() * b.length() * c.length()
+                + a.dot(b) * c.length() + b.dot(c) * a.length() + c.dot(a) * b.length(),
+        )
+    }).sum();
+    angle.abs() > 2.0 * std::f64::consts::PI
+}
+
 /// The sprites and `[maplight]`s of a placed object.
-fn object_lights(state: &mut TileState, ot: &ObjectType, pos: DVec3, xf: Mat4, lamp: Option<(i64, usize, bool)>) {
+fn object_lights(state: &mut TileState, ot: &ObjectType, pos: DVec3, xf: Mat4, lamp: Option<(i64, usize, bool)>, key: i64) {
     let switches: Mutex<Vec<LightSwitch>> = Mutex::new(Vec::new());
     // (a light gives several sprites: each takes its own light's switch)
     let coronas = model_lights_owned(&ot.model, &|_| xf, pos, &|var| {
@@ -851,6 +881,8 @@ fn object_lights(state: &mut TileState, ot: &ObjectType, pos: DVec3, xf: Mat4, l
             switch: sw,
         });
     }
+    // (the same for every placement of the type: its meshes are walked once)
+    let embedded = ot.embedded_lights.get_or_init(|| ot.sco.map_lights.iter().map(|ml| embedded_pole_light(ot, glam::Vec3::from(ml.pos))).collect());
     for (k, ml) in ot.sco.map_lights.iter().enumerate() {
         if ot.sco.map_lights[..k].iter().any(|o| o.pos == ml.pos && o.color == ml.color && o.radius == ml.radius) {
             continue;
@@ -868,6 +900,7 @@ fn object_lights(state: &mut TileState, ot: &ObjectType, pos: DVec3, xf: Mat4, l
             intensity: 1.0,
             core: ml.radius.max(0.5),
             housed: true,
+            shadow_owner: embedded.get(k).copied().unwrap_or(false).then_some(key),
             ..Default::default()
         });
     }
@@ -916,4 +949,134 @@ pub(super) fn field_height(m: &MeshData, x: f32, y: f32) -> Option<f32> {
         }
     }
     best
+}
+
+#[cfg(test)]
+mod embedded_light_tests {
+    use super::*;
+
+    fn add_cube(mesh: &mut MeshData, size: f32, reverse: bool) {
+        let base = mesh.positions.len() as u32;
+        mesh.positions.extend([
+            glam::Vec3::new(-size, -size, -size), glam::Vec3::new(size, -size, -size),
+            glam::Vec3::new(size, size, -size), glam::Vec3::new(-size, size, -size),
+            glam::Vec3::new(-size, -size, size), glam::Vec3::new(size, -size, size),
+            glam::Vec3::new(size, size, size), glam::Vec3::new(-size, size, size),
+        ]);
+        for mut t in [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4],
+            [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]] {
+            if reverse { t.swap(1, 2); }
+            mesh.indices.extend(t.map(|i| base + i));
+        }
+    }
+
+    fn pole_fixture() -> ObjectType {
+        let mut mesh = MeshData::default();
+        add_cube(&mut mesh, 1.0, false);
+        let emitter = omsi_model::LightEnh2 {
+            pos: [0.0, 0.0, -0.5], dir: [0.0, 0.0, -1.0],
+            color: [255.0; 3], size: 0.5, factor: 1.0,
+            ..Default::default()
+        };
+        ObjectType {
+            sco: SceneryObject {
+                crash_mode_pole: Some((0.02, 0.7)),
+                map_lights: vec![omsi_scenery::sco::MapLight {
+                    pos: [0.0; 3], color: [0.4, 0.7, 0.9], radius: 1.5,
+                }],
+                ..Default::default()
+            },
+            model: Model {
+                // A skipped definition before the loaded mesh exercises def-index mapping.
+                meshes: vec![MeshDef::default(), MeshDef {
+                    light_enh_2: vec![emitter], ..Default::default()
+                }],
+                ..Default::default()
+            },
+            meshes: vec![(mesh, Vec::new(), Vec::new())],
+            mesh_def_index: vec![1],
+            sound_path: Default::default(), model_dir: Default::default(),
+            mesh_visible: vec![None], mesh_pivots: vec![Mat4::IDENTITY],
+            mesh_shadow: vec![false], mesh_casts: vec![true], has_mouse_events: false, program: None,
+            lower_lods: Vec::new(), lod0_min: 0.0, paint_scheme_count: 0,
+            dynamic_textures: Vec::new(), holes: Vec::new(), deform: None,
+            collision: None, paint: false, camera: Default::default(),
+            collision_shape: Default::default(),
+            embedded_lights: Default::default(),
+        }
+    }
+
+    #[test]
+    fn enclosing_geometry_is_not_a_bounding_box_test() {
+        let mut mesh = MeshData::default();
+        add_cube(&mut mesh, 2.0, false);
+        add_cube(&mut mesh, 1.0, true); // A hollow enclosure: its room is air.
+        assert!(!mesh_encloses_light(&mesh, glam::Vec3::ZERO));
+        assert!(mesh_encloses_light(&mesh, glam::Vec3::new(1.5, 0.0, 0.0)));
+        assert!(!mesh_encloses_light(&mesh, glam::Vec3::new(3.0, 0.0, 0.0)));
+        for t in mesh.indices.chunks_exact_mut(3) { t.swap(1, 2); }
+        assert!(mesh_encloses_light(&mesh, glam::Vec3::new(1.5, 0.0, 0.0)));
+        assert!(!mesh_encloses_light(&mesh, glam::Vec3::ZERO));
+    }
+
+    #[test]
+    fn only_enclosed_sources_behind_a_directional_pole_emitter_are_selected() {
+        let mut fixture = pole_fixture();
+        assert!(embedded_pole_light(&fixture, glam::Vec3::ZERO));
+        for no_map_lighting in [false, true] {
+            fixture.sco.no_map_lighting = no_map_lighting;
+            assert!(embedded_pole_light(&fixture, glam::Vec3::ZERO),
+                "nomaplighting is not a shadow exemption");
+        }
+        for source in [glam::Vec3::new(0.0, 0.0, -0.75), // Inside, in front of emitter.
+            glam::Vec3::new(0.0, 0.0, -0.5), // Coincident with emitter.
+            glam::Vec3::new(0.0, 0.0, 2.0)] { // Behind emitter, outside geometry.
+            assert!(!embedded_pole_light(&fixture, source), "source {source:?}");
+        }
+        fixture.sco.crash_mode_pole = None;
+        assert!(!embedded_pole_light(&fixture, glam::Vec3::ZERO));
+        fixture = pole_fixture();
+        fixture.model.meshes[1].light_enh_2[0].omni = true;
+        assert!(!embedded_pole_light(&fixture, glam::Vec3::ZERO));
+        fixture = pole_fixture();
+        fixture.model.meshes[1].light_enh_2[0].dir = [0.0; 3];
+        assert!(!embedded_pole_light(&fixture, glam::Vec3::ZERO));
+        fixture = pole_fixture();
+        fixture.model.meshes[1].light_enh_2.clear();
+        assert!(!embedded_pole_light(&fixture, glam::Vec3::ZERO));
+        fixture = pole_fixture();
+        fixture.mesh_def_index[0] = 0;
+        assert!(!embedded_pole_light(&fixture, glam::Vec3::ZERO),
+            "an emitter on another mesh does not qualify this mesh");
+        fixture = pole_fixture();
+        fixture.meshes[0].0.indices.clear();
+        assert!(!embedded_pole_light(&fixture, glam::Vec3::ZERO));
+        fixture = pole_fixture();
+        add_cube(&mut fixture.meshes[0].0, 0.25, true);
+        assert!(!embedded_pole_light(&fixture, glam::Vec3::ZERO),
+            "a source in enclosed air does not qualify");
+    }
+
+    #[test]
+    fn placing_embedded_and_exterior_sources_preserves_light_parameters() {
+        let mut fixture = pole_fixture();
+        let mut outside = fixture.sco.map_lights[0].clone();
+        outside.pos = [0.0, 0.0, 2.0];
+        fixture.sco.map_lights.push(outside);
+        let mut state = TileState::default();
+        let position = DVec3::new(10.0, 20.0, 30.0);
+        let transform = Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2);
+        object_lights(&mut state, &fixture, position, transform, None, 123);
+        assert_eq!(state.lights.len(), 2);
+        assert_eq!(state.lights[0].shadow_owner, Some(123));
+        assert_eq!(state.lights[1].shadow_owner, None);
+        for (placed, source) in state.lights.iter().zip(&fixture.sco.map_lights) {
+            assert_eq!(placed.position,
+                position + transform.transform_point3(glam::Vec3::from(source.pos)).as_dvec3());
+            assert_eq!(placed.core, source.radius);
+            assert_eq!(placed.radius, source.radius * 6.0);
+            assert_eq!(placed.color, source.color);
+            assert_eq!(placed.intensity, 1.0);
+        }
+    }
 }

@@ -20,6 +20,42 @@ pub(crate) fn process_cpu_seconds() -> Option<f64> {
     Some(days * 86400.0 + secs)
 }
 
+/// The CPU time the calling thread has used (s): what the frame's own work costs, whatever
+/// else the machine runs meanwhile - wall-clock stage times grow with every other busy
+/// program, a thread's CPU time hardly.
+pub(crate) fn thread_cpu_seconds() -> Option<f64> {
+    #[cfg(unix)]
+    {
+        let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        // SAFETY: `ts` is a valid timespec for the call to fill.
+        if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) } == 0 {
+            return Some(ts.tv_sec as f64 + ts.tv_nsec as f64 * 1e-9);
+        }
+        None
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+/// The instructions the process has retired (macOS): the work done, counted the same however
+/// busy the machine is and whichever cores ran it - CPU times grow when other programs push
+/// the game's threads onto the efficiency cores.
+pub(crate) fn process_instructions() -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut info: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
+        // SAFETY: `info` is a rusage_info_v4 for the call to fill, as RUSAGE_INFO_V4 says.
+        let r = unsafe { libc::proc_pid_rusage(std::process::id() as i32, libc::RUSAGE_INFO_V4, &mut info as *mut _ as *mut libc::rusage_info_t) };
+        (r == 0).then_some(info.ri_instructions)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 pub(crate) fn shift_held_now(keys: &hashbrown::HashSet<KeyCode>) -> bool {
     keys.contains(&KeyCode::ShiftLeft) || keys.contains(&KeyCode::ShiftRight)
 }
@@ -417,8 +453,25 @@ pub(crate) fn under_gamescope() -> bool {
     std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some() || std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.to_ascii_lowercase().contains("gamescope"))
 }
 
+/// The screen the game opens on: the one the launcher stands on (`OMSI_SCREEN_AT`, the
+/// launcher's middle), else the main one (#1959: it always opened on the main screen).
+pub(crate) fn home_monitor(event_loop: &winit::event_loop::ActiveEventLoop) -> Option<winit::monitor::MonitorHandle> {
+    let at = omsi_cfg::flags::OMSI_SCREEN_AT.var().and_then(|v| {
+        let (x, y) = v.split_once(',')?;
+        Some((x.trim().parse::<i32>().ok()?, y.trim().parse::<i32>().ok()?))
+    });
+    at.and_then(|(x, y)| {
+        event_loop.available_monitors().find(|m| {
+            let (p, s) = (m.position(), m.size());
+            x >= p.x && y >= p.y && x < p.x + s.width as i32 && y < p.y + s.height as i32
+        })
+    })
+    .or_else(|| event_loop.primary_monitor())
+    .or_else(|| event_loop.available_monitors().next())
+}
+
 pub(crate) fn fit_window(event_loop: &winit::event_loop::ActiveEventLoop, w: f64, h: f64) -> (winit::dpi::LogicalSize<f64>, Option<winit::dpi::PhysicalPosition<i32>>) {
-    let Some(m) = event_loop.primary_monitor().or_else(|| event_loop.available_monitors().next()) else {
+    let Some(m) = home_monitor(event_loop) else {
         return (winit::dpi::LogicalSize::new(w, h), None);
     };
     let (screen, scale) = (m.size(), m.scale_factor().max(0.5));

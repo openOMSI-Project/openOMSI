@@ -191,7 +191,7 @@ fn ibis_line_number(v: &omsi_sim::VehicleInstance) -> Option<String> {
 /// `IBIS_LinieKurs`, the IBIS's number without its letter, a pick made 92E into 92 on the
 /// IBIS and the matrix. Not `SetLineTo` on any other bus: no script of its own writes it,
 /// only an earlier pick, so a line typed on the IBIS since went back to that pick's.
-fn destination_line(v: &omsi_sim::VehicleInstance) -> String {
+pub(crate) fn destination_line(v: &omsi_sim::VehicleInstance) -> String {
     let blind = crate::schedule::has_roller_blind(v).then(|| v.str_var("SetLineTo"));
     [Some(v.str_var("Matrix_Nr")), blind]
         .into_iter()
@@ -941,6 +941,7 @@ pub(crate) fn run_move(app: &mut App, kind: &ListKind, action: &str, mv: Move) -
                 Some((pos, heading)) => {
                     crate::admin::teleport(app, pos, heading);
                     app.service_msg = Some(("The bus stands at the start point".into(), 3.0));
+                    app.service_event("teleport", app.menu_by(), None);
                 }
                 None => app.service_msg = Some(("That start point is not in the map".into(), 3.0)),
             }
@@ -1569,6 +1570,7 @@ fn toggle_now(app: &App, id: &str) -> Option<bool> {
         "mouse" => app.input.mouse_drive,
         "mouse_right" => s.mouse_right_off,
         "mouse_smooth" => s.mouse_smooth,
+        "mouse_hold" => s.mouse_hold,
         "blinker_cancel" => s.blinker_cancel,
         "fps" => s.show_fps,
         "get_up" => s.get_up,
@@ -1698,6 +1700,11 @@ fn toggle_set(app: &mut App, id: &str, on: bool) -> Option<(&'static str, String
         "mouse_smooth" => {
             app.settings.mouse_smooth = on;
             Some(("mouse_smooth", bit))
+        }
+        "mouse_hold" => {
+            app.settings.mouse_hold = on;
+            app.sync_mouse_grab();
+            Some(("mouse_hold", bit))
         }
         "get_up" => {
             app.settings.get_up = on;
@@ -2225,6 +2232,7 @@ fn same_value(a: &str, b: &str) -> bool {
 fn select_options(key: &str) -> Vec<(&'static str, &'static str)> {
     match key {
         "cloud_quality" => vec![("high", "High"), ("low", "Low")],
+        "rain_quality" => vec![("high", "High"), ("medium", "Medium"), ("low", "Low")],
         "graphics" => vec![("vanilla", "Vanilla (as OMSI 2)"), ("vanilla_plus", "Vanilla+"), ("enhanced", "Enhanced"), ("enhanced_plus", "Enhanced+")],
         "msaa" => vec![("1", "Off"), ("2", "2x MSAA"), ("4", "4x MSAA"), ("8", "8x MSAA")],
         "render_scale" => vec![("auto", "Auto"), ("1", "100%"), ("0.85", "85%"), ("0.75", "75%"), ("0.67", "67%"), ("0.5", "50%")],
@@ -2373,6 +2381,7 @@ fn options_pages(app: &App) -> Vec<Page> {
         switch_row(app, "clouds", "Clouds", later),
         pick("cloud_quality", "Cloud quality", "Enhanced: the volumetric clouds marched in fewer steps - faster, a little grainier")
             .filter(|_| matches!(crate::settings::graphics_mode(&app.settings.graphics), "enhanced" | "enhanced_plus") && app.settings.clouds),
+        pick("rain_quality", "Rain quality", "Lower is faster: the drops on the glass painted less often, less spray and fewer streaks; Low shows OMSI 2's own rain on the glass (from the next bus loaded)"),
         switch_row(app, "windy_trees", "Windy trees", "The trees' leaves bend and sway in the wind and its gusts; with no wind they stand still"),
     ]
         .into_iter()
@@ -2530,6 +2539,7 @@ fn options_pages(app: &App) -> Vec<Page> {
         slider_row(app, "mouse_sens", "Mouse steering sensitivity", "Adjust how much the steering wheel turns based on mouse movement", &pct),
         slider_row(app, "mouse_pedal_strength", "Mouse pedal strength", "Adjust how much mouse travel is needed to reach full throttle or braking", &|v| if (v - 1.0).abs() < 0.01 { "OMSI".to_string() } else { format!("{:.0}%", v * 100.0) }),
         switch_row(app, "mouse_smooth", "Smooth mouse steering", "The wheel eases after the cursor; off: it follows at once, as in OMSI"),
+        switch_row(app, "mouse_hold", "Hold the cursor while steering", "The wheel reaches its lock past the window's edges; off: the crosshair stays free and without delay, as in OMSI"),
         switch_row(app, "steering_linear", "Steering linearity (keys at OMSI's steady pace)", "Keyboard steering at OMSI's steady pace"),
         switch_row(app, "old_steering", "Old Steering (the wheel stays, turn it back yourself)", "The wheel stays where the keys left it"),
         switch_row(app, "red_steer_spd", "Dynamic steering (slower keys at speed, OMSI's redSteerSpd)", "The steering keys act slower at speed"),
@@ -2926,8 +2936,10 @@ fn switch_driver(app: &mut App, name: &str) {
     }
     let rel = format!("Drivers/{name}.odr");
     let mut next = crate::career::Career::load(&app.args.root, &rel);
-    // (the distance and the clock of the run go on; the counters start with the new file)
+    // (the distance and the clock of the run go on; the counters start with the new file;
+    // the bus's motion and the trip driven go on)
     next.seconds = app.session.career.seconds;
+    next.go_on_from(&mut app.session.career);
     app.session.career = next;
     app.args.driver = Some(rel);
     app.service_msg = Some((format!("Driver: {name}"), 3.0));

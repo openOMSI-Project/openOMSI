@@ -104,16 +104,20 @@ pub(crate) struct Layouter<'a> {
 impl<'a> Layouter<'a> {
     pub(crate) fn tw(&self, s: &str, px: f32, bold: bool) -> f32 {
         let font = if bold { self.bold } else { self.reg };
-        let sf = font.as_scaled(PxScale::from(px));
+        let sc = PxScale::from(px);
         let mut w = 0.0;
         let mut prev = None;
         for c in s.chars() {
-            let id = font.glyph_id(c);
-            if let Some(p) = prev {
-                w += sf.kern(p, id);
-            }
-            w += sf.h_advance(id);
-            prev = Some(id);
+            face_for(font, bold, c, |face, id, fi| {
+                let sf = face.as_scaled(sc);
+                if let Some((p, pf)) = prev {
+                    if pf == fi {
+                        w += sf.kern(p, id);
+                    }
+                }
+                w += sf.h_advance(id);
+                prev = Some((id, fi));
+            });
         }
         w
     }

@@ -19,6 +19,17 @@ pub struct ControlNames {
     spellings: HashMap<String, String>,
 }
 
+/// How far the scan of the installed buses' scripts is (`scan_script_actions`), and the
+/// actions it found since the last update with the bus file each came from.
+#[derive(Clone, Debug, Default)]
+pub struct ScriptActionScanUpdate {
+    pub done: usize,
+    pub total: usize,
+    pub current: String,
+    pub discovered: Vec<(String, String)>,
+    pub complete: bool,
+}
+
 impl ControlNames {
     /// Read the key assignment texts of `lang` from the installation (and the mods' copies).
     pub fn load(root: &Path, lang: &str) -> ControlNames {
@@ -66,6 +77,42 @@ impl ControlNames {
         }
         log::info!("control names: {} texts in {lang}", texts.len());
         ControlNames { lang, texts, spellings }
+    }
+
+    /// The actions OMSI's key assignment dialog can show, paired with their readable names.
+    pub fn actions(&self) -> Vec<(String, String)> {
+        let mut actions: Vec<_> = self.texts.iter()
+            .map(|(action, label)| (action.clone(), label.clone()))
+            .collect();
+        actions.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()).then_with(|| a.0.cmp(&b.0)));
+        actions
+    }
+
+    /// Trigger names compiled from every installed vehicle's scripts, including mod buses.
+    /// Progress updates carry each action's bus-file provenance as it is found.
+    pub fn scan_script_actions(mut report: impl FnMut(ScriptActionScanUpdate)) {
+        let mut buses = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for vehicles in omsi_cfg::content_dirs("Vehicles") {
+            for pack in omsi_cfg::vfs::read_dir_paths(&vehicles) {
+                if !omsi_cfg::vfs::is_dir(&pack) {
+                    continue;
+                }
+                for path in omsi_cfg::vfs::read_dir_paths(&pack) {
+                    let is_vehicle = path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("bus") || ext.eq_ignore_ascii_case("ovh"));
+                    if !is_vehicle {
+                        continue;
+                    }
+                    let key = path.strip_prefix(&vehicles).unwrap_or(&path).to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+                    if seen.insert(key) {
+                        let source = vehicle_source(&path, &vehicles);
+                        buses.push((path, source));
+                    }
+                }
+            }
+        }
+        buses.sort_by_key(|b| b.1.to_lowercase());
+        scan_bus_scripts(buses, &mut report);
     }
 
     /// The same names from a table (tests).
@@ -141,6 +188,98 @@ impl ControlNames {
             return humanize(mesh_stem);
         }
         translate(mesh_stem)
+    }
+}
+
+fn scan_bus_scripts(
+    buses: Vec<(std::path::PathBuf, String)>,
+    report: &mut impl FnMut(ScriptActionScanUpdate),
+) {
+    let mut trigger_cache: HashMap<String, Vec<String>> = HashMap::new();
+    let mut pending = Vec::new();
+    let total = buses.len();
+    if total == 0 {
+        report(ScriptActionScanUpdate { complete: true, ..Default::default() });
+        return;
+    }
+    for (index, (bus, source)) in buses.into_iter().enumerate() {
+        let done = index + 1;
+        let mut source_name = source.clone();
+        if let Ok(vehicle) = omsi_vehicle::Vehicle::load(&bus) {
+            let friendly = [vehicle.manufacturer.trim(), vehicle.type_name.trim()]
+                .into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
+            if !friendly.is_empty() {
+                source_name = format!("{source} ({friendly})");
+            }
+            let scripts = &vehicle.scripts.scripts;
+            let key = scripts.iter().map(|p| p.to_string_lossy().to_ascii_lowercase()).collect::<Vec<_>>().join("\0");
+            let actions = trigger_cache.entry(key).or_insert_with(|| script_triggers(scripts));
+            pending.extend(actions.iter().cloned().map(|action| (action, source_name.clone())));
+        }
+        let current = source_name;
+        if done % 8 == 0 || done == total {
+            report(ScriptActionScanUpdate {
+                done,
+                total,
+                current,
+                discovered: std::mem::take(&mut pending),
+                complete: done == total,
+            });
+        }
+    }
+}
+
+fn vehicle_source(path: &Path, vehicles: &Path) -> String {
+    path.strip_prefix(vehicles).unwrap_or(path).to_string_lossy().replace('\\', "/")
+}
+
+fn script_triggers(scripts: &[std::path::PathBuf]) -> Vec<String> {
+    omsi_script::compile(&omsi_script::CompileInput { scripts: scripts.to_vec(), ..Default::default() }).trigger_names()
+}
+
+#[cfg(test)]
+mod script_action_tests {
+    use super::*;
+
+    #[test]
+    fn discovers_custom_triggers_from_a_bus_script() {
+        let dir = std::env::temp_dir().join(format!(
+            "openomsi_key_actions_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let vehicles = dir.join("Vehicles");
+        assert_eq!(
+            vehicle_source(&vehicles.join("VehiclePack/Vehicle.bus"), &vehicles),
+            "VehiclePack/Vehicle.bus",
+        );
+        let omsi_root = dir.join("OMSI");
+        assert_eq!(
+            vehicle_source(&omsi_root.join("Vehicles/DefaultBus/default.bus"), &omsi_root.join("Vehicles")),
+            "DefaultBus/default.bus",
+        );
+        let bus = dir.join("Vehicle.bus");
+        std::fs::write(&bus, "[script]\n1\nmain.osc\n").unwrap();
+        std::fs::write(
+            dir.join("main.osc"),
+            "{trigger:cruise_control_toggle}\n{end}\n{trigger:ivu_ticket_cancel}\n{end}\n",
+        ).unwrap();
+
+        let mut updates = Vec::new();
+        scan_bus_scripts(
+            vec![(bus, "VehiclePack/Vehicle.bus".into())],
+            &mut |update| updates.push(update),
+        );
+        assert_eq!(updates.len(), 1);
+        assert!(updates[0].complete);
+        assert_eq!((updates[0].done, updates[0].total), (1, 1));
+        assert_eq!(updates[0].current, "VehiclePack/Vehicle.bus");
+        assert_eq!(updates[0].discovered, [
+            ("cruise_control_toggle".into(), "VehiclePack/Vehicle.bus".into()),
+            ("ivu_ticket_cancel".into(), "VehiclePack/Vehicle.bus".into()),
+        ]);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 

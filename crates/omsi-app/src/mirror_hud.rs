@@ -447,8 +447,9 @@ impl MirrorHud {
         }
     }
 
-    /// Add the panels' pictures to the frame's overlays (after the HUD's and the
-    /// interface's, so that their indices stay put). `w` and `h` are the window's size.
+    /// Add the panels' pictures to the frame's overlays (after the navigator's and the
+    /// plugins' panels, before the notes and the menus, which record their own indices as
+    /// they are drawn). `w` and `h` are the window's size.
     pub fn push(&self, scene: &mut Scene, world: &World, w: f32, h: f32, cursor: (f32, f32)) {
         if !self.active() {
             return;

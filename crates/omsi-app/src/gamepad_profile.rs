@@ -123,8 +123,14 @@ pub(crate) fn default_action(b: Button) -> Option<&'static str> {
         Button::DPadRight => "blinker_right_toggle",
         Button::DPadUp => "view_interiorcam_plus",
         Button::DPadDown => "view_interiorcam_minus",
+<<<<<<< HEAD
         Button::Start => "sim_pause",
         Button::Select => "screenshot",
+=======
+        // (the menu button opens the main menu, as Esc does: a pad has no Esc)
+        Button::Start => "open_menu",
+        Button::Select => "sim_pause",
+>>>>>>> c4738ed6f43f11b4c06ead299af7ac74280d5c5b
         Button::RightThumb => "view_reset_all_directions",
         _ => return None,
     })
@@ -143,8 +149,13 @@ pub(crate) fn action_text(action: &str) -> &'static str {
         "blinker_right_toggle" => "Right indicator",
         "view_interiorcam_plus" => "Next interior camera",
         "view_interiorcam_minus" => "Previous interior camera",
+<<<<<<< HEAD
         "sim_pause" => "Pause",
         "screenshot" => "Screenshot",
+=======
+        "open_menu" => "Open / close the main menu",
+        "sim_pause" => "Pause",
+>>>>>>> c4738ed6f43f11b4c06ead299af7ac74280d5c5b
         "view_reset_all_directions" => "Reset all view directions",
         _ => "",
     }
@@ -154,6 +165,10 @@ pub(crate) fn action_text(action: &str) -> &'static str {
 /// DualSense as a generic game controller, which gilrs - XInput only there - never sees):
 /// the buttons as the HID descriptor numbers them from 0, and the first hat after
 /// `controllers::HAT_BUTTONS` as up, right, down, left. Triggers are axes and not listed.
+<<<<<<< HEAD
+=======
+#[cfg_attr(not(windows), allow(dead_code))]
+>>>>>>> c4738ed6f43f11b4c06ead299af7ac74280d5c5b
 pub(crate) fn sony_direct_input_button(n: usize, hat_base: usize) -> Option<Button> {
     if n >= hat_base {
         return match n - hat_base {
@@ -214,6 +229,24 @@ mod tests {
         }
     }
 
+<<<<<<< HEAD
+=======
+    /// The menu button opens the main menu (a pad has no Esc), and every default reaches the
+    /// game or the bus: a game action, a gear, a door or the indicators.
+    #[test]
+    fn the_menu_button_opens_the_menu_and_every_default_is_handled() {
+        assert_eq!(default_action(Button::Start), Some("open_menu"));
+        for b in PRESET_BUTTONS {
+            let a = default_action(b).unwrap();
+            let handled = crate::input_script::is_game_action(a)
+                || a.starts_with("gear_")
+                || a.starts_with("blinker_")
+                || crate::player::door_action(a).is_some();
+            assert!(handled, "{a}");
+        }
+    }
+
+>>>>>>> c4738ed6f43f11b4c06ead299af7ac74280d5c5b
     #[test]
     fn sony_buttons_through_direct_input() {
         assert_eq!(sony_direct_input_button(1, 128), Some(Button::South));

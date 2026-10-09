@@ -181,6 +181,11 @@ pub struct Settings {
     /// How finely the enhanced graphics' volumetric clouds are marched: `high` (the default)
     /// or `low`, the same clouds in fewer steps (`Lighting::low_clouds`).
     pub cloud_quality: String,
+    /// How much the rain costs to draw: `high` (the default: the drops on the glass painted
+    /// 30 times a second, every vehicle's spray, the full curtain of falling streaks),
+    /// `medium` (the glass 15 times a second, the player's spray only, half the streaks) or
+    /// `low` (OMSI 2's own texture rain on the glass, no spray, a quarter of the streaks).
+    pub rain_quality: String,
     /// Windy trees: the trees' foliage bends and sways in the weather's wind and its gusts
     /// (above the trunk only; with no wind nothing moves).
     pub windy_trees: bool,
@@ -294,6 +299,11 @@ pub struct Settings {
     /// The mouse steering's wheel and pedals ease after the cursor (~60 ms); off, they follow
     /// it at once, as in Omsi.exe (#1092).
     pub mouse_smooth: bool,
+    /// The cursor is caught while the mouse steers, so the wheel reaches its full lock at any
+    /// speed (0.2.17). Off: the system's crosshair cursor stays free and shows where the mouse
+    /// steers without the frame's delay, and the window's edges are the lock, as in OMSI
+    /// (#1948).
+    pub mouse_hold: bool,
     /// How fast the view turns for the mouse's way while looking round (1 = Omsi.exe's
     /// field of view / 78.75 degrees per pixel in the views of the bus; #859).
     pub look_sens: f32,
@@ -410,7 +420,11 @@ impl Settings {
     }
     /// The defaults of a computer.
     fn desktop() -> Self {
+<<<<<<< HEAD
         Self { msaa: 4, anisotropy: 8, ssao: true, shadows: true, shadow_size: 2048, shadow_blobs: true, navigator: true, ui_opacity: 0.85, notes: true, ui_scale: 1.0, ui_scale_window: true, navigator_corner: "bottom-left".into(), boarding: "auto".into(), detail_textures: true, exact_fare: true, enhanced: false, graphics: "vanilla_plus".into(), triple: Default::default(), triple_span: true, triple_hud_center: true, vr: false, vr_scale: 0.65, vr_head_smoothing_ms: 0.0, vr_mirror_rate: 16.0, vr_desktop_mirror: true, fullscreen: false, vsync: true, volume: 0.6, drive_keys: "simple".into(), post_aa: "fxaa".into(), render_scale: 0.0, language: "ENG".into(), pax_voices: "all".into(), nav_arrows: false, nav_ai: true, get_up: false, texture_compression: true, gpu_texture_compression: true, texture_memory: 0, auto_clutch: true, momentary_gears: false, auto_shift: false, min_obj_size: 0.013, max_obj_dist: -1.0, max_fps: 0, chat: true, chat_size: 1.0, tooltips: true, name_tags: true, show_fps: false, clouds: true, cloud_quality: "high".into(), windy_trees: true, pax_density: 1.0, vol_ai: 1.0, vol_scenery: 1.0, mirror_size: 256, mirror_hud: 0, mirror_refresh: "full".into(), doppler: true, driver: true, maintenance: 0, ai_unsched_factor: 1.0, ai_max_scheduled: 0, ai_max_parked: 0, ai_max_humans: 200, ai_wait_timed_stops_only: false, collision_vehicles: true, collision_objects: true, collision_pedestrians: true, head_movement: true, driverview_smooth: true, hands_in_cab: false, alt_view: true, precision_zoom: false, time_speed: 1.0, time_sync: false, metar_sync: false, metar_station: String::new(), machine_translation: false, shadow_casters: "all".into(), ctrl_deadzone: 0.0, right_stick_look: true, pad_steer_smooth: 120.0, pad_steer_linear: false, pad_steer_speed: 2.0, pad_deadzone: 0.08, pad_type: "auto".into(), pad_buttons: true, arrows_switch_cams: false, ctrl_off: String::new(), steering_linear: false, old_steering: false, red_steer_spd: false, reflections: true, led_glow: 6, led_mips: 1.3, night_brightness: 0.0, mouse_sens: 1.0, mouse_pedal_strength: 1.0, graphics_api: "auto".into(), ff_invert: false, ff_enabled: true, ff_road_vib: 1.0, ff_engine_vib: 1.0, ff_fade: 0.28, brake_hold: true, mouse_steering: false, mouse_right_off: false, mouse_smooth: true, look_sens: 1.0, look_smoothing_ms: 0.0, blinker_cancel: true, wheel_range: 900.0, wheel_lock: 0.0, fov: 0.0, camera_collision: true, steer_look: false, steer_look_angle: 30.0, steer_look_response: 0.25, head_idle: 0.0, head_idle_pace: 1.0, pedal_throttle: 1.0, pedal_brake: 1.0, seat: [0.0; 3], seat_pitch_deg: 0.0, head_tracking: false, head_tracking_port: 4242, head_tracking_invert: String::new(), head_tracking_yaw_sens: 100.0, head_tracking_pitch_sens: 100.0, head_tracking_roll_sens: 100.0, head_tracking_x_sens: 100.0, head_tracking_y_sens: 100.0, head_tracking_z_sens: 100.0, head_tracking_invert_yaw: false, head_tracking_invert_pitch: false, head_tracking_invert_roll: false, head_tracking_invert_x: false, head_tracking_invert_y: false, head_tracking_invert_z: false, discord_status: true, discord_app_id: String::new(), voice_chat: true, info_bar: false }
+=======
+        Self { msaa: 4, anisotropy: 8, ssao: true, shadows: true, shadow_size: 2048, shadow_blobs: true, navigator: true, ui_opacity: 0.85, notes: true, ui_scale: 1.0, ui_scale_window: true, navigator_corner: "bottom-left".into(), boarding: "auto".into(), detail_textures: true, exact_fare: true, enhanced: false, graphics: "vanilla_plus".into(), triple: Default::default(), triple_span: true, triple_hud_center: true, vr: false, vr_scale: 0.65, vr_head_smoothing_ms: 0.0, vr_mirror_rate: 16.0, vr_desktop_mirror: true, fullscreen: false, vsync: true, volume: 0.6, drive_keys: "simple".into(), post_aa: "fxaa".into(), render_scale: 0.0, language: "ENG".into(), pax_voices: "all".into(), nav_arrows: false, nav_ai: true, get_up: false, texture_compression: true, gpu_texture_compression: true, texture_memory: 0, auto_clutch: true, momentary_gears: false, auto_shift: false, min_obj_size: 0.013, max_obj_dist: -1.0, max_fps: 0, chat: true, chat_size: 1.0, tooltips: true, name_tags: true, show_fps: false, clouds: true, cloud_quality: "high".into(), rain_quality: "high".into(), windy_trees: true, pax_density: 1.0, vol_ai: 1.0, vol_scenery: 1.0, mirror_size: 256, mirror_hud: 0, mirror_refresh: "full".into(), doppler: true, driver: true, maintenance: 0, ai_unsched_factor: 1.0, ai_max_scheduled: 0, ai_max_parked: 0, ai_max_humans: 200, ai_wait_timed_stops_only: false, collision_vehicles: true, collision_objects: true, collision_pedestrians: true, head_movement: true, driverview_smooth: true, hands_in_cab: false, alt_view: true, precision_zoom: false, time_speed: 1.0, time_sync: false, metar_sync: false, metar_station: String::new(), machine_translation: false, shadow_casters: "all".into(), ctrl_deadzone: 0.0, right_stick_look: true, pad_steer_smooth: 120.0, pad_steer_linear: false, pad_steer_speed: 2.0, pad_deadzone: 0.08, pad_type: "auto".into(), pad_buttons: true, arrows_switch_cams: false, ctrl_off: String::new(), steering_linear: false, old_steering: false, red_steer_spd: false, reflections: true, led_glow: 6, led_mips: 1.3, night_brightness: 0.0, mouse_sens: 1.0, mouse_pedal_strength: 1.0, graphics_api: "auto".into(), ff_invert: false, ff_enabled: true, ff_road_vib: 1.0, ff_engine_vib: 1.0, ff_fade: 0.28, brake_hold: true, mouse_steering: false, mouse_right_off: false, mouse_smooth: true, mouse_hold: true, look_sens: 1.0, look_smoothing_ms: 0.0, blinker_cancel: true, wheel_range: 900.0, wheel_lock: 0.0, fov: 0.0, camera_collision: true, steer_look: false, steer_look_angle: 30.0, steer_look_response: 0.25, head_idle: 0.0, head_idle_pace: 1.0, pedal_throttle: 1.0, pedal_brake: 1.0, seat: [0.0; 3], seat_pitch_deg: 0.0, head_tracking: false, head_tracking_port: 4242, head_tracking_invert: String::new(), head_tracking_yaw_sens: 100.0, head_tracking_pitch_sens: 100.0, head_tracking_roll_sens: 100.0, head_tracking_x_sens: 100.0, head_tracking_y_sens: 100.0, head_tracking_z_sens: 100.0, head_tracking_invert_yaw: false, head_tracking_invert_pitch: false, head_tracking_invert_roll: false, head_tracking_invert_x: false, head_tracking_invert_y: false, head_tracking_invert_z: false, discord_status: true, discord_app_id: String::new(), voice_chat: true, info_bar: false }
+>>>>>>> c4738ed6f43f11b4c06ead299af7ac74280d5c5b
     }
 }
 
@@ -585,6 +599,7 @@ impl Settings {
                 "show_fps" | "fps" => s.show_fps = b(v),
                 "clouds" => s.clouds = b(v),
                 "cloud_quality" => s.cloud_quality = cloud_quality(v).into(),
+                "rain_quality" => s.rain_quality = rain_quality(v).into(),
                 "windy_trees" => s.windy_trees = b(v),
                 "pax_density" | "aipassfactor" => s.pax_density = v.trim_end_matches('%').parse::<f32>().map(|x| if x > 5.0 { x / 100.0 } else { x }).map(|x| x.clamp(0.0, 3.0)).unwrap_or(s.pax_density),
                 "vol_ai" => s.vol_ai = v.parse::<f32>().map(|x| x.clamp(0.0, 1.0)).unwrap_or(s.vol_ai),
@@ -645,6 +660,7 @@ impl Settings {
                 "mouse_steering" => s.mouse_steering = b(v),
                 "mouse_right_off" => s.mouse_right_off = b(v),
                 "mouse_smooth" => s.mouse_smooth = b(v),
+                "mouse_hold" => s.mouse_hold = b(v),
                 "mouse_pedal_strength" => {
                     s.mouse_pedal_strength = v
                         .parse::<f32>()
@@ -755,6 +771,7 @@ impl Settings {
         text.push_str(&format!("right_stick_look={}\n", self.right_stick_look as u8));
         text.push_str(&format!("pad_steer_smooth={}\n", self.pad_steer_smooth));
         text.push_str(&format!("pad_steer_linear={}\n", self.pad_steer_linear as u8));
+<<<<<<< HEAD
         text.push_str(&format!("pad_steer_speed={}
 ", self.pad_steer_speed));
         text.push_str(&format!("pad_deadzone={}
@@ -763,10 +780,17 @@ impl Settings {
 ", self.pad_type));
         text.push_str(&format!("pad_buttons={}
 ", self.pad_buttons as u8));
+=======
+        text.push_str(&format!("pad_steer_speed={}\n", self.pad_steer_speed));
+        text.push_str(&format!("pad_deadzone={}\n", self.pad_deadzone));
+        text.push_str(&format!("pad_type={}\n", self.pad_type));
+        text.push_str(&format!("pad_buttons={}\n", self.pad_buttons as u8));
+>>>>>>> c4738ed6f43f11b4c06ead299af7ac74280d5c5b
         text.push_str(&format!("arrows_switch_cams={}\n", self.arrows_switch_cams as u8));
         text.push_str(&format!("voice_chat={}\n", self.voice_chat as u8));
         text.push_str(&format!("windy_trees={}\n", self.windy_trees as u8));
         text.push_str(&format!("cloud_quality={}\n", self.cloud_quality));
+        text.push_str(&format!("rain_quality={}\n", self.rain_quality));
         text.push_str(&format!("gpu_texture_compression={}\n", self.gpu_texture_compression as u8));
         text
     }
@@ -862,6 +886,15 @@ pub fn cloud_quality(v: &str) -> &'static str {
     if v.trim().eq_ignore_ascii_case("low") { "low" } else { "high" }
 }
 
+/// The rain's quality from a settings file: `medium` or `low`, else `high`.
+pub fn rain_quality(v: &str) -> &'static str {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "medium" => "medium",
+        "low" => "low",
+        _ => "high",
+    }
+}
+
 /// `view_distance=<metres>` of the settings file: how far around the camera the map's tiles
 /// are kept loaded (OMSI's "visible distance"). None when the file does not say.
 pub fn view_distance() -> Option<f64> {
@@ -886,6 +919,20 @@ mod tests {
         let d = Settings::default();
         assert_eq!((game.msaa, game.anisotropy, game.ssao, game.shadow_size, game.texture_memory), (d.msaa, d.anisotropy, d.ssao, d.shadow_size, d.texture_memory));
         assert_eq!((&game.mirror_refresh, game.gpu_texture_compression, &game.cloud_quality), (&d.mirror_refresh, d.gpu_texture_compression, &d.cloud_quality));
+    }
+
+    /// The gamepad's settings are kept and held in their ranges (a type it does not know
+    /// is `auto`).
+    #[test]
+    fn gamepad_settings_round_trip_and_are_clamped() {
+        let d = Settings::default();
+        assert_eq!((d.pad_steer_speed, d.pad_deadzone, d.pad_type.as_str(), d.pad_buttons), (2.0, 0.08, "auto", true));
+        let s = Settings::from_text("pad_steer_speed=3.5\npad_deadzone=0.15\npad_type=PS5\npad_buttons=0\n");
+        let back = Settings::from_text(&s.to_text());
+        assert_eq!((back.pad_steer_speed, back.pad_deadzone, back.pad_type.as_str(), back.pad_buttons), (3.5, 0.15, "ps5", false));
+        let wild = Settings::from_text("pad_steer_speed=0\npad_deadzone=9\npad_type=switch\n");
+        assert_eq!((wild.pad_steer_speed, wild.pad_deadzone, wild.pad_type.as_str()), (0.8, 0.4, "auto"));
+        assert_eq!(Settings::from_text("pad_steer_speed=99\n").pad_steer_speed, 5.0);
     }
 
     /// The enhanced clouds' quality is kept, `high` unless the file says `low`.
@@ -926,6 +973,12 @@ pad_type=switch
         assert_eq!(Settings::from_text("cloud_quality=auto\n").cloud_quality, "high");
         assert_eq!(Settings::from_text("cloud_quality=LOW\n").cloud_quality, "low");
         assert_eq!(Settings::from_text("cloud_quality=broken\n").cloud_quality, "high");
+        assert_eq!(Settings::default().rain_quality, "high");
+        for q in ["high", "medium", "low"] {
+            let s = Settings::from_text(&format!("rain_quality={q}\n"));
+            assert_eq!(Settings::from_text(&s.to_text()).rain_quality, q);
+        }
+        assert_eq!(Settings::from_text("rain_quality=ultra\n").rain_quality, "high");
     }
 
     /// The information bar is as the last session left it (#1164); off at first.

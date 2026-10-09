@@ -89,6 +89,10 @@ impl App {
             }
             return;
         }
+        // a plugin's message to the same plugin here (`lan.send`)
+        if self.plugin_lan_message(from, text) {
+            return;
+        }
         crate::admin::command(self, from, text);
     }
 

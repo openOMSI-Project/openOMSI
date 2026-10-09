@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please do not open a public issue for a security problem. Report it privately through
-GitHub instead: **[Report a vulnerability](https://github.com/openOMSI-Project/openOMSI/security/advisories/new)**
+GitHub instead: **[Report a vulnerability](https://github.com/openOMSI-org/openOMSI/security/advisories/new)**
 (the *Security* tab of the repository). Only the maintainers see it.
 
 Say what is affected, how to reproduce it, and what an attacker could do with it. A small
@@ -32,4 +32,4 @@ Examples of what we want to hear about:
 
 Not a vulnerability: a plugin (Lua, or an OMSI plugin's DLL) doing harm - plugins run with the game's rights
 by design, so install only plugins you trust - and a content file that only makes the game
-crash, which is a normal bug and goes into an [issue](https://github.com/openOMSI-Project/openOMSI/issues/new/choose).
+crash, which is a normal bug and goes into an [issue](https://github.com/openOMSI-org/openOMSI/issues/new/choose).

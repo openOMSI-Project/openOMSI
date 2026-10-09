@@ -21,7 +21,7 @@ if not exist "dist\windows" mkdir "dist\windows"
 copy /y "target\%TARGET%\release\openomsi.exe" "dist\windows\openomsi.exe" >nul || goto :failed
 copy /y "target\%TARGET%\release\openomsi-launcher.exe" "dist\windows\openomsi-launcher.exe" >nul || goto :failed
 rem (the release package also carries Google's ANGLE - libEGL.dll, libGLESv2.dll and
-rem LICENSE-ANGLE.txt from openOMSI-Project/angle-openomsi, see .github/workflows/release.yml -
+rem LICENSE-ANGLE.txt from openOMSI-org/angle-openomsi, see .github/workflows/release.yml -
 rem for the "ANGLE (DirectX 11)" graphics API; startup::backend_order skips it without them)
 rem (Steam's library, x64 only: an ARM64 build has no Steam, see crates\omsi-app\build.rs)
 if /i "%TARGET%"=="x86_64-pc-windows-msvc" copy /y "assets\steam_redist\steam_api64.dll" "dist\windows\steam_api64.dll" >nul || goto :failed

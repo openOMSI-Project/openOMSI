@@ -21,6 +21,7 @@ impl Offscreen<'_> {
         self.lan_step();
         self.surroundings_step();
         self.snapshot_step(t_s)?;
+        self.record_step(i, t_s)?;
         Ok(true)
     }
 
@@ -332,6 +333,9 @@ impl Offscreen<'_> {
         let crash = steps::career_step(career, player, riders, duty.is_some(), dt, true);
         if crash > 0.0 {
             log::warn!("crash: {:.0} kJ", crash / 1000.0);
+        }
+        for j in career.take_jolts() {
+            log::info!("plugin event: jolt {j:?}");
         }
         if i < drive_frames {
             self.drive_step(i, t_s);
@@ -722,6 +726,9 @@ impl Offscreen<'_> {
                     log::warn!("{hurt} pedestrian(s) knocked down");
                 }
             }
+            for (name, price) in h.take_sales() {
+                log::info!("plugin event: ticket_sold {} {price}", name.trim());
+            }
             if std::mem::take(&mut h.stop_request) {
                 if let Some(p) = player.as_mut() {
                     p.vehicle.trigger("int_haltewunsch");
@@ -833,90 +840,28 @@ impl Offscreen<'_> {
                 .map(|c| c.position)
                 .or(player.as_ref().filter(|_| args.cam.is_none()).map(|p| p.vehicle.position))
                 .unwrap_or(camera.position);
-            steps::throw_spray(spray, dt, player.as_ref(), traffic.as_ref(), remotes_off, eye, steps::spray_wind(weather), world, spray_wet);
+            steps::throw_spray(spray, dt, player.as_ref(), traffic.as_ref(), remotes_off, eye, steps::spray_wind(weather), world, spray_wet, crate::rain::quality());
         }
         *wetness = crate::weather_setup::road_wetness(precip_of(weather).1, dt as f64, *wetness);
     }
 
     /// A snapshot due at `t_s` (`--snapshots`).
     fn snapshot_step(&mut self, t_s: f32) -> Result<()> {
-        let (args, out, w, h, dt, wetness) = (self.args, self.out, self.w, self.h, self.dt, self.wetness);
-        let Self {
-            ref run_clock,
-            ref cabin_air,
-            ref mut snapshot_times,
-            ref mut traffic,
-            ref world,
-            ref mut renderer,
-            ref mut scene,
-            ref mut sim_view,
-            ref camera,
-            ref mut player,
-            ref settings,
-            ref mut humans_off,
-            ref envir,
-            ref weather,
-            ref remotes_off,
-            ref spray,
-            ..
-        } = *self;
+        let (args, out, w, h, dt) = (self.args, self.out, self.w, self.h, self.dt);
         // mid-run snapshots (relative to the first overtake with --follow auto)
+        let traffic = self.traffic.as_ref();
         let auto_base = match args.follow.as_deref() {
-            Some("auto") => traffic.as_ref().and_then(|t| t.last_overtaker).map(|o| o.1),
-            Some("turn") => traffic.as_ref().and_then(|t| t.first_turner).map(|o| o.1),
-            Some("red") => traffic.as_ref().and_then(|t| t.first_red).map(|o| o.1),
-            Some("yield") => traffic.as_ref().and_then(|t| t.first_yield).map(|o| o.1),
-            Some("pass") => traffic.as_ref().and_then(|t| t.first_passer).map(|o| o.1),
+            Some("auto") => traffic.and_then(|t| t.last_overtaker).map(|o| o.1),
+            Some("turn") => traffic.and_then(|t| t.first_turner).map(|o| o.1),
+            Some("red") => traffic.and_then(|t| t.first_red).map(|o| o.1),
+            Some("yield") => traffic.and_then(|t| t.first_yield).map(|o| o.1),
+            Some("pass") => traffic.and_then(|t| t.first_passer).map(|o| o.1),
             _ => Some(0.0),
         };
-        if let (Some(&ts), Some(base)) = (snapshot_times.first(), auto_base) {
+        if let (Some(&ts), Some(base)) = (self.snapshot_times.first(), auto_base) {
             if t_s + dt > ts + base {
-                snapshot_times.remove(0);
-                if let Some(t) = traffic.as_mut() {
-                    view_sync::sync(ViewSync::traffic(t), sim_view, world, renderer, scene);
-                }
-                let mut cam = *camera;
-                if let Some(p) = player.as_mut() {
-                    pose_player(p, renderer, scene, args, settings);
-                    if args.cam.is_none() && args.view != "free" && args.follow.is_none() {
-                        // the head turned as --look says, like the final image
-                        cam = player_view(args, settings, p, camera, world);
-                    }
-                    vehicle_camera(p, &mut cam);
-                }
-                if let Some(id) = follow_id(args, traffic.as_ref()) {
-                    if let Some(c) = follow_camera(traffic.as_ref(), id) {
-                        cam = c;
-                    }
-                }
-                if let Some(h) = humans_off.as_mut() {
-                    view_sync::sync(ViewSync::people(h, None, cam.position), sim_view, world, renderer, scene);
-                }
-                // the time of day of this moment, and its lights: street lamps by night and
-                // the vehicles' own (indicators, brake and tail lights) as they are now -
-                // without them a snapshot showed no vehicle light at all
-                let daylight = omsi_sim::Daylight::compute(run_clock, envir.as_ref());
-                steps::world_lamps(world, renderer, scene, run_clock, &daylight, true, true);
-                {
-                    let vehicles = steps::light_vehicles(player.as_ref(), traffic.as_ref(), remotes_off);
-                    world_lights(renderer, world, scene, weather, &daylight, cam.position, &vehicles);
-                }
-                spray.sprites(cam.position, &mut scene.smoke);
-                let driven = player.as_ref().map(|p| &p.vehicle);
-                let lighting = steps::picture_lighting(
-                    &daylight,
-                    Some(weather),
-                    cloud_drift_at(weather, run_clock.time),
-                    wetness,
-                    Some(world),
-                    driven,
-                    driven,
-                    cabin_air.appearance(),
-                    settings,
-                    run_clock.run_time as f32,
-                );
-                world.finish_texture_upgrades(renderer, scene);
-                let pixels = renderer.render_to_image(scene, w, h, &cam, &lighting)?;
+                self.snapshot_times.remove(0);
+                let (pixels, cam) = self.picture_now()?;
                 let path = out.with_file_name(format!(
                     "{}_{ts:.1}.png",
                     out.file_stem().and_then(|s| s.to_str()).unwrap_or("snap")
@@ -925,9 +870,10 @@ impl Offscreen<'_> {
                 if omsi_cfg::flags::OMSI_BLEND_AB.is_set() {
                     // the same moment with the blended draws in the old order (by origin
                     // distance only), for a before/after picture of the draw order
-                    renderer.blend_by_origin = true;
-                    let old = renderer.render_to_image(scene, w, h, &cam, &lighting)?;
-                    renderer.blend_by_origin = false;
+                    self.renderer.blend_by_origin = true;
+                    let lighting = self.lighting_now(&cam);
+                    let old = self.renderer.render_to_image(&mut self.scene, w, h, &cam, &lighting)?;
+                    self.renderer.blend_by_origin = false;
                     image::save_buffer(
                         path.with_extension("old.png"),
                         &old,

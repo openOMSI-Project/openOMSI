@@ -227,6 +227,14 @@ impl Renderer {
             let v: [f32; 4] = [(lx - ro.x) as f32, (ly - ro.y) as f32, side as f32, if side > 0.0 { 1.0 } else { 0.0 }];
             self.queue.write_buffer(&self.lm_uniform, 0, bytemuck::cast_slice(&v));
         }
+        {
+            let v = &lighting.vanilla_sky;
+            let u = VanillaSkyUniform {
+                cloud: [v.cloud_height, v.cloud_size, v.cloud_offset[0], v.cloud_offset[1]],
+                haze: [v.fog_range, v.visibility, if v.overcast { 1.0 } else { 0.0 }, ro.z as f32],
+            };
+            self.queue.write_buffer(&self.vanilla_sky_buf, 0, bytemuck::bytes_of(&u));
+        }
         let cu = CameraUniform {
             post: [
                 if enhanced { 1.0 } else { 0.0 },
@@ -337,6 +345,21 @@ impl Renderer {
                 self.tree_gust_drift.set((drift, now));
                 let wind = if lighting.windy_trees { lighting.wind.truncate() } else { glam::Vec2::ZERO };
                 [wind.x, wind.y, drift.x as f32, drift.y as f32]
+            },
+            inside2_a: match lighting.puddle_parts.first() {
+                Some((o, h, _)) => {
+                    let r = (*o - ro).as_vec3();
+                    [r.x, r.y, r.z, (*h as f32).to_radians().sin()]
+                }
+                None => [0.0; 4],
+            },
+            inside2_b: match lighting.puddle_parts.first() {
+                Some((_, h, bb)) => [(*h as f32).to_radians().cos(), bb[0] * 0.5, bb[1] * 0.5, bb[2] * 0.5],
+                None => [1.0, 0.0, 0.0, 0.0],
+            },
+            inside2_c: match lighting.puddle_parts.first() {
+                Some((_, _, bb)) if lighting.inside.is_some() => [bb[3], bb[4], bb[5], 1.0],
+                _ => [0.0; 4],
             },
         };
         self.queue

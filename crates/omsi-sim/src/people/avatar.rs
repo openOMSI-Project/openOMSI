@@ -45,6 +45,82 @@ pub struct SeatSpot {
     pub seat: usize,
 }
 
+/// How near a walker comes to a seat (the sitter's hip point) or the driver's place, m.
+const SEAT_CLEARANCE: f32 = 0.38;
+
+/// A step from `from` to `to` (cabin x, y) kept `SEAT_CLEARANCE` from every point of `solid`:
+/// slid round the ones it would come too near (walking away from one that close is let be).
+/// None where no such place is near (wedged between two).
+/// (A step that came too near was refused whole: on a double-decker's upper deck, whose seats
+/// stand 0.46 m either side of the aisle, a walker a few centimetres off its middle - as one
+/// comes off the stairs - could not move along it at all.)
+fn clear_of_seats(from: glam::Vec2, to: glam::Vec2, solid: &[glam::Vec2]) -> Option<glam::Vec2> {
+    let mut xy = to;
+    for _ in 0..3 {
+        let mut pushed = false;
+        for &c in solid {
+            let (dn, d0) = ((xy - c).length(), (from - c).length());
+            if dn < SEAT_CLEARANCE - 1e-4 && dn < d0 {
+                // out to the clearance, on the side the walker comes from
+                let away = if dn > 1e-4 { (xy - c) / dn } else { (from - c).normalize_or(glam::Vec2::X) };
+                xy = c + away * SEAT_CLEARANCE;
+                pushed = true;
+            }
+        }
+        if !pushed {
+            return Some(xy);
+        }
+    }
+    // (still too near one after sliding off the others: stay)
+    solid.iter().all(|&c| (xy - c).length() >= SEAT_CLEARANCE - 1e-3 || (xy - c).length() >= (from - c).length()).then_some(xy)
+}
+
+#[cfg(test)]
+mod seat_clearance_tests {
+    use super::*;
+    use glam::Vec2;
+
+    /// The SD202's upper deck: seats 0.46 m either side of the aisle. A walker 0.17 m off its
+    /// middle walking back slides along the seat beside it instead of standing still.
+    #[test]
+    fn a_walker_slides_along_a_seat_instead_of_stopping() {
+        let seats = [Vec2::new(0.46, 2.185), Vec2::new(-0.46, 1.962)];
+        let mut at = Vec2::new(0.19, 2.53);
+        for _ in 0..40 {
+            at = clear_of_seats(at, at + Vec2::new(0.0, -0.03), &seats).expect("a way past");
+        }
+        assert!(at.y < 1.5, "stuck at {at}");
+        for s in seats {
+            assert!((at - s).length() >= SEAT_CLEARANCE - 1e-3);
+        }
+    }
+
+    /// Straight into a seat: kept off it, not through it.
+    #[test]
+    fn a_seat_is_not_walked_through() {
+        let seat = Vec2::new(0.0, 1.0);
+        let mut at = Vec2::new(0.0, 0.0);
+        for _ in 0..60 {
+            at = clear_of_seats(at, at + Vec2::new(0.0, 0.03), &[seat]).unwrap_or(at);
+        }
+        assert!((at - seat).length() >= SEAT_CLEARANCE - 1e-3, "{at}");
+        // and away from it again freely
+        let back = clear_of_seats(at, at - Vec2::new(0.0, 0.03), &[seat]);
+        assert_eq!(back, Some(at - Vec2::new(0.0, 0.03)));
+    }
+
+    /// Between two seats closer together than twice the clearance: no way through.
+    #[test]
+    fn too_narrow_a_gap_holds_the_walker() {
+        let seats = [Vec2::new(-0.3, 1.0), Vec2::new(0.3, 1.0)];
+        let mut at = Vec2::new(0.0, 0.5);
+        for _ in 0..40 {
+            at = clear_of_seats(at, at + Vec2::new(0.0, 0.03), &seats).unwrap_or(at);
+        }
+        assert!(at.y < 1.0 - 0.1, "{at}");
+    }
+}
+
 impl PeopleSim {
     /// Put avatar `key` where `cmd` says (made on its first call, of figure `kind`).
     pub fn avatar(&mut self, key: u32, world: &dyn World, cmd: AvatarCmd, kind: u64) {
@@ -255,13 +331,8 @@ impl PeopleSim {
         // (on the walker's deck: the seats under a staircase, or the upper deck's over the
         // aisle below, stopped the walker where nothing stands)
         let from = local.truncate();
-        let solid = bn.cabin.seats.iter().filter(|s| s.seated && (s.floor.z - local.z).abs() < 0.45).map(|s| s.pos.truncate()).chain(bn.cabin.data.driver_positions.iter().filter(|d| (d.pos[2] - (local.z + 0.4)).abs() < 1.0).map(|d| glam::Vec2::new(d.pos[0], d.pos[1])));
-        for c in solid {
-            let (dn, d0) = ((xy - c).length(), (from - c).length());
-            if dn < 0.38 && dn < d0 {
-                return Some((local, bn.world(local)));
-            }
-        }
+        let solid: Vec<glam::Vec2> = bn.cabin.seats.iter().filter(|s| s.seated && (s.floor.z - local.z).abs() < 0.45).map(|s| s.pos.truncate()).chain(bn.cabin.data.driver_positions.iter().filter(|d| (d.pos[2] - (local.z + 0.4)).abs() < 1.0).map(|d| glam::Vec2::new(d.pos[0], d.pos[1]))).collect();
+        let Some(xy) = clear_of_seats(from, xy, &solid) else { return Some((local, bn.world(local))) };
         let l = Vec3::new(xy.x, xy.y, z);
         Some((l, bn.world(l)))
     }

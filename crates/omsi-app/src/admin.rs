@@ -126,7 +126,10 @@ fn host_action(app: &mut App, action: &str, by: Option<u32>) {
         "goto" => {
             let at = app.net.remotes.remotes.get(&id.unwrap_or(0)).map(|r| (r.vehicle().position, r.vehicle().heading));
             match (at, by) {
-                (Some((pos, heading)), None) => teleport_beside(app, pos, heading),
+                (Some((pos, heading)), None) => {
+                    teleport_beside(app, pos, heading);
+                    app.service_event("teleport", "player", None);
+                }
                 _ => app.service_msg = Some(("That player has no bus to go to".into(), 3.0)),
             }
         }
@@ -208,7 +211,7 @@ fn host_action(app: &mut App, action: &str, by: Option<u32>) {
                 }
             }
             if who == "all" {
-                app.run_service(kind);
+                app.run_service(kind, if by.is_some() { "host" } else { "player" });
             }
         }
         "unstick" => {
@@ -340,6 +343,7 @@ pub(crate) fn command(app: &mut App, from: u32, text: &str) {
             if v.len() == 4 {
                 teleport(app, glam::DVec3::new(v[0], v[1], v[2]), v[3]);
                 app.service_msg = Some(("The host brought you to them".into(), 4.0));
+                app.service_event("teleport", "host", None);
             }
         }
         // (host → us) the host's object editor: a map object moved, turned or deleted…
@@ -379,7 +383,7 @@ pub(crate) fn command(app: &mut App, from: u32, text: &str) {
         "service" if from == 1 => {
             let kind = arg.trim();
             if matches!(kind, "repair" | "refuel" | "wash") {
-                app.run_service(kind);
+                app.run_service(kind, "host");
                 app.service_msg = Some((format!("The host: {kind}"), 3.0));
             }
         }
@@ -388,6 +392,7 @@ pub(crate) fn command(app: &mut App, from: u32, text: &str) {
                 let (at, heading) = (p.vehicle.position, p.vehicle.heading);
                 teleport(app, at, heading);
                 app.service_msg = Some(("The host put your bus back on its wheels".into(), 4.0));
+                app.service_event("reset", "host", None);
             }
         }
         // (server → us) the password was right: the menu is ours
@@ -731,6 +736,7 @@ pub(crate) fn guard_fall(app: &mut App, dt: f32) {
             log::warn!("the bus fell through the world at ({:.1}, {:.1}, {:.1}): put back at ({:.1}, {:.1})", at.x, at.y, at.z, pos.x, pos.y);
             teleport(app, pos, heading);
             app.service_msg = Some(("The bus fell through the ground: it was put back where it last stood".into(), 5.0));
+            app.service_event("teleport", "game", None);
         }
         return;
     }

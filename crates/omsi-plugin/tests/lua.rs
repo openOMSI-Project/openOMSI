@@ -176,6 +176,46 @@ fn game_events_reach_every_plugin_once() {
 }
 
 #[test]
+fn service_events_carry_kind_who_and_the_amount_when_there_is_one() {
+    let d = dir("service");
+    std::fs::write(
+        d.join("a.lua"),
+        r#"function on_service(kind, by, amount) omsi.message(string.format("%s %s %s", kind, by, tostring(amount))) end"#,
+    )
+    .unwrap();
+    let mut plugins = Plugins::load(std::slice::from_ref(&d), &HostConfig::default());
+    let mut bus = Bus { vehicle: true, ..Default::default() };
+    let service = |kind: &str, by: &str, amount: Option<f64>| {
+        let mut args = vec![InfoValue::Text(kind.into()), InfoValue::Text(by.into())];
+        args.extend(amount.map(InfoValue::Num));
+        GameEvent { name: "service", args }
+    };
+    bus.events = vec![service("refuel", "player", Some(120.5)), service("repair", "host", Some(0.0)), service("reset", "plugin", None), service("teleport", "game", None)];
+    plugins.frame(&mut bus);
+    assert_eq!(bus.messages, ["refuel player 120.5", "repair host 0.0", "reset plugin nil", "teleport game nil"]);
+}
+
+#[test]
+fn trip_jolt_and_ticket_events_carry_their_values() {
+    let d = dir("trip_events");
+    let plugin = r#"
+        function on_trip_done(trip, how, driving, comfort, tickets) omsi.message(string.format("trip %d %s %.0f %.0f %.0f", trip, how, driving, comfort, tickets)) end
+        function on_jolt(along, across, kmh, riders) omsi.message(string.format("jolt %.1f %.1f %.0f %d", along, across, kmh, riders)) end
+        function on_ticket_sold(name, price) omsi.message(string.format("ticket %s %.2f", name, price)) end
+    "#;
+    std::fs::write(d.join("a.lua"), plugin).unwrap();
+    let mut plugins = Plugins::load(std::slice::from_ref(&d), &HostConfig::default());
+    let mut bus = Bus { vehicle: true, ..Default::default() };
+    bus.events = vec![
+        GameEvent { name: "ticket_sold", args: vec![InfoValue::Text("Einzelfahrschein".into()), InfoValue::Num(2.1)] },
+        GameEvent { name: "jolt", args: vec![InfoValue::Num(-5.4), InfoValue::Num(0.8), InfoValue::Num(38.0), InfoValue::Num(12.0)] },
+        GameEvent { name: "trip_done", args: vec![InfoValue::Num(3.0), InfoValue::Text("arrived".into()), InfoValue::Num(81.0), InfoValue::Num(100.0), InfoValue::Num(75.0)] },
+    ];
+    plugins.frame(&mut bus);
+    assert_eq!(bus.messages, ["ticket Einzelfahrschein 2.10", "jolt -5.4 0.8 38 12", "trip 3 arrived 81 100 75"]);
+}
+
+#[test]
 fn saved_data_of_a_one_file_plugin_is_no_plugin() {
     let d = dir("save");
     std::fs::write(d.join("counter.lua"), "omsi.data.n = (omsi.data.n or 0) + 1").unwrap();

@@ -26,6 +26,7 @@ pub(crate) fn traffic_tick(
 ) {
     t.others = lan_outlines(remotes);
     t.others.extend(own_outlines(player, placed));
+    t.other_blinkers = outline_indicators(remotes, player, placed);
     if !paused {
         t.player_priority = player.and_then(|p| p.vehicle.var("TrafficPriority")).is_some_and(|v| v > 0.5);
         t.player_blinker = player.map(|p| lan::indicator(&p.vehicle)).unwrap_or(0);
@@ -242,6 +243,7 @@ pub(crate) fn tick_humans(
     if let Some(t) = traffic {
         let (alighting, waiting) = h.stop_wishes();
         t.set_stop_wishes(alighting, waiting);
+        t.bus_loads = h.bus_loads();
         for (id, stop, secs) in h.take_holds() {
             t.hold_boarding(id, stop, secs);
         }
@@ -268,7 +270,8 @@ pub(crate) fn career_from_humans(career: &mut career::Career, h: &humans::Humans
 /// driver's timetable paper.
 /// `game_clock`: the clock the journey's head line is written with (none: the bus's own).
 /// `learn_loaded`: the stops of the tiles loaded are learnt first. `plugin_events`: where
-/// skipped stops are told to the plugins (none: they are not taken).
+/// skipped stops and the end of a trip are told to the plugins (none: a trip's end is
+/// dropped, the skipped stops are kept).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn duty_step(
     d: &mut schedule::PlayerDuty,
@@ -293,6 +296,12 @@ pub(crate) fn duty_step(
     }
     let due = (d.trip_index, d.next_stop);
     let served = d.update(&mut p.vehicle, time);
+    // (also one ended between frames: the last stop skipped from the menu; a trip reopened
+    // by a page counts from its start again, and its next end is told too)
+    if let Some(run) = d.take_reopened() {
+        career.trip_reopened(run);
+    }
+    let ended = d.take_finished();
     if let Some((arrival, departure)) = served {
         career.stop_served(arrival, departure);
     }
@@ -302,11 +311,19 @@ pub(crate) fn duty_step(
         crate::journey::note(journey, d, due, served, root, || crate::journey::head(career, &world.global.name, &p.vehicle, clock));
     }
     if let Some(events) = plugin_events {
+        use omsi_plugin::InfoValue::{Num, Text};
         if let Some((count, due_at, at)) = d.take_skipped() {
-            use omsi_plugin::InfoValue::Num;
             crate::plugins::queue_event(events, "stops_skipped", vec![Num(count as f64), Num(due_at as f64), Num(at as f64)]);
         }
+        // the trip over, rated before the next one starts its ratings afresh (none for a
+        // trip the bus was never driven on: a duty taken at its last stop)
+        if let Some(f) = ended {
+            if let Some([driving, comfort, tickets]) = career.trip_ended(f.run) {
+                crate::plugins::queue_event(events, "trip_done", vec![Num(f.index as f64 + 1.0), Text(f.how.as_str().into()), Num(driving), Num(comfort), Num(tickets)]);
+            }
+        }
     }
+    career.trip_driven(d.trip_run());
     if d.take_trip_change() && p.duty_typed {
         let (trip, stop) = d.trip_for_ibis();
         p.set_duty_destination(trip, stop);
@@ -322,7 +339,9 @@ pub(crate) fn duty_step(
 }
 
 /// The tyres' spray (see `puddles`): what every vehicle's tyres throw up from the water on
-/// the road, `wetness` as wet as the picture draws it, the air moving with `wind`.
+/// the road, `wetness` as wet as the picture draws it, the air moving with `wind`. At a
+/// lower `quality` (`rain::quality`) only the player's bus throws spray (1), or none (0):
+/// what is in the air settles all the same.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn throw_spray(
     spray: &mut puddles::Spray,
@@ -334,15 +353,18 @@ pub(crate) fn throw_spray(
     wind: Vec3,
     world: &World,
     wetness: f32,
+    quality: u8,
 ) {
     let mut vehicles: Vec<(u64, &omsi_sim::VehicleInstance)> = Vec::new();
-    if let Some(p) = player {
+    if let Some(p) = player.filter(|_| quality > 0) {
         vehicles.push((0, &p.vehicle));
     }
-    if let Some(t) = traffic {
-        vehicles.extend(t.cars.iter().map(|c| (c.id.wrapping_add(1), &c.vehicle)));
+    if quality >= 2 {
+        if let Some(t) = traffic {
+            vehicles.extend(t.cars.iter().map(|c| (c.id.wrapping_add(1), &c.vehicle)));
+        }
+        vehicles.extend(remotes.remotes.iter().map(|(id, r)| (puddles::REMOTE_KEY | *id as u64, r.vehicle())));
     }
-    vehicles.extend(remotes.remotes.iter().map(|(id, r)| (puddles::REMOTE_KEY | *id as u64, r.vehicle())));
     spray.frame(dt, &vehicles, eye, wind, &|x, y| puddles::water_at(x, y, world.wet_road_at(x, y, wetness)));
 }
 
@@ -372,7 +394,7 @@ pub(crate) fn light_vehicles<'a>(
 pub(crate) fn picture_lighting(
     daylight: &omsi_sim::Daylight,
     weather: Option<&omsi_content::weather::Weather>,
-    cloud_drift: [f32; 2],
+    cloud_drift: [f32; 4],
     wetness: f32,
     world: Option<&World>,
     inside: Option<&omsi_sim::VehicleInstance>,

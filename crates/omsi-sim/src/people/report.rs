@@ -118,9 +118,37 @@ impl PeopleSim {
         (alighting, waiting)
     }
 
+    /// How full each timetable bus is: passengers aboard over its places (seats and
+    /// standing), for the departure displays. Only buses whose cabin is known.
+    pub fn bus_loads(&self) -> HashMap<u64, f32> {
+        let mut aboard: HashMap<u64, usize> = HashMap::new();
+        for p in &self.people {
+            if let State::Pax(x) = &p.state {
+                if let Some(BusId::Ai(id)) = x.inside {
+                    *aboard.entry(id).or_insert(0) += 1;
+                }
+            }
+        }
+        self.seats
+            .iter()
+            .filter_map(|(id, places)| match id {
+                BusId::Ai(id) if !places.is_empty() => {
+                    Some((*id, (aboard.get(id).copied().unwrap_or(0) as f32 / places.len() as f32).min(1.0)))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Timetable buses to hold at their stop, for the traffic.
     pub fn take_holds(&mut self) -> Vec<(u64, Option<i64>, f32)> {
         std::mem::take(&mut self.holds)
+    }
+
+    /// The tickets sold at the cash desk since the last call: name and value. Lua plugins get
+    /// them as the `ticket_sold` event.
+    pub fn take_sales(&mut self) -> Vec<(String, f32)> {
+        std::mem::take(&mut self.sales)
     }
 
     /// Door requests for the timetable buses, for the traffic to hand to their scripts.

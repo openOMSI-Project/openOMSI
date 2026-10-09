@@ -712,7 +712,8 @@ impl World {
                 extra.screen = d.script.is_some() || d.script_trans.is_some();
                 // ... and a `\S:n` mask makes it an LED panel: its lit dots are its own
                 // light, which the enhanced picture blooms (see `MaterialExtra::led`)
-                extra.led = d.script_trans.is_some() && d.extra.led;
+                // (a page drawn as an LED panel carries its dot mask as a plain transmap)
+                extra.led = (d.script_trans.is_some() || (d.script.is_some() && d.transmap.is_some())) && d.extra.led;
                 let m = renderer.add_material_extra(
                     scene,
                     tex,
@@ -1086,7 +1087,7 @@ impl World {
             &SlotAlpha { alpha, declared_alpha, dirt_overlay, cover, see_through, transparent_layer_hint, named_body, repair_body_depth },
             textured,
             (night, envmap, env_mask, bump),
-            (script_slot, script_trans, rain_layer),
+            (script_slot, script_trans, rain_layer, transmap.is_some()),
             &lm_white,
         );
         // Text textures repeat like any other (Direct3D's default): the D-series
@@ -1150,9 +1151,10 @@ impl World {
             // the same way)
             it_extra.night_switched = it_night.is_some();
             it_extra.screen = script_item.is_some() || it_script_trans.is_some();
-            // (the item's `\S:n`, or the one it inherits from its base, keeps it
-            // an LED panel: see `MaterialExtra::led`)
-            it_extra.led = it_script_trans.is_some() && if ov_item.iter().any(|o| o.lightmap.is_some()) { lm_white(ov_item) } else { lm_white(&ov) };
+            // (the item's `\S:n`, or the one it inherits from its base - or a page's own
+            // dot mask - keeps it an LED panel: see `MaterialExtra::led`)
+            let it_page = script_item.is_some_and(|s| vt.model.html_textures.iter().any(|h| h.script_index == s));
+            (it_extra.led, it_extra.led_sign) = ((it_script_trans.is_some() || (it_page && it_trans.is_some())) && if ov_item.iter().any(|o| o.lightmap.is_some()) { lm_white(ov_item) } else { lm_white(&ov) }, it_page);
             it_extra.no_z_write |= extra.no_z_write;
             it_extra.no_z_check |= extra.no_z_check;
             it_extra.glass |= extra.glass;
@@ -1404,7 +1406,8 @@ fn slot_extra(
     a: &SlotAlpha,
     textured: bool,
     (night, envmap, env_mask, bump): (Option<TextureId>, Option<(TextureId, f32)>, Option<TextureId>, Option<(TextureId, f32)>),
-    (script_slot, script_trans, rain_layer): (Option<usize>, Option<usize>, bool),
+    // (the last: a plain [matl_transmap] is there - a page's dot mask)
+    (script_slot, script_trans, rain_layer, has_transmap): (Option<usize>, Option<usize>, bool, bool),
     lm_white: &dyn Fn(&[&MaterialDef]) -> bool,
 ) -> ([f32; 4], [f32; 3], MaterialExtra) {
     let SlotCx { vm, def, slot, m, .. } = *cx;
@@ -1426,7 +1429,12 @@ fn slot_extra(
     // without the flags on this `extra` the K++ and Krueger panels showed
     // their dots but never glowed.
     extra.screen = script_slot.is_some() || script_trans.is_some();
-    extra.led = script_trans.is_some() && lm_white(ov);
+    // ... and so is a page (`[useHtmlTexture]`) drawn as an LED panel: its picture
+    // is the dots' colour and a dot mask its `[matl_transmap]` (a page is a
+    // script texture of its own, so the Krueger's `\S:n` mask cannot be reused)
+    let html_page = script_slot.is_some_and(|s| cx.vt.model.html_textures.iter().any(|h| h.script_index == s));
+    extra.led = (script_trans.is_some() || (html_page && has_transmap)) && lm_white(ov);
+    extra.led_sign = html_page;
     if dirt_overlay {
         extra.no_z_write = true;
     }
@@ -1456,7 +1464,9 @@ fn slot_extra(
     // (while it snows the film is the snow-crystal texture, drawn as it is)
     // (all three graphics: OMSI 2's own rain, its texture sliding down the
     // pane, looked like wet paper next to drops that bend the street)
-    extra.rain_film = rain_layer && !snowing() && !omsi_cfg::flags::OMSI_TEXTURE_RAIN.is_set();
+    // (rain quality Low: OMSI 2's own texture rain, no drops to simulate and no picture
+    // behind the glass to copy)
+    extra.rain_film = rain_layer && !snowing() && !omsi_cfg::flags::OMSI_TEXTURE_RAIN.is_set() && crate::rain::quality() > 0;
     // Some mod buses put [matl_noZcheck] on the complete body mesh.
     // That flag is for decals; on a body it disables depth writing and
     // lets the cabin bleed through the outside shell. Keep it on genuine

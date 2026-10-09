@@ -1,6 +1,6 @@
 // openOMSI website: a small hash router that shows the overview, the download page and the
 // Markdown files of docs/ (copied next to this page by .github/workflows/pages.yml).
-const REPO = "openOMSI-Project/openOMSI";
+const REPO = "openOMSI-org/openOMSI";
 // the "playing now" counter (services/presence/): the games running right now
 const PRESENCE = "https://openomsi.savvabestbrother.workers.dev";
 const DOCS = [

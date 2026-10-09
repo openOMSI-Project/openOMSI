@@ -15,7 +15,7 @@ glam.workspace = true
 log.workspace = true
 anyhow.workspace = true
 # internet radio: MP3 / AAC / Ogg streams over HTTP(S)
-symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac", "ogg", "vorbis"] }
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac", "ogg", "vorbis", "flac"] }
 ureq.workspace = true
 
 [dev-dependencies]

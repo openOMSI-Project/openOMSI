@@ -28,6 +28,7 @@ use std::sync::Arc;
 mod staging;
 mod batching;
 mod terrain_paint;
+mod sound_probe;
 mod world;
 mod open;
 mod stage;

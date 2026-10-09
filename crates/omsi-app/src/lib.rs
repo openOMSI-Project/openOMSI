@@ -32,6 +32,7 @@ mod updater;
 mod update_watch;
 mod presence;
 mod ambience;
+mod wheel_surface;
 mod camera_arm;
 mod career;
 mod describe;
@@ -68,6 +69,7 @@ mod schedule;
 mod schedule_paper;
 mod real_time;
 mod settings;
+mod telemetry;
 mod threads;
 mod tiles;
 mod traffic;
@@ -106,6 +108,7 @@ mod on_foot;
 mod route_arrows;
 mod server;
 mod player;
+mod plugin_io;
 mod plugin_ui;
 mod plugins;
 mod services;
@@ -129,9 +132,31 @@ const _LOCALES: &str = include_str!("../locales/app.yml");
 /// Show the interface in `code` (the settings' ENG / DEU / FRA / RUS).
 pub(crate) fn ui_language(code: &str) {
     omsi_ui::i18n::set_lookup(|lang, text| _rust_i18n_try_translate(lang, text).map(|t| t.into_owned()));
+    static TEMPLATES: std::sync::Once = std::sync::Once::new();
+    TEMPLATES.call_once(|| omsi_ui::i18n::set_templates(locale_keys(_LOCALES)));
     let iso = omsi_launcher_lib::language_iso(code);
     omsi_ui::i18n::set_language(iso);
     omsi_sim::vehicle_api::set_locale(iso);
+}
+
+fn locale_keys(yml: &str) -> impl Iterator<Item = String> + '_ {
+    yml.lines().filter_map(|l| l.strip_prefix('"')?.strip_suffix("\":")).filter(|k| k.contains('{')).filter_map(|k| {
+        let mut out = String::new();
+        let mut chars = k.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            out.push(match chars.next()? {
+                'n' => '\n',
+                't' => '\t',
+                x @ ('"' | '\\') => x,
+                _ => return None,
+            });
+        }
+        Some(out)
+    })
 }
 
 use anyhow::{anyhow, Context, Result};
@@ -217,7 +242,7 @@ pub fn run() -> Result<()> {
         return launcher::run(graphics_instance());
     }
     let Some(app) = make_app(args, server_cfg)? else { return Ok(()) };
-    let event_loop = EventLoop::new()?;
+    let event_loop = game_event_loop()?;
     // SIGTERM (the launcher's Stop) and Ctrl+C end the session the way Escape does
     let proxy = event_loop.create_proxy();
     quit::install(move |_| {
@@ -229,6 +254,17 @@ pub fn run() -> Result<()> {
     lan_mods::clean_up();
     r?;
     Ok(())
+}
+
+/// The game's event loop. With OMSI_HIDDEN_WINDOW the process stays out of the Dock and the
+/// menu bar on macOS, as its window stays out of sight.
+fn game_event_loop() -> Result<EventLoop<()>> {
+    #[cfg(target_os = "macos")]
+    if omsi_cfg::flags::OMSI_HIDDEN_WINDOW.is_set() {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+        return Ok(EventLoop::builder().with_activation_policy(ActivationPolicy::Accessory).build()?);
+    }
+    Ok(EventLoop::new()?)
 }
 
 /// The showroom is drawn the way the game will be.
@@ -470,6 +506,7 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
 /// The game's App for `args` and `settings`, every part of it as it starts (the window comes
 /// later).
 fn assemble_app(args: Args, settings: settings::Settings) -> App {
+    rain::set_quality(&settings.rain_quality);
     let view = args.view.clone();
     let args_root_for_keys = args.root.clone();
     let clock_note = args.clock_moved.clone();
@@ -478,6 +515,10 @@ fn assemble_app(args: Args, settings: settings::Settings) -> App {
     let is_server = args.server.is_some();
     // What loads, starts or reads the clock, made one after the other in a fixed order before
     // the App and its groups are put together (their logs and threads come in this order).
+    // Steam must be initialized before the graphics instance and window so its overlay can
+    // hook the rendering process before the first surface is created.
+    #[cfg(steam)]
+    let steam = if is_server { None } else { crate::steam::Steam::start() };
     let instance = graphics_instance();
     let vr_nav_profiles = crate::vr_navigator::Profiles::load();
     let ui = ui::Ui::new();
@@ -556,7 +597,7 @@ fn assemble_app(args: Args, settings: settings::Settings) -> App {
             career: Default::default(),
             journey: None,
             wetness: 0.0,
-            cloud_drift: [0.0; 2],
+            cloud_drift: [0.0; 4],
             weather_blend: None,
             weather_cycle: None,
             metar_rx: None,
@@ -637,7 +678,10 @@ fn assemble_app(args: Args, settings: settings::Settings) -> App {
             governor: (0.0, 0, 0.0),
             governor_low: 0,
             governor_wait_prev: 0.0,
+            play_started: None,
             cpu_mark: None,
+            thread_cpu_mark: None,
+            instructions_mark: None,
             profile_mark: None,
             frame_times: Vec::new(),
         },
@@ -687,6 +731,7 @@ fn assemble_app(args: Args, settings: settings::Settings) -> App {
             dragging: false,
             html_pressed: None,
             html_object_pressed: None,
+            pressed_scenery_object: None,
             drag_delta: (0.0, 0.0),
             cursor_kind: 0,
             touch,
@@ -696,11 +741,15 @@ fn assemble_app(args: Args, settings: settings::Settings) -> App {
         integrations: Integrations {
             plugin_keys: Vec::new(),
             plugin_events: Vec::new(),
+            plugin_events_ex: Vec::new(),
+            plugin_voices: Vec::new(),
+            plugin_seen: Default::default(),
+            plugin_command: false,
             plugin_panels: Default::default(),
             discord: None,
             discord_t: 0.0,
             #[cfg(steam)]
-            steam: None,
+            steam,
             update_watch,
             presence,
             plugins: None,
@@ -778,5 +827,50 @@ mod tests {
             None,
         );
         assert_eq!(both, vec![DVec3::new(10.0, 20.0, 0.0), cam.position]);
+    }
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use omsi_ui::i18n::{templated, templates, Piece};
+
+    #[test]
+    fn the_template_keys_of_the_tables_are_read_as_the_code_writes_them() {
+        let raw = super::_LOCALES.lines().filter(|l| l.starts_with('"') && l.contains('{')).count();
+        assert_eq!(super::locale_keys(super::_LOCALES).count(), raw);
+        let used: Vec<String> = templates(super::locale_keys(super::_LOCALES)).into_iter().map(|(k, _)| k).collect();
+        for k in ["Graphics profile \"{name}\" not found", "Mirror panel added ({} in all)", "Head tracking with opentrack (UDP port {})"] {
+            assert!(used.iter().any(|x| x == k), "{k}");
+        }
+    }
+
+    #[test]
+    fn a_translated_template_is_left_as_it_is_when_translated_again() {
+        let t = templates(super::locale_keys(super::_LOCALES));
+        for lang in super::_rust_i18n_available_locales() {
+            let tr = |key: &str| super::_rust_i18n_try_translate(&lang, key).map(|t| t.into_owned());
+            for (key, pieces) in &t {
+                // the text the code would draw: a value per placeholder, the same one for a name used twice
+                let mut names: Vec<&str> = Vec::new();
+                let sample: String = pieces
+                    .iter()
+                    .map(|p| match p {
+                        Piece::Text(s) => s.clone(),
+                        Piece::Hole(n) => {
+                            if n.is_empty() || !names.contains(&n.as_str()) {
+                                names.push(n);
+                            }
+                            format!("V{}", if n.is_empty() { names.len() } else { names.iter().position(|x| x == n).unwrap() + 1 })
+                        }
+                    })
+                    .collect();
+                let Some(once) = templated(&t, &sample, tr) else { continue };
+                // no value is lost (a named one may be used twice: "{e} electrics ... with {e}")
+                for v in sample.split('V').skip(1).filter_map(|s| s.split(|c: char| !c.is_ascii_digit()).next()) {
+                    assert!(once.contains(&format!("V{v}")), "{lang}: {key}: {once}");
+                }
+                assert!(templated(&t, &once, tr).is_none_or(|twice| twice == once), "{lang}: {key}: {once}");
+            }
+        }
     }
 }

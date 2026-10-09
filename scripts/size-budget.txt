@@ -9,7 +9,8 @@ file 3047 crates/omsi-app/src/game_lists.rs
 file 3932 crates/omsi-app/src/lan.rs
 file 1551 crates/omsi-app/src/lan_world.rs
 file 1740 crates/omsi-app/src/launcher/drive.rs
-file 2958 crates/omsi-app/src/launcher/pages.rs
+file 3181 crates/omsi-app/src/launcher/pages.rs
+file 1523 crates/omsi-app/src/launcher/state.rs
 file 1609 crates/omsi-app/src/launcher/ui.rs
 file 2937 crates/omsi-app/src/navigator.rs
 file 3242 crates/omsi-app/src/player.rs
@@ -17,27 +18,28 @@ file 1780 crates/omsi-app/src/tiles.rs
 file 2635 crates/omsi-app/src/ui.rs
 file 3005 crates/omsi-geometry/src/lib.rs
 file 1935 crates/omsi-launcher-core/src/install.rs
-file 3368 crates/omsi-launcher-core/src/lib.rs
+file 3551 crates/omsi-launcher-core/src/lib.rs
 file 3236 crates/omsi-net/src/lib.rs
 file 1517 crates/omsi-net/src/tests.rs
 file 11702 crates/omsi-render/src/lib.rs
 file 2902 crates/omsi-sim/src/human.rs
 file 2398 crates/omsi-sim/src/rigid.rs
 file 3341 crates/omsi-sim/src/traffic.rs
-file 6004 crates/omsi-sim/src/vehicle.rs
+file 6339 crates/omsi-sim/src/vehicle.rs
+fn 315 crates/omsi-app::toggle_set crates/omsi-app/src/game_lists.rs
 fn 467 crates/omsi-app::client crates/omsi-app/src/lan_world.rs
-fn 370 crates/omsi-app::draw crates/omsi-app/src/navigator.rs
-fn 424 crates/omsi-app::draw_menu crates/omsi-app/src/ui.rs
-fn 349 crates/omsi-app::game_controllers crates/omsi-app/src/launcher/pages.rs
 fn 321 crates/omsi-app::host crates/omsi-app/src/lan_world.rs
+fn 349 crates/omsi-app::game_controllers crates/omsi-app/src/launcher/pages.rs
+fn 303 crates/omsi-app::handle crates/omsi-app/src/launcher/state.rs
+fn 370 crates/omsi-app::draw crates/omsi-app/src/navigator.rs
 fn 454 crates/omsi-app::render crates/omsi-app/src/openxr.rs
 fn 489 crates/omsi-app::spawn_player_prepared crates/omsi-app/src/spawn.rs
-fn 315 crates/omsi-app::toggle_set crates/omsi-app/src/game_lists.rs
+fn 424 crates/omsi-app::draw_menu crates/omsi-app/src/ui.rs
 fn 349 crates/omsi-map::parse crates/omsi-map/src/tile.rs
 fn 491 crates/omsi-model::handle_keyword crates/omsi-model/src/lib.rs
-fn 301 crates/omsi-render::new_on crates/omsi-render/src/lib.rs
+fn 326 crates/omsi-render::new_on crates/omsi-render/src/lib.rs
 fn 366 crates/omsi-script::aachen_ibox_route_pad crates/omsi-script/src/compat.rs
+fn 349 crates/omsi-sim::callback crates/omsi-sim/src/host.rs
 fn 441 crates/omsi-sim::advance crates/omsi-sim/src/human.rs
 fn 437 crates/omsi-sim::bones crates/omsi-sim/src/human.rs
-fn 349 crates/omsi-sim::callback crates/omsi-sim/src/host.rs
 fn 496 crates/omsi-sim::step_slice crates/omsi-sim/src/rigid.rs

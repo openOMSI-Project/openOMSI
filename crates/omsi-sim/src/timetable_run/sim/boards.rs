@@ -2,6 +2,23 @@
 
 use super::*;
 
+/// One timetable bus on the road, for outside tools (`telemetry` in `omsi-app`).
+pub struct AiBusRow {
+    pub id: u64,
+    pub line: String,
+    pub tour: String,
+    pub trip: String,
+    pub terminus: String,
+    pub depart: f64,
+    pub next_stop_id: Option<i64>,
+    pub at_stop: bool,
+    pub trip_done: bool,
+    pub delay_s: f64,
+    pub x: f64,
+    pub y: f64,
+    pub number: String,
+}
+
 impl ScheduleSim {
     /// The buses due at one bus stop (map object id) within the next two hours, unsorted, as
     /// (expected arrival, line, terminus, time it stands at the stop), all in seconds of the day:
@@ -13,8 +30,21 @@ impl ScheduleSim {
         on_road: &HashMap<usize, OnRoad>,
         duty: Option<&PlayerDuty>,
         player_hof: Option<&omsi_vehicle::Hof>,
-    ) -> Vec<(f64, String, String, f64)> {
-        let mut list: Vec<(f64, String, String, f64)> = Vec::new();
+    ) -> Vec<(f64, String, String, f64, StopExtra)> {
+        let mut list: Vec<(f64, String, String, f64, StopExtra)> = Vec::new();
+        // the last time each line leaves this stop today (for "last bus")
+        let mut last_of_line: HashMap<String, f64> = HashMap::new();
+        for &(trip, k) in self.visits.get(&stop).map(|v| v.as_slice()).unwrap_or(&[]) {
+            for &i in &self.trip_departures[trip] {
+                let d = &self.departures[i];
+                let tt = &self.times[d.trip][d.profile];
+                if self.runs(i) && tt.stops[k] {
+                    let leave = d.time + tt.stations[k].1;
+                    let e = last_of_line.entry(self.display_line(i)).or_insert(f64::MIN);
+                    *e = e.max(leave);
+                }
+            }
+        }
         for &(trip, k) in self.visits.get(&stop).map(|v| v.as_slice()).unwrap_or(&[]) {
             for &i in &self.trip_departures[trip] {
                 if !self.runs(i) {
@@ -32,14 +62,28 @@ impl ScheduleSim {
                 if self.is_player_tour(i) {
                     continue;
                 }
+                let mut extra = StopExtra::default();
                 let expected = match on_road.get(&i) {
                     Some(r) => match r.next {
                         // the stations before the bus's next stop are behind it
                         Some(next) if leave < next - 0.5 => continue,
                         None => continue,
                         // standing at this stop
-                        Some(next) if r.dwelling && (leave - next).abs() < 0.5 => now,
+                        Some(next) if r.dwelling && (leave - next).abs() < 0.5 => {
+                            extra.stops_away = Some(0);
+                            extra.delay = Some(r.late);
+                            extra.load = r.load;
+                            now
+                        }
                         Some(next) => {
+                            // its next stop's place in the trip: the stops from there up to
+                            // this one are still to come (the one it stands at is not)
+                            if let Some(j) = tt.stations.iter().position(|s| (d.time + s.1 - next).abs() < 0.5) {
+                                let from = if r.dwelling { j + 1 } else { j };
+                                extra.stops_away = Some((from..=k).filter(|&x| tt.stops.get(x).copied().unwrap_or(false)).count() as u32);
+                            }
+                            extra.delay = Some(r.late);
+                            extra.load = r.load;
                             // on its way: at least as late as it left its last stop, and
                             // later still once its next stop is overdue
                             let next_arrive = tt
@@ -65,7 +109,9 @@ impl ScheduleSim {
                     .depots
                     .get(&d.ai_group.to_ascii_lowercase())
                     .and_then(|v| v.iter().find_map(|x| x.2.as_deref()));
-                list.push((expected, self.display_line(i), terminus_text(hof, terminus), (leave - arrive).max(0.0)));
+                let line = self.display_line(i);
+                extra.last_trip = last_of_line.get(&line).is_some_and(|&l| leave >= l - 0.5);
+                list.push((expected, line, terminus_text(hof, terminus), (leave - arrive).max(0.0), extra));
             }
         }
         // the player's bus
@@ -100,11 +146,19 @@ impl ScheduleSim {
                     } else {
                         (s.arr + delay.max(0.0)).max(now)
                     };
+                    let mut extra = StopExtra::default();
+                    if current {
+                        let from = if duty.at_stop { duty.next_stop + 1 } else { duty.next_stop };
+                        let away = (from..=k).filter(|&x| trip.stops.get(x).is_some_and(|s| s.stops)).count() as u32;
+                        extra.stops_away = Some(if duty.at_stop && k == duty.next_stop { 0 } else { away });
+                        extra.delay = Some(delay);
+                    }
                     list.push((
                         expected,
                         trip.line.trim().to_string(),
                         terminus_text(player_hof, &trip.terminus),
                         (s.dep - s.arr).max(0.0),
+                        extra,
                     ));
                 }
             }
@@ -132,7 +186,7 @@ impl ScheduleSim {
         duty: Option<&PlayerDuty>,
         player_hof: Option<&omsi_vehicle::Hof>,
         clock: &crate::SimClock,
-    ) -> (HashMap<i64, Vec<(String, String, f64)>>, std::collections::HashMap<String, Vec<(String, String, f64)>>) {
+    ) -> (HashMap<i64, Vec<(String, String, f64)>>, std::collections::HashMap<String, Vec<crate::vehicle_api::Departure>>) {
         let now = clock.time;
         self.boards_made = now;
         // the timetable buses on the road: departure -> where they are in their trip (a
@@ -161,6 +215,7 @@ impl ScheduleSim {
                         next,
                         dwelling: car.at_stop(),
                         late: car.bus.as_ref().map(|b| b.delay).unwrap_or(0.0).max(0.0),
+                        load: t.bus_loads.get(&car.id).copied(),
                     },
                 );
             }
@@ -175,11 +230,11 @@ impl ScheduleSim {
                     "board of stop {stop} at {:.0} s: {:?}",
                     now,
                     list.iter()
-                        .map(|(t, l, d, _)| format!("{l} {d} in {:.1} min", (t - now) / 60.0))
+                        .map(|(t, l, d, _, _)| format!("{l} {d} in {:.1} min", (t - now) / 60.0))
                         .collect::<Vec<_>>()
                 );
             }
-            made.insert(stop, list.into_iter().map(|(t, l, d, _)| (l, d, t)).collect());
+            made.insert(stop, list.into_iter().map(|(t, l, d, _, _)| (l, d, t)).collect());
         }
         // the departures the pages asked for by stop name (`omsi.getDepartures`): the next two
         // hours, at most 20, as (line, destination, timestamp)
@@ -192,23 +247,48 @@ impl ScheduleSim {
                 .filter(|b| b.name.trim().eq_ignore_ascii_case(&key))
                 .map(|b| b.object_id)
                 .collect();
+            // (a map without Busstops.cfg - the older TTData, NCCR's - names its stops only
+            // in the trip files: look there too)
+            if ids.is_empty() {
+                for trip in &self.data.trips {
+                    for (i, &id) in trip_stations(trip).iter().enumerate() {
+                        if self.station_name(trip, i, id).trim().eq_ignore_ascii_case(&key) {
+                            ids.push(id);
+                        }
+                    }
+                }
+            }
             ids.sort_unstable();
             ids.dedup();
-            let mut list: Vec<(f64, String, String)> = Vec::new();
+            if omsi_cfg::flags::OMSI_DEBUG_BOARDS.is_set() {
+                log::info!("page departures of '{key}': stop objects {ids:?}");
+            }
+            let mut list: Vec<(f64, String, String, StopExtra)> = Vec::new();
             for id in ids {
-                for (expected, line, terminus, dwell) in self.stop_list(id, now, &on_road, duty, player_hof) {
+                for (expected, line, terminus, dwell, extra) in self.stop_list(id, now, &on_road, duty, player_hof) {
                     let leaves = expected + dwell;
                     if leaves <= now + BOARD_AHEAD {
-                        list.push((leaves, line, terminus));
+                        list.push((leaves, line, terminus, extra));
                     }
                 }
             }
             list.sort_by(|a, b| a.0.total_cmp(&b.0));
             list.truncate(MAX_PAGE_DEPARTURES);
+            if omsi_cfg::flags::OMSI_DEBUG_BOARDS.is_set() {
+                log::info!("page departures of '{key}': {} departures", list.len());
+            }
             departures.insert(
                 key,
                 list.into_iter()
-                    .map(|(t, l, d)| (l, d, crate::vehicle_api::timestamp(clock, t)))
+                    .map(|(t, l, d, x)| crate::vehicle_api::Departure {
+                        line: l,
+                        destination: d,
+                        time: crate::vehicle_api::timestamp(clock, t),
+                        stops_away: x.stops_away,
+                        load: x.load,
+                        delay: x.delay,
+                        last_trip: x.last_trip,
+                    })
                     .collect(),
             );
         }
@@ -252,6 +332,34 @@ impl ScheduleSim {
             .collect()
     }
 
+    /// The timetable buses on the road (those a departure drives), for outside tools.
+    pub fn ai_bus_rows(&self, traffic: &TrafficSim) -> Vec<AiBusRow> {
+        let mut out = Vec::new();
+        for car in &traffic.cars {
+            let Some(&i) = self.car_departure.get(&car.id) else { continue };
+            let Some(b) = car.bus.as_ref() else { continue };
+            let d = &self.departures[i];
+            let trip = &self.data.trips[d.trip];
+            let pos = car.vehicle.position;
+            out.push(AiBusRow {
+                id: car.id,
+                line: self.display_line(i),
+                tour: d.tour.to_string(),
+                trip: trip.name.to_string(),
+                terminus: b.terminus.trim().to_string(),
+                depart: d.time,
+                next_stop_id: b.stops.front().map(|s| s.id),
+                at_stop: car.at_stop(),
+                trip_done: car.trip_done(),
+                delay_s: b.delay,
+                x: pos.x,
+                y: pos.y,
+                number: car.vehicle.str_var("number").trim().to_string(),
+            });
+        }
+        out
+    }
+
     pub fn display_line(&self, i: usize) -> String {
         let d = &self.departures[i];
         let own = self.data.trips[d.trip].line.trim();
@@ -271,4 +379,18 @@ pub(super) struct OnRoad {
     dwelling: bool,
     /// How late it left its last stop (s).
     late: f64,
+    /// How full it is (0..1), when its passengers are simulated.
+    load: Option<f32>,
+}
+
+/// What a departure display adds to a bus's time (`omsi.getDepartures`).
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct StopExtra {
+    /// Stops still to call at up to this one, this one counted (0: standing here).
+    stops_away: Option<u32>,
+    load: Option<f32>,
+    /// How late it runs (s), on the road.
+    delay: Option<f64>,
+    /// The last departure of its line at this stop today.
+    last_trip: bool,
 }

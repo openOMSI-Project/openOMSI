@@ -120,6 +120,7 @@ effect. On Android, `openOMSI/env.txt` holds `NAME=value` lines that are set bef
 | `OMSI_TRACE_REMOTE` | text | - | use | app | LAN CSV: where each other player's bus is drawn every frame. |
 | `OMSI_TRACE_STEER` | text | - | use | app | CSV: the mouse steering frame by frame. |
 | `OMSI_TRACE_VARS` | text | - | use | app | a,b,$c: the listed variables every half second of the run. |
+| `OMSI_TRAFFIC_STATS` | text | - | use | sim | CSV: the traffic's flow every minute (standing cars, waits-for cycles, junction entries, red runs, overlaps), a summary at the end. |
 | `OMSI_WATCH_VARS` | text | - | use | app | a,b: log every change of these variables of the player's bus. |
 | `OMSI_WHEEL_TRACE` | bool | off | use | app | Log the deepest a drawn tyre goes into the road, once a second. |
 
@@ -127,6 +128,7 @@ effect. On Android, `openOMSI/env.txt` holds `NAME=value` lines that are set bef
 
 | Name | Type | Default | Read | Crates | Description |
 |---|---|---|---|---|---|
+| `OMSI_API_BLESS` | bool | off | use | plugin | cargo test -p omsi-plugin api_manifest: write docs/plugin-api.json and the reference tables of docs/PLUGINS.md again from the plugin API registry. |
 | `OMSI_AUDIT_LINE` | num | - | test | sim | bus_audit example: the line (number and letter code) the IBIS typist enters instead of the bus's own. |
 | `OMSI_AUTOPILOT` | num | - | use | app | Offscreen: the player's bus follows the lanes at this speed in km/h (finds where it falls through or leaves the road). |
 | `OMSI_BACKGROUND` | bool | off | use | app | A test window that does not take the keyboard focus (OMSI_INPUT drives the handlers directly). |
@@ -165,6 +167,7 @@ effect. On Android, `openOMSI/env.txt` holds `NAME=value` lines that are set bef
 | `OMSI_GLASS_WIND` | num | - | use | app | Offscreen: the rain on the glass as met at this speed in m/s. |
 | `OMSI_GPU_LIMITS` | text | - | use | render | default or downlevel: request only the WebGPU default (or downlevel) limits. Set by the small_chip test. |
 | `OMSI_GROUND_SAMPLE` | text | - | use | app | Offscreen CSV: what the wheels stand on every metre along the lanes near the start. |
+| `OMSI_HIDDEN_WINDOW` | bool | off | use | app | The game's window is made and never shown (no Dock icon on macOS): a run of the whole game (its frame, the plugins, --exit-after) beside whoever works at the screen; its frames are drawn into a texture, for benchmarks. |
 | `OMSI_HIDE_MESH` | text | - | use | app | a\|b: leave out the meshes whose file names contain one of the parts. |
 | `OMSI_HIDE_WINDOW` | text | - | use | app | from,to: treat the window as hidden between these seconds. |
 | `OMSI_HOLE_PHOTO` | bool | off | use | app | With OMSI_ROAD_PHOTO: photograph from above down to 25 m under the lane (holes in the world). |
@@ -195,6 +198,8 @@ effect. On Android, `openOMSI/env.txt` holds `NAME=value` lines that are set bef
 | `OMSI_POPULATION_SHOTS` | bool | off | use | app | Offscreen: pictures of the framed population spawns. |
 | `OMSI_PROBE` | text | - | use | app | x0,y0,x1,y1[,n]: print terrain and road surface heights along a line. |
 | `OMSI_PROBE_GRID` | text | - | use | app | x,y,half,step: the wheels' ground on a grid around a point. |
+| `OMSI_RECORD` | num | - | use | app | Offscreen --drive: a picture every 1/this second into <out>_frames/ and the run's mixed sound into <out>.wav (films with sound). |
+| `OMSI_RECORD_FROM` | num | 0 | use | app | With OMSI_RECORD: start the film this many seconds into the drive. |
 | `OMSI_RENDER_CLOCK` | num | 0 | use | render | Seconds the animation clock starts on (offscreen pictures). |
 | `OMSI_RENDER_OCCLUDED` | bool | off | use | app | Draw frames into a texture while the window is hidden (macOS gives none). |
 | `OMSI_ROAD_PHOTO` | bool | off | use | app | Map check: photograph the road network from above and report grass where a carriageway should be. |
@@ -228,6 +233,8 @@ effect. On Android, `openOMSI/env.txt` holds `NAME=value` lines that are set bef
 | `OMSI_GL_TEXTURE_UNITS` | bool | off | use | render | Use the texture-unit layout of the OpenGL backend on any device. |
 | `OMSI_GPU_ARRAYS` | text | - | use | render | textures or nostorage: take that texture array path on any device. |
 | `OMSI_HEIGHTPROFILE_GROUND` | bool | off | once | app | The wheels stand on the splines' [heightprofile]s again (A/B). |
+| `OMSI_HTML_FALLBACK_FONT` | text | - | use | sim | Font file for the html pages' characters Roboto lacks (Hangul, CJK); else Malgun Gothic (Windows) or AppleGothic (macOS). |
+| `OMSI_HTML_FALLBACK_FONT_BOLD` | text | - | use | sim | With OMSI_HTML_FALLBACK_FONT: its bold face. |
 | `OMSI_INTEL_FULL_GPU` | bool | off | use | render | Keep the requested settings on an Intel Vulkan adapter. |
 | `OMSI_KEEP_ALLOCATOR` | bool | off | use | app | Skip the restart that swaps in the faster allocator at start. |
 | `OMSI_MIRROR_ENHANCED` | bool | off | frame | app, render | Draw the mirrors with the enhanced shading again. |
@@ -258,6 +265,7 @@ effect. On Android, `openOMSI/env.txt` holds `NAME=value` lines that are set bef
 | `OMSI_NO_MODEL_ORDER` | bool | off | use | app | Draw the opaque parts of ordered models first again (A/B). |
 | `OMSI_NO_MSAA_PREPASS` | bool | off | frame | render | No depth prepass with multisampling. |
 | `OMSI_NO_PBR` | bool | off | use | app | No PBR materials. |
+| `OMSI_NO_PIPELINE_CACHE` | bool | off | use | render | Compile every pipeline at each start (no ~/.openomsi/cache/pipelines-*.bin). |
 | `OMSI_NO_PLUGINS` | bool | off | use | app | No plugins loaded. |
 | `OMSI_NO_POLL_THREAD` | bool | off | use | render | No device poll thread. |
 | `OMSI_NO_PRESENCE` | bool | off | use | app | No presence ("playing now") service. |
@@ -333,6 +341,7 @@ effect. On Android, `openOMSI/env.txt` holds `NAME=value` lines that are set bef
 | `OMSI_PRESENCE_URL` | text | built-in | use | app | Base URL of the presence ("playing now") service. |
 | `OMSI_ROOT` | text | found | use | app, launcher-core, o3d, sim | The OMSI 2 installation folder (also the content root for tests that need real content). |
 | `OMSI_SAFE_GPU` | num | 0 | use | app | Restarts after a lost graphics device: lighter on the card each time. Set at runtime on Android and by the restart. |
+| `OMSI_SCREEN_AT` | text | - | once | app, launcher-core | x,y: the screen (a point on the desktop, pixels) the game window opens on; the launcher sets it to where it stands. |
 | `OMSI_UPDATE_URL` | text | built-in | use | app | Another release description (URL or file:///...json) for the update check. |
 | `OMSI_WINE` | text | PATH | use | plugin | The Wine binary for Windows plugins. |
 

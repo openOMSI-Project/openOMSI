@@ -595,8 +595,16 @@ impl Devices {
                         name: d.name.clone(),
                         hardware_id: d.hardware_id,
                         axes: d.axes(),
+<<<<<<< HEAD
                         // (a DualShock or DualSense: a gamepad, not a joystick nobody set up)
                         gamepad: sony_pad(&d.name, d.hardware_id),
+=======
+                        // (a DualShock or DualSense: a gamepad, not a joystick nobody set up -
+                        // unless an Xbox-type pad is there as well: Steam Input or DS4Windows
+                        // then hands the same pad to the game as that one, and its buttons and
+                        // stick counted twice, a door button opening and closing the doors)
+                        gamepad: sony_pad(&d.name, d.hardware_id) && !xinput_pads,
+>>>>>>> c4738ed6f43f11b4c06ead299af7ac74280d5c5b
                         ff: d.has_ff(),
                         ff_capable: d.ff_capable(),
                         buttons: d.buttons.min(128),
@@ -1032,6 +1040,20 @@ impl HeldButtons {
             actions.push((action, false));
         }
     }
+
+    /// Let go of the buttons held down, but not of the latching switches: a switch stays
+    /// where it is while the pause menu is open or the window is in the background, and
+    /// when it comes out later its release still reaches the bus. Let go of with the rest,
+    /// the switch went out in the game at ESC or alt-tab and only came back once it was
+    /// switched off and on again by hand (#1876).
+    fn release_momentary(&mut self, actions: &mut Vec<(String, bool)>) {
+        self.0.retain(|(_, _, action, latching)| {
+            if !latching {
+                actions.push((action.clone(), false));
+            }
+            *latching
+        });
+    }
 }
 
 /// Save only to the writable openOMSI overlay. The original OMSI installation is read-only.
@@ -1175,7 +1197,7 @@ impl Controllers {
     }
 
     pub(crate) fn set_editing(&mut self, editing: bool) {
-        if editing && !self.editing { self.held.release(&mut self.actions); }
+        if editing && !self.editing { self.held.release_momentary(&mut self.actions); }
         self.editing = editing;
     }
 
@@ -1191,7 +1213,7 @@ impl Controllers {
         self.devices.set_focus(focused);
         if !focused {
             self.steer = None;
-            self.held.release(&mut self.actions);
+            self.held.release_momentary(&mut self.actions);
             self.raw_buttons.clear();
             self.ff_source_logged = None;
         }
@@ -1225,10 +1247,25 @@ impl Controllers {
         if !self.pad_presets || self.editing || !self.enabled {
             return;
         }
+<<<<<<< HEAD
         let connected = self.devices.connected();
         #[cfg(windows)]
         for (name, n, down) in &self.raw_buttons {
             let sony = find_connected(&connected, name).is_some_and(|c| sony_pad(&c.name, c.hardware_id));
+=======
+        // (the devices are listed only when a button moved: not every frame)
+        #[cfg(windows)]
+        let pressed = !events.is_empty() || !self.raw_buttons.is_empty();
+        #[cfg(not(windows))]
+        let pressed = !events.is_empty();
+        if !pressed {
+            return;
+        }
+        let connected = self.devices.connected();
+        #[cfg(windows)]
+        for (name, n, down) in &self.raw_buttons {
+            let sony = find_connected(&connected, name).is_some_and(|c| c.gamepad && sony_pad(&c.name, c.hardware_id));
+>>>>>>> c4738ed6f43f11b4c06ead299af7ac74280d5c5b
             if let Some(b) = sony.then(|| gamepad_profile::sony_direct_input_button(*n, HAT_BUTTONS)).flatten() {
                 events.push((name.clone(), b, *down));
             }
@@ -1267,7 +1304,11 @@ impl Controllers {
         pads.sort_by_key(|(cfg, _)| cfg.is_none());
         // (the PlayStation pads nobody set up: read below, with the gamepads)
         #[cfg(windows)]
+<<<<<<< HEAD
         let sony: Vec<Connected> = pads.iter().filter(|(cfg, c)| cfg.is_none() && sony_pad(&c.name, c.hardware_id)).map(|(_, c)| c.clone()).collect();
+=======
+        let sony: Vec<Connected> = pads.iter().filter(|(cfg, c)| cfg.is_none() && c.gamepad && sony_pad(&c.name, c.hardware_id)).map(|(_, c)| c.clone()).collect();
+>>>>>>> c4738ed6f43f11b4c06ead299af7ac74280d5c5b
         let mut steer: Option<(String, f32, bool)> = None;
         // (a device set up to steer has the wheel; one nobody set up only lends its X axis)
         let mut steering_set_up = false;
@@ -1906,7 +1947,11 @@ pub(crate) fn key_bitmap_buttons(bitmap: &str) -> Vec<u32> {
 
 #[cfg(any(target_os = "linux", test))]
 fn button_index(declared: &[u32], code: u32) -> Option<usize> {
-    if declared.iter().all(|c| code_button(*c).is_some()) {
+    // (the table's numbers when every button is in it - but not for a device whose buttons
+    // are all BTN_TRIGGER_HAPPY ones: its first button is the table's 17th, and it listed
+    // sixteen buttons it does not have, #1879; joydev and DirectInput count it from 1)
+    let in_low_table = |c: &u32| (0x100..=0x13e).contains(&(c & 0xFFFF));
+    if declared.iter().all(|c| code_button(*c).is_some()) && declared.iter().any(in_low_table) {
         return None;
     }
     declared.iter().position(|c| *c == code)
@@ -2280,6 +2325,10 @@ mod button_tests {
             let pad: Vec<u32> = vec![0x130, 0x131, 0x133, 0x134];
             assert_eq!(super::button_index(&pad, 0x133), None);
         }
+        // a button box of BTN_TRIGGER_HAPPY codes only: from 0, no sixteen ghosts (#1879)
+        let panel: Vec<u32> = (0x2c0..0x2c8).collect();
+        assert_eq!(super::button_index(&panel, 0x2c0), Some(0));
+        assert_eq!(super::button_count(&panel), 8);
     }
 
     #[test]
@@ -3029,6 +3078,22 @@ mod hot_reload_tests {
         assert_eq!(c.actions, vec![("horn".into(), true), ("horn".into(), false)]);
         c.set_editing(false);
         assert!(!c.editing);
+    }
+
+    #[test]
+    fn a_latching_switch_stays_in_through_the_menu_and_the_focus() {
+        let cfg = vec![DeviceCfg { name: "Test wheel".into(), buttons: vec![(String::new(), String::new()), ("bus_stopbrake".into(), String::new()), ("bus_horn".into(), String::new())], latching: vec![1], ..Default::default() }];
+        let mut held = HeldButtons::default();
+        let mut actions = Vec::new();
+        held.event(&cfg, "Test wheel", 1, true, &mut actions);
+        held.event(&cfg, "Test wheel", 2, true, &mut actions);
+        actions.clear();
+        held.release_momentary(&mut actions);
+        assert_eq!(actions, vec![("bus_horn".to_string(), false)]);
+        actions.clear();
+        // switched out later: its release and the latch's way back still come
+        held.event(&cfg, "Test wheel", 1, false, &mut actions);
+        assert_eq!(actions.first(), Some(&("bus_stopbrake".to_string(), false)));
     }
 
     #[test]

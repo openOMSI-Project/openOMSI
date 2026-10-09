@@ -112,6 +112,24 @@ impl App {
         if self.vr_action(name) { return true; }
         match name {
             "sim_pause" => self.toggle_pause(),
+            // the menu Esc opens (a controller has no Esc): pressed again, it closes the menu
+            // and whatever list it had open, as leaving them with Esc does
+            "open_menu" => {
+                if self.menus.game_menu.is_some() || self.menus.chooser.is_some() {
+                    if self.menus.key_capture.is_some() {
+                        self.cancel_key_capture();
+                    }
+                    self.menus.chooser = None;
+                    self.menus.admin_list = None;
+                    self.menus.list_kind = None;
+                    self.menus.dropdown = None;
+                    if self.menus.game_menu.is_some() {
+                        self.close_game_menu();
+                    }
+                } else {
+                    self.open_game_menu();
+                }
+            }
             "screenshot" => self.take_screenshot(),
             "quicksave" => self.quick_save(),
             "view_set_ego" => {

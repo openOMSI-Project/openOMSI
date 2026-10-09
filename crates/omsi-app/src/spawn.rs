@@ -49,6 +49,19 @@ pub(crate) fn next_coupled(def: &omsi_vehicle::vehicle::Vehicle, rev: bool, towa
     Some((path, flag ^ rev))
 }
 
+/// How many coupled parts one vehicle may have behind it. A consist that closes on itself
+/// stops on its own (see [`chain_has_part`]); this only guards against a coupling chain that
+/// keeps growing through different files.
+pub(crate) const MAX_COUPLED_PARTS: usize = 32;
+
+/// Whether the vehicle file `path` is already one of the parts of the consist `seen` - the
+/// same file, not the same spelling, so a chain that comes round again ends there instead of
+/// growing. The NF6D tram closes on itself: its rear cab car `[couple_back]`s the
+/// articulation its front car starts with, and the whole unit is eleven parts long.
+pub(crate) fn chain_has_part(seen: &[PathBuf], path: &Path) -> bool {
+    seen.iter().any(|s| omsi_vehicle::vehicle::same_file(s, path))
+}
+
 /// Load the `[couple_back]` chain behind `vehicle` (articulated rear sections, trailers),
 /// each file resolved from the folder of the part before it in whichever content root
 /// holds it.
@@ -68,10 +81,23 @@ fn load_coupled_types(
 ) -> Vec<(Arc<omsi_sim::VehicleType>, bool)> {
     let mut parts = Vec::new();
     let mut lead_rev = false;
-    for _ in 0..8 {
+    let mut seen = vec![lead.def.path.clone()];
+    for _ in 0..MAX_COUPLED_PARTS {
         let Some((path, reversed)) = next_coupled(&lead.def, lead_rev, true) else {
             break;
         };
+        if chain_has_part(&seen, &path) {
+            log::info!(
+                "coupled behind {}: {} - already in the train, the consist closes here",
+                lead.def
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy(),
+                path.display()
+            );
+            break;
+        }
         match omsi_sim::VehicleType::load(root, &path) {
             Ok(t) => {
                 let t = Arc::new(t);
@@ -87,6 +113,7 @@ fn load_coupled_types(
                     if reversed { ", reversed" } else { "" }
                 );
                 parts.push((t.clone(), reversed));
+                seen.push(path);
                 lead = t;
                 lead_rev = reversed;
             }
@@ -530,6 +557,8 @@ pub(crate) fn spawn_player_prepared(
         auto_shift: crate::settings::Settings::load().auto_shift,
         auto_shift_wait: 0.0,
         auto_shift_idle: 0.0,
+        auto_shift_max: 0.0,
+        auto_shift_climb: (0.0, 0.0),
         side_lights_by_l: false,
         driver: None,
         ibis_duty: None,
@@ -566,8 +595,9 @@ pub(crate) fn spawn_player_prepared(
         if let Some(km) = args.situation_odometer_km {
             p.vehicle.set_odometer_km(km);
         }
+        let pictures = crate::situation::situation_file(args).map(|f| crate::situation::restore_script_textures(&f, &mut p.vehicle)).unwrap_or(0);
         log::info!(
-            "situation: {numeric} of {} variables and {textual} of {} strings restored",
+            "situation: {numeric} of {} variables, {textual} of {} strings and {pictures} script textures restored",
             args.situation_vars.len(),
             args.situation_strvars.len()
         );
@@ -791,5 +821,28 @@ mod preparation_tests {
         let types = attach_coupled_types(&mut vehicle, prepared.parts);
         assert_eq!(vehicle.trailers.len(), types.len());
         assert!(vehicle.trailers.iter().all(|part| part.reversed));
+    }
+
+    /// The NF6D tram is eleven parts long and its rear cab car `[couple_back]`s the
+    /// articulation its front car starts with: the chain has to be walked whole and must
+    /// stop where it comes round, or the last carriage is left off the tram.
+    #[test]
+    fn a_consist_that_closes_on_itself_ends_at_the_part_it_returns_to() {
+        let dir = std::env::temp_dir().join(format!("openomsi-chain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let front = dir.join("NF6D_A.bus");
+        let rear = dir.join("NF6D_B_User.bus");
+        std::fs::write(&front, "[couple_back]\nNF6D_B_User.bus\nfalse\n").unwrap();
+        std::fs::write(&rear, "[couple_back]\nNF6D_A.bus\nfalse\n").unwrap();
+
+        assert!(!chain_has_part(&[front.clone()], &rear));
+        assert!(chain_has_part(&[front.clone(), rear.clone()], &front));
+        assert!(
+            MAX_COUPLED_PARTS >= 11,
+            "a part bound below eleven cuts an NF6D tram's last carriage off"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

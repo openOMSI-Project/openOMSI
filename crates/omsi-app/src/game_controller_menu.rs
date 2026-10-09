@@ -26,10 +26,12 @@ fn event_names(app: &App, device: &DeviceCfg) -> Vec<(String, String)> {
         .chain(crate::game_lists::keyboard_actions(app))
         .chain(app.player.as_ref().into_iter().flat_map(|p| p.vehicle.ty.program.trigger_names()))
         .chain(["kw_s_R_fest", "kw_s_1_fest", "kw_s_2_fest", "kw_s_3_fest", "kw_s_4_fest", "kw_s_5_fest", "kw_s_6_fest", "kw_s_7_fest", "kw_s_8_fest", "kw_s_9_fest", "kw_s_10_fest",
-                "gear_up", "gear_down", "view_look_left", "view_look_right", "view_look_up", "view_look_down", "view_toggle_viewpoint", "view_driver", "view_outside", "view_passenger", "voice_radio"].into_iter().map(str::to_string)) {
+                "gear_up", "gear_down", "view_look_left", "view_look_right", "view_look_up", "view_look_down", "view_toggle_viewpoint", "view_driver", "view_outside", "view_passenger", "voice_radio", "open_menu"].into_iter().map(str::to_string)) {
         if !action.is_empty() && !events.iter().any(|(a, _)| a.eq_ignore_ascii_case(&action)) {
             let label = if action.eq_ignore_ascii_case("voice_radio") {
                 "Multiplayer: bus radio (hold)".into()
+            } else if action.eq_ignore_ascii_case("open_menu") {
+                "Open / close the main menu".into()
             } else {
                 names.control(&action)
             };
@@ -45,7 +47,11 @@ fn row(name: &str, value: &str, desc: &str, action: String) -> (String, String) 
 }
 
 const DEVICE_TABS: [&str; 4] = ["Device", "Axes and pedals", "Buttons", "Force feedback"];
+<<<<<<< HEAD
 const COMMON_TABS: [&str; 4] = ["Devices", "Driving", "Gamepad", "Force feedback"];
+=======
+pub(crate) const COMMON_TABS: [&str; 4] = ["Devices", "Driving", "Gamepad", "Force feedback"];
+>>>>>>> c4738ed6f43f11b4c06ead299af7ac74280d5c5b
 const AXES: [&str; 8] = ["X axis", "Y axis", "Z axis", "X rotation", "Y rotation", "Z rotation", "Slider 1", "Slider 2"];
 const PAD_TYPES: [&str; 4] = ["auto", "xbox", "ps4", "ps5"];
 type Rows = Vec<(String, String)>;
@@ -76,7 +82,11 @@ fn gamepad_rows(app: &App, connected: &[crate::controllers::Connected]) -> Rows 
     out.push((crate::game_lists::row("Controller type", 'o', &shown, "Names the buttons below for the pad you hold: Automatic, Xbox, PlayStation 4 or PlayStation 5", None), "pad_type".into()));
     out.push(("Steering and view".into(), HEADING.into()));
     out.extend([
+<<<<<<< HEAD
         crate::game_lists::slider_row(app, "pad_steer_speed", "Steering speed", "Seconds the stick takes to turn the wheel from the middle to the full lock - more is smoother; the wheel is slower still at speed", &|v| format!("{v:.1} s")),
+=======
+        crate::game_lists::slider_row(app, "pad_steer_speed", "Steering speed", "Seconds the stick takes to turn the wheel from the middle to the full lock - more is smoother", &|v| format!("{v:.1} s")),
+>>>>>>> c4738ed6f43f11b4c06ead299af7ac74280d5c5b
         crate::game_lists::slider_row(app, "pad_steer_smooth", "Stick smoothing", "Evens out the small shakes of the stick (off: the stick as it reads)", &|v| if v <= 0.0 { "Off".to_string() } else { format!("{v:.0} ms") }),
         crate::game_lists::slider_row(app, "pad_deadzone", "Stick dead zone", "Ignore movement round the stick's centre (raise it if the bus steers by itself)", &|v| format!("{:.0} %", v * 100.0)),
         crate::game_lists::switch_row(app, "pad_steer_linear", "Stick steers like a wheel", "The wheel where the stick points, as far at any speed: for a wheel the system calls an Xbox controller"),
@@ -189,8 +199,6 @@ pub(crate) fn items(app: &App, kind: &ListKind) -> Rows {
                 out.extend([
                     crate::game_lists::slider_row(app, "ctrl_deadzone", "Dead zone", "Ignore movement around the centre or at pedal rest", &|v| format!("{:.0} %", v * 100.0)),
                     crate::game_lists::switch_row(app, "arrows_switch_cams", "Arrows switch the cameras", "With a wheel, Left/Right change the interior camera as without one, instead of turning the head"),
-                    crate::game_lists::switch_row(app, "pad_steer_linear", "Stick steers like a wheel", "The wheel where the stick points, as far at any speed: for a wheel the system calls an Xbox controller"),
-                    crate::game_lists::slider_row(app, "pad_steer_smooth", "Stick steering smoothing", "Evens out a gamepad stick's small shakes (off: the stick as it reads)", &|v| if v <= 0.0 { "Off".to_string() } else { format!("{v:.0} ms") }),
                     crate::game_lists::slider_row(app, "wheel_range", "Wheel rotation", "Your wheel's rotation from lock to lock", &|v| format!("{v:.0}°")),
                     crate::game_lists::slider_row(app, "wheel_lock", "Full lock at", "Rotation for the bus's full lock", &|v| if v < 45.0 { "OMSI".into() } else { format!("{v:.0}°") }),
                 ].into_iter().flatten());

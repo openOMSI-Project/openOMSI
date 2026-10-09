@@ -1573,7 +1573,9 @@ fn find_shifter(v: &VehicleInstance, hip: Vec3, heading: f32) -> Option<Shifter>
 /// wheel of its buses - Spandau and Grundorf name `humans\\axyz\\man01.hum`; OMSI
 /// reads the list with the map, the original), chosen by `pick`; without the list OMSI's own
 /// driver figure `Humans/*/DBC_man04_driver.hum`. Each file is read once.
-fn driver_type(world: &crate::scene::World, pick: u64) -> Option<Arc<HumanType>> {
+/// The figure `DriverFigure::new` gives a driver with this `pick` (0: the player): also the
+/// player's figure on foot, so that getting out of the bus or having none changes no clothes.
+pub(crate) fn driver_type(world: &crate::scene::World, pick: u64) -> Option<Arc<HumanType>> {
     let listed: Vec<std::path::PathBuf> = omsi_map::ailists::load_list(&world.map_dir.join("drivers.txt"))
         .iter()
         .map(|l| omsi_cfg::resolve_path(&world.root, l))

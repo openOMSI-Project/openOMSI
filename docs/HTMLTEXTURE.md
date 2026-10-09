@@ -56,6 +56,15 @@ Note: An `[htmlTexture]` is registered as a `[scriptTexture]`, but it is also re
 This means: If an `htmlTexture` follows `scriptTexture 6`, the `htmlTexture` is automatically `scriptTexture 7`. But it
 is not `htmlTexture 7`.
 
+### LED destination signs
+
+A page drawn on an LED matrix is lit like the Krueger and K++ panels in Enhanced when its
+material has a dot mask and a white light map: either the `\S:n` mask above, or a plain
+picture of the dots as `[matl_transmap]` (black between the dots), with a `[matl_lightmap]`
+that is white all over. The lit dots then burn at the `LED glow` setting's brightness and
+bloom. A page's sign keeps that brightness at night even where it sits inside the cab
+(behind a coach's windscreen); a script texture's panel in the cab (a dashboard's LCD) dims.
+
 ### Html file
 
 `html\index.html` is the relative path from the bus path. Example: `Data\Vehicles\MAN_NewLionsCity\html\index.html` =
@@ -125,6 +134,7 @@ standardised by OMSI. Read those with `omsi.getVar("their_variable_name")`.
 | `omsi.date.day`, `.month`, `.year`     | Simulation date, as numbers                                                             |
 | `omsi.date.asString`                   | `DD.MM.YYYY`, or `MM/DD/YYYY` when `locale` is `en`                                     |
 | `omsi.locale`                          | Interface language as an ISO 639-1 code (`en`, `de` ...)                                |
+| `omsi.weather`                         | The weather, `null` until it is known: `temperature` (°C), `humidity` (relative, 0..1), `visibility` (m, the weather's fog range), `clouds` (the weather's cloud type, `-1` clear), `precip` (0 none, 1 rain, 2 snow), `precipRate` (0..1) |
 
 These are set before `omsi.update` runs and change with the simulation clock, once per second.
 Use `omsi.locale` to pick your texts, and fall back to English for languages you didn't write.
@@ -203,6 +213,10 @@ omsi.update = function () {
 | `line`        | the line text                                                            |
 | `destination` | the destination text                                                     |
 | `time`        | departure as a timestamp, same scale as `omsi.timestamp`, delay included |
+| `stopsAway`   | stops the bus still calls at up to this one, this one counted (`1`: this is its next stop, `0`: it stands here); `null` while it is not on the road |
+| `load`        | how full it is, 0..1 of its seats and standing places; `null` unless its passengers are simulated |
+| `delaySec`    | how late it runs (s) once it is on the road, else `null`                  |
+| `lastTrip`    | `true` for the last departure of its line at this stop today              |
 
 * The first call for a stop returns `[]`. The game fills the stop a moment later and then calls
   `omsi.update` again, so ask inside `update`.
