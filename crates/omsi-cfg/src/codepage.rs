@@ -345,6 +345,9 @@ mod tests {
 
     #[test]
     fn detects_the_code_page() {
+        // Test the heuristic independently of this machine's ANSI code page.
+        // System overrides are exercised explicitly in the tests below.
+        let detect = |bytes: &[u8]| detect_on(bytes, None);
         assert_eq!(detect(&cp1251("[friendlyname]\r\nЛиАЗ\r\n5292.20\r\nЗаводская\r\n")), CodePage::Windows1251);
         assert_eq!(detect(&cp1251("верх.png")), CodePage::Windows1251);
         // German never has three accented letters in a row, even with "Größe"
