@@ -1540,7 +1540,22 @@ impl Controllers {
             // The wheel force is calculated from the steering axis after its configured
             // reversal, while DirectInput sends forces in the physical axis direction.
             let axis_reversed = force_axis_reversed(cfg, di.force_axis(&name));
-            let force = if feedback_inverted(cfg, self.ff_invert, axis_reversed) { -force } else { force };
+            let inverted = feedback_inverted(cfg, self.ff_invert, axis_reversed) ^ di.force_flipped(&name);
+            let force = if inverted { -force } else { force };
+            if let Some(path) = omsi_cfg::flags::OMSI_TRACE_FFB.os() {
+                use std::io::Write;
+                static TRACE: std::sync::Mutex<Option<(std::fs::File, std::time::Instant)>> = std::sync::Mutex::new(None);
+                let mut g = TRACE.lock().unwrap_or_else(|e| e.into_inner());
+                if g.is_none() {
+                    *g = std::fs::File::create(&path).ok().map(|mut f| {
+                        let _ = writeln!(f, "t,dt,kmh,pos,pos_before,inverted,force_sent,lateral,bump,micro");
+                        (f, std::time::Instant::now())
+                    });
+                }
+                if let Some((file, t0)) = g.as_mut() {
+                    let _ = writeln!(file, "{:.3},{:.4},{:.2},{:.4},{:.4},{},{:.4},{:.3},{:.3},{:.3}", t0.elapsed().as_secs_f32(), f.dt, f.kmh, x, x0, inverted as u8, force, f.lateral_accel, f.wheel_bump, f.micro);
+                }
+            }
             if di.set_force(&name, force) {
                 return;
             }
@@ -1690,7 +1705,9 @@ fn wheel_force(f: &FfInput, x: f32, x0: f32, t: &mut f32, k_springs: f32, k_effe
     // a smooth extra torque, tapered away at larger angles. It crosses zero
     // continuously so there is no fixed kick when the wheel passes the centre.
     let centre_return = 0.025 * x / (x * x + 0.004 * 0.004).sqrt() / (1.0 + (x / 0.12).powi(4));
-    let spring = -(spring_strength * x / (0.5 + 1.15 * x.abs()) + centre_return) * rolling;
+    // A physical wheel needs a middle even when parked: half the centring is there at a
+    // standstill, the rest builds up as the bus rolls.
+    let spring = -(spring_strength * x / (0.5 + 1.15 * x.abs()) + centre_return) * (0.5 + 0.5 * rolling);
     let road_align = -(f.lateral_accel / 9.81).clamp(-0.45, 0.45) * 0.25 * (v / 5.0).clamp(0.0, 1.0) * rolling;
     // Assisted steering should not demand ever more hand force near full lock.
     let lock_assist = 1.0 / (1.0 + 0.55 * x * x);
@@ -2341,14 +2358,17 @@ mod button_tests {
     }
 
     #[test]
-    fn a_parked_wheel_is_not_pulled_to_the_middle() {
+    fn a_parked_wheel_has_a_gentle_middle() {
         let mut t = 0.0;
         for kmh in [-0.5, -0.1, 0.0, 0.1, 0.5] {
-            // Include residual lateral acceleration from the body's suspension.
+            // Residual lateral acceleration from the body's suspension is no force when parked.
             let f = super::FfInput { on: true, kmh, lateral_accel: 3.0, dt: 0.016, ..Default::default() };
-            for x in [-1.0, -0.5, 0.0, 0.5, 1.0] {
-                let force = super::wheel_force(&f, x, x, &mut t, 1.0, 0.0);
-                assert_eq!(force, 0.0, "kmh={kmh}, steering={x}");
+            assert_eq!(super::wheel_force(&f, 0.0, 0.0, &mut t, 1.0, 0.0), 0.0, "kmh={kmh}");
+            for x in [0.2, 0.5, 1.0] {
+                let right = super::wheel_force(&f, x, x, &mut t, 1.0, 0.0);
+                let left = super::wheel_force(&f, -x, -x, &mut t, 1.0, 0.0);
+                assert!(right < -0.02 && right > -0.2, "kmh={kmh}, steering={x}: {right}");
+                assert_eq!(right, -left, "kmh={kmh}, steering={x}");
             }
         }
     }
@@ -2360,8 +2380,8 @@ mod button_tests {
         for x in [-0.5, 0.5] {
             let right = super::wheel_force(&f, x, x - 0.01, &mut t, 1.0, 0.0);
             let left = super::wheel_force(&f, x, x + 0.01, &mut t, 1.0, 0.0);
-            assert!(right < 0.0 && left > 0.0, "{right} {left}");
-            assert!((right + left).abs() < 1e-6, "{right} {left}");
+            // (the parked centring adds the same pull to both)
+            assert!(right < left, "{right} {left}");
         }
     }
 

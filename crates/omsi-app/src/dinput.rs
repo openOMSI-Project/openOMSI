@@ -44,6 +44,14 @@ impl Default for RawState {
 
 const RANGE: i32 = 10_000;
 const VJOY_HARDWARE_ID: (u16, u16) = (0x1234, 0xBEAD);
+const LOGITECH_VENDOR: u16 = 0x046D;
+
+/// Logitech's wheels turn the other way from DirectInput's positive force (measured on a G923
+/// with a pulse test: +0.15 turned it left, -0.15 right), which made the game's centring
+/// spring a push away from the middle. The other makers' wheels do not.
+fn force_flipped_for(hardware_id: Option<(u16, u16)>) -> bool {
+    hardware_id.is_some_and(|(vendor, _)| vendor == LOGITECH_VENDOR)
+}
 /// A failed read after reacquiring can be transient, but several in a row mean the
 /// DirectInput object itself is stale. Reopen it instead of keeping its last state forever.
 const READ_FAILURE_LIMIT: u8 = 3;
@@ -550,6 +558,13 @@ impl DirectInput {
             .map(|d| d.ff_axis as usize / 4)
     }
 
+    /// Whether this wheel's motor turns the other way from the force (see `force_flipped_for`).
+    pub fn force_flipped(&self, name: &str) -> bool {
+        self.devices
+            .iter()
+            .any(|d| d.name == name && d.ff.is_some() && force_flipped_for(d.hardware_id))
+    }
+
     /// `hwnd`: the window the devices belong to; `ff`: take the devices for force feedback
     /// (the game's window: they then answer only while it is in front, as in OMSI).
     pub fn new(hwnd: isize, ff: bool) -> Option<DirectInput> {
@@ -671,6 +686,9 @@ impl DirectInput {
                         reopen.push((d.guid, d.name.clone()));
                     }
                     d.ff_error_logged = false;
+                    if let Some(e) = d.ff.as_ref() {
+                        let _ = e.Start(1, 0);
+                    }
                 } else {
                     self.events.extend(state_release_events(&d.name, &d.state));
                     d.state = RawState::default();
@@ -1120,6 +1138,8 @@ impl DirectInput {
             return false;
         };
         let limit = crate::ffb_calibration::MAX_PULSE_FORCE;
+        // (the wheel's measured polarity is part of the game's forces, so the test sees it too)
+        let force = if force_flipped_for(device.hardware_id) { -force } else { force };
         let mut constant = DICONSTANTFORCE {
             lMagnitude: (force.clamp(-limit, limit) * DI_FFNOMINALMAX as f32) as i32,
         };
@@ -1197,7 +1217,10 @@ impl DirectInput {
             };
             unsafe {
                 // (a device taken away - the window left the front - is taken again)
-                let result = e.SetParameters(&mut eff, DIEP_TYPESPECIFICPARAMS | DIEP_START);
+                // (no DIEP_START: it restarts the effect on every update, and a Logitech
+                // driver answers a hundred restarts a second with jerks and a buzz; the
+                // effect is started once, when it is made and when the focus is back)
+                let result = e.SetParameters(&mut eff, DIEP_TYPESPECIFICPARAMS);
                 let result = if result.is_err() {
                     reacquire(&d.dev, true);
                     e.SetParameters(&mut eff, DIEP_TYPESPECIFICPARAMS | DIEP_START)
@@ -1312,6 +1335,15 @@ impl Drop for DirectInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_logitech_wheels_have_their_force_flipped() {
+        assert!(force_flipped_for(Some((0x046D, 0xC266)))); // G923
+        assert!(force_flipped_for(Some((0x046D, 0xC24F)))); // G29
+        assert!(!force_flipped_for(Some((0x044F, 0xB66E)))); // Thrustmaster T300
+        assert!(!force_flipped_for(Some(VJOY_HARDWARE_ID)));
+        assert!(!force_flipped_for(None));
+    }
 
     #[test]
     fn failed_opens_back_off_to_half_a_minute() {
