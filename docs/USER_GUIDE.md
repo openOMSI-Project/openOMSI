@@ -207,7 +207,9 @@ again only when something changes; drag on it to turn the bus, scroll to zoom. I
   yet has **Set up**, and **Set up step by step** finds its axes (turn the wheel left, press
   each pedal); every button of the device is listed (press one to jump to it). On Windows the
   devices are read through DirectInput, as OMSI does, so wheels Windows lists can be
-  configured for steering. Force feedback needs a driver that supports constant force:
+  configured for steering. Logitech wheels push the other way from DirectInput's force, so the game
+  turns their force round by itself (leave *Invert force feedback* off unless one still feels wrong).
+  Force feedback needs a driver that supports constant force:
   parking resistance eases as the bus rolls, with centring and
   feedback from the bus's sideways acceleration, short bumps when the front wheels cross
   an edge, plus the scripts' shaking, `FF_Vib_Amp`. Over the top of that the wheel keeps up

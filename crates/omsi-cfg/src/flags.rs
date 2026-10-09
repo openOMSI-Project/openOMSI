@@ -420,6 +420,7 @@ flags! {
     OMSI_TOUCH: Bool, Test, Use, "off", "The on-screen touch controls on a computer.";
     OMSI_TRACE_AI: Text, Debug, Use, "-", "CSV: every AI car's pose, steering and speed every frame.";
     OMSI_TRACE_AI_BUSES: Bool, Debug, Use, "off", "With OMSI_TRACE_AI: the timetable buses only.";
+    OMSI_TRACE_FFB: Text, Debug, Use, "-", "CSV: the force feedback frame by frame (Windows): the wheel's position and the force sent.";
     OMSI_TRACE_PAX: Text, Debug, Use, "-", "File: trace the passengers.";
     OMSI_TRACE_REMOTE: Text, Debug, Use, "-", "LAN CSV: where each other player's bus is drawn every frame.";
     OMSI_TRACE_STEER: Text, Debug, Use, "-", "CSV: the mouse steering frame by frame.";
