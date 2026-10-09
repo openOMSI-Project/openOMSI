@@ -15,7 +15,7 @@ graphics card: the renderer runs on wgpu's no-op device, so the world, the AI tr
 timetable buses and the people are simulated exactly as a hosting player's game does, and
 nothing is drawn. `server.cfg` is written with commented defaults on the first start (name,
 motd, map, date, time, weather, traffic, timetable, passengers, port, web_port,
-max_players, tunnel, radius, the voice chat); `server-icon.png` beside it (64x64, like Minecraft's) is the
+max_players, tunnel, public, admin_password, dispatch, radius, the voice chat); `server-icon.png` beside it (64x64, like Minecraft's) is the
 icon the players' list shows.
 
 Players reach it two ways:
@@ -33,7 +33,10 @@ Players reach it two ways:
   max_players, time, weather, version, protocol, vehicles, and on a dedicated server `world`:
   its AI cars, buses, cars asleep, parked cars, people walking, waiting and aboard, the
   traffic density) and `GET /icon.png`, which the launcher's Multiplayer → Servers list
-  shows. `vehicles` is the server's `vehicles` list (else every bus it has): a joining
+  shows. With `public = auto` (the default) or `1`, the server also posts that tunnel
+  address to the public lobby every few minutes so Multiplayer → Servers → **Public** lists
+  it for every player; `public = 0` keeps it off the list (Favorites still work if someone
+  adds the address by hand). `vehicles` is the server's `vehicles` list (else every bus it has): a joining
   player's launcher offers only those, and so do the game menu's *Place a vehicle* and *Swap*
   once the game has joined. With an `admin_password` it also takes `POST /admin`
   from the machine itself: one admin command a line (`clock 30600`, `weather set
@@ -158,7 +161,10 @@ omsi-server --root "/path/to/OMSI 2" --config server.cfg
 | `port` | UDP port (27015) |
 | `max_players`, `password` | who may join (`REJECT` with a reason otherwise) |
 | `name`, `motd` | shown in the launcher's list and on joining |
-| `public` | post to the relay's lobby topic, so the launcher can list the server |
+| `public` | `auto` (default): post to the lobby when a tunnel URL exists; `1`: same when a join URL is known; `0`: never. The launcher's Multiplayer → Servers → Public tab lists fresh posts and checks `/status` before showing a server as online |
+| `admin_password` | chat `/admin <password>` and the local web dispatch / `POST /admin` (empty: neither) |
+| `dispatch` | `1` (default): serve `GET /dispatch` on the web port from this machine only; `0`: off. From another PC, SSH-forward the web port |
+| `share_positions` | `1`: `GET /players` and the dispatch live map; `0` (default): off |
 | `admins` | player names allowed to run `/kick`, `/time`, `/weather` in the chat |
 
 It needs the original OMSI 2 files like the game (same `missing_original_essentials`
@@ -172,7 +178,7 @@ check) and the same mods as the players: the server lists its content in `WELCOM
    renderer, compared with the game's positions for the same seed).
 3. `omsi-server` hosting a session from `server.cfg`; the launcher's Join accepts
    `host:port` and codes as today.
-4. Lobby: servers post `name/map/players/code` to the relay's lobby topic; the launcher
-   shows the list.
+4. Lobby: done - dedicated servers with `public = auto`/`1` post to the relay's lobby
+   topic; Multiplayer → Servers → Public lists them (verified with `/status`).
 5. Tick time and bandwidth on the status / dispatch page (admin commands and a local
    dispatch page are already there).

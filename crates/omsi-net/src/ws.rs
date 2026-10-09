@@ -53,6 +53,8 @@ pub struct ServerInfo {
     pub player_list: Vec<PlayerInfo>,
     /// `POST /admin` from this machine with this password (empty: no such door).
     pub local_admin_password: String,
+    /// Serve `GET /dispatch` (the local web console); off when `server.cfg` has `dispatch = 0`.
+    pub dispatch_page: bool,
     /// The admin commands that came in that way, for the host loop to run.
     pub local_admin_queue: Vec<String>,
     /// When wrong passwords came lately (they lock the door for a while).
@@ -498,10 +500,14 @@ pub fn local_admin(request: &[u8], peer: Option<SocketAddr>, info: &Mutex<Server
 }
 
 /// `GET /dispatch`: the small local admin page (polls `/status`, posts to `/admin`). Same
-/// door as [`local_admin`]: only from this machine, never through a tunnel or proxy.
-pub fn local_dispatch(request: &[u8], peer: Option<SocketAddr>) -> (&'static str, &'static str, Vec<u8>) {
+/// door as [`local_admin`]: only from this machine, never through a tunnel or proxy. Off when
+/// `ServerInfo::dispatch_page` is false (`dispatch = 0` in `server.cfg`).
+pub fn local_dispatch(request: &[u8], peer: Option<SocketAddr>, info: &Mutex<ServerInfo>) -> (&'static str, &'static str, Vec<u8>) {
     let text = String::from_utf8_lossy(request);
     let head = text.split_once("\r\n\r\n").map(|(h, _)| h).unwrap_or(&text);
+    if !info.lock().unwrap_or_else(|e| e.into_inner()).dispatch_page {
+        return ("404 Not Found", "text/plain; charset=utf-8", b"dispatch is off (dispatch = 0 in server.cfg)".to_vec());
+    }
     if let Err((status, msg)) = from_this_machine(peer, head) {
         return (status, "text/plain; charset=utf-8", msg.into_bytes());
     }
@@ -532,7 +538,7 @@ fn serve(stream: TcpStream, target: SocketAddr, info: &Mutex<ServerInfo>, stop: 
                 let (status, text) = local_admin(&request, peer, info);
                 (status, "text/plain; charset=utf-8", text.into_bytes())
             }
-            "/dispatch" => local_dispatch(&request, peer),
+            "/dispatch" => local_dispatch(&request, peer, info),
             "/status" | "/status.json" => ("200 OK", "application/json", info.lock().unwrap_or_else(|e| e.into_inner()).to_json().into_bytes()),
             "/players" | "/players.json" => {
                 let i = info.lock().unwrap_or_else(|e| e.into_inner());
@@ -976,17 +982,20 @@ mod tests {
     fn local_dispatch_door() {
         let here = Some(SocketAddr::from(([127, 0, 0, 1], 5000)));
         let get = b"GET /dispatch HTTP/1.1\r\nHost: x\r\n\r\n";
-        let (st, ctype, body) = local_dispatch(get, here);
+        let info = Mutex::new(ServerInfo { dispatch_page: true, ..Default::default() });
+        let (st, ctype, body) = local_dispatch(get, here, &info);
         assert_eq!(st, "200 OK");
         assert!(ctype.starts_with("text/html"));
         let page = String::from_utf8_lossy(&body);
         assert!(page.contains("openOMSI") && page.contains("Call log") && page.contains("/admin") && page.contains("Live map"), "{page}");
         // not from this machine
-        assert_eq!(local_dispatch(get, Some(SocketAddr::from(([10, 0, 0, 2], 5000)))).0, "403 Forbidden");
+        assert_eq!(local_dispatch(get, Some(SocketAddr::from(([10, 0, 0, 2], 5000))), &info).0, "403 Forbidden");
         // through a tunnel on the loopback
         let tunneled = b"GET /dispatch HTTP/1.1\r\nHost: x\r\nCf-Connecting-Ip: 203.0.113.9\r\n\r\n";
-        assert_eq!(local_dispatch(tunneled, here).0, "403 Forbidden");
-        assert_eq!(local_dispatch(b"POST /dispatch HTTP/1.1\r\nHost: x\r\n\r\n", here).0, "405 Method Not Allowed");
+        assert_eq!(local_dispatch(tunneled, here, &info).0, "403 Forbidden");
+        assert_eq!(local_dispatch(b"POST /dispatch HTTP/1.1\r\nHost: x\r\n\r\n", here, &info).0, "405 Method Not Allowed");
+        info.lock().unwrap().dispatch_page = false;
+        assert_eq!(local_dispatch(get, here, &info).0, "404 Not Found");
     }
 
     #[test]

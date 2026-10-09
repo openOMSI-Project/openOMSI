@@ -32,6 +32,8 @@ pub enum Msg {
     Installed(Result<core::install::Progress, String>),
     Join(serde_json::Value),
     Server { address: String, info: Result<omsi_net::ws::ServerInfo, String> },
+    /// The public dedicated-server lobby (`omsi_net::lobby::fetch`).
+    Lobby(Result<Vec<omsi_net::lobby::Entry>, String>),
     /// A background job stopped on an error of its own (a panic): whatever it was loading
     /// is not coming.
     Crashed(String),
@@ -272,6 +274,11 @@ pub struct State {
     pub server_info: std::collections::HashMap<String, (Instant, Result<omsi_net::ws::ServerInfo, String>)>,
     pub server_asked: std::collections::HashMap<String, Instant>,
     pub joined_server: Option<String>,
+    /// Public lobby: last fetch, whether a fetch is in flight, and the error if any.
+    pub public_servers: Vec<omsi_net::lobby::Entry>,
+    pub public_fetched_at: Option<Instant>,
+    pub public_loading: bool,
+    pub public_error: Option<String>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
 }
@@ -340,6 +347,10 @@ impl State {
             server_info: Default::default(),
             server_asked: Default::default(),
             joined_server: None,
+            public_servers: Vec::new(),
+            public_fetched_at: None,
+            public_loading: false,
+            public_error: None,
             tx,
             rx,
         };
@@ -529,6 +540,23 @@ impl State {
         self.server_asked.insert(address.to_string(), Instant::now());
         let a = address.to_string();
         self.spawn(move || Msg::Server { info: omsi_net::ws::query(&a, true), address: a });
+    }
+
+    /// Fetch the public dedicated-server lobby (at most every `every` seconds unless forced).
+    pub fn fetch_public(&mut self, every: f32) {
+        if self.public_loading {
+            return;
+        }
+        if every > 0.0 {
+            if let Some(t) = self.public_fetched_at {
+                if t.elapsed().as_secs_f32() < every {
+                    return;
+                }
+            }
+        }
+        self.public_loading = true;
+        self.public_error = None;
+        self.spawn(|| Msg::Lobby(omsi_net::lobby::fetch()));
     }
 
     /// The Drive page joins `address`: the server's map is the map, the session is joined.
@@ -857,6 +885,19 @@ impl State {
                     }
                 }
                 self.server_info.insert(address, (Instant::now(), info));
+            }
+            Msg::Lobby(r) => {
+                self.public_loading = false;
+                self.public_fetched_at = Some(Instant::now());
+                match r {
+                    Ok(list) => {
+                        self.public_servers = list;
+                        self.public_error = None;
+                    }
+                    Err(e) => {
+                        self.public_error = Some(e);
+                    }
+                }
             }
             Msg::ContentEarly { maps, weathers } => {
                 if !self.content_first {

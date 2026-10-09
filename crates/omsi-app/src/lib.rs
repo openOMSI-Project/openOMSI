@@ -436,14 +436,14 @@ pub(crate) fn make_app(mut args: Args, server_cfg: Option<server::ServerCfg>) ->
         lan::take_host_map(&mut args, l);
     }
     if let (Some(cfg), Some(l)) = (server_cfg.as_ref(), lan.as_ref()) {
-        lan::open_public_gateway(l, server::info_of(cfg), cfg.web_port, cfg.tunnel);
+        lan::open_public_gateway(l, server::info_of(cfg), cfg.web_port, cfg.tunnel, cfg.public);
         lan::publish_vehicles(args.root.clone(), cfg.vehicles.clone());
         if cfg.tunnel {
             // the address to give the players, as soon as cloudflared says it
             std::thread::spawn(|| {
                 for _ in 0..300 {
                     if let Some(u) = lan::tunnel_url() {
-                        println!("\n  Server address for the players: {u}\n  (Multiplayer -> Servers -> Add)\n");
+                        println!("\n  Server address for the players: {u}\n  (Multiplayer -> Servers -> Favorites -> Add, or Public when public = auto/1)\n");
                         return;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(200));

@@ -755,11 +755,16 @@ pub fn tunnel_url() -> Option<String> {
 /// it when `cloudflared` is installed, whose address goes to the rendezvous under the
 /// session's topic - the way in for a player whose router and ours cannot be punched
 /// through (the code alone found a friend across the world once, and then never again).
-/// `web_port` 0 picks the session port + 10.
-pub fn open_public_gateway(session: &LanSession, info: omsi_net::ws::ServerInfo, web_port: u16, want_tunnel: bool) {
+/// `web_port` 0 picks the session port + 10. Dedicated servers may also post to the public
+/// lobby (`lobby`); peer hosts pass [`omsi_net::lobby::Mode::Off`].
+pub fn open_public_gateway(session: &LanSession, info: omsi_net::ws::ServerInfo, web_port: u16, want_tunnel: bool, lobby: omsi_net::lobby::Mode) {
     let Some(udp) = session.local_addr() else { return };
     let target = SocketAddr::from(([127, 0, 0, 1], udp.port()));
     let port = if web_port == 0 { udp.port().saturating_add(10) } else { web_port };
+    let lobby_name = info.name.clone();
+    let lobby_map = info.map.clone();
+    let lobby_max = info.max_players;
+    let lobby_version = info.version.clone();
     let gateway = match omsi_net::ws::WsGateway::start(SocketAddr::from(([0, 0, 0, 0], port)), target, info.clone()).or_else(|_| omsi_net::ws::WsGateway::start(SocketAddr::from(([0, 0, 0, 0], 0)), target, info)) {
         Ok(g) => g,
         Err(e) => {
@@ -796,6 +801,7 @@ pub fn open_public_gateway(session: &LanSession, info: omsi_net::ws::ServerInfo,
         // reached every five minutes, for the players who type `openomsi`
         let official = omsi_cfg::flags::OMSI_OFFICIAL_KEY.os().and_then(|p| std::fs::read(p).map_err(|e| log::warn!("official key {}: {e}", std::path::Path::new(&p).display())).ok());
         let mut announced: Option<(String, Instant)> = None;
+        let mut lobby_posted: Option<(String, Instant)> = None;
         loop {
             let now = url.lock().ok().and_then(|u| u.clone());
             if let (Some(key), Some(u)) = (official.as_ref(), now.as_ref()) {
@@ -806,6 +812,19 @@ pub fn open_public_gateway(session: &LanSession, info: omsi_net::ws::ServerInfo,
                         Err(e) => log::warn!("official server: not announced: {e}"),
                     }
                     announced = Some((u.clone(), Instant::now()));
+                }
+            }
+            if lobby.wants_announce() {
+                if let Some(u) = now.as_ref() {
+                    let due = lobby_posted.as_ref().is_none_or(|(a, t)| a != u || t.elapsed() > Duration::from_secs(300));
+                    if due {
+                        let players = WS_PATH.lock().ok().and_then(|w| w.as_ref()?.gateway.as_ref().map(|g| g.info.lock().ok().map(|i| i.players).unwrap_or(0))).unwrap_or(0);
+                        match omsi_net::lobby::announce(u, &lobby_name, &lobby_map, players, lobby_max, &lobby_version) {
+                            Ok(()) => log::info!("lobby: announced '{lobby_name}' at {u} ({players}/{lobby_max})"),
+                            Err(e) => log::warn!("lobby: not announced: {e}"),
+                        }
+                        lobby_posted = Some((u.clone(), Instant::now()));
+                    }
                 }
             }
             match (now, &posted) {
@@ -833,6 +852,7 @@ pub fn open_public_gateway(session: &LanSession, info: omsi_net::ws::ServerInfo,
                     if let Some(t) = omsi_net::tunnel::Tunnel::start(port) {
                         url = t.url.clone();
                         posted = None;
+                        lobby_posted = None;
                         if let Ok(mut w) = WS_PATH.lock() {
                             if let Some(w) = w.as_mut() {
                                 w.tunnel = Some(t);
@@ -1152,7 +1172,7 @@ pub fn start(args: &Args) -> Option<LanSession> {
     if session.role == Role::Host && args.server.is_none() {
         // the way in over the internet that always works (see `open_public_gateway`)
         let info = omsi_net::ws::ServerInfo { name: format!("{}'s game", player_name(args)), map: args.map.clone(), max_players: 16, version: env!("CARGO_PKG_VERSION").into(), ..Default::default() };
-        open_public_gateway(&session, info, 0, true);
+        open_public_gateway(&session, info, 0, true, omsi_net::lobby::Mode::Off);
         publish_vehicles(args.root.clone(), Vec::new());
     }
     write_status(&session, &Default::default(), None);

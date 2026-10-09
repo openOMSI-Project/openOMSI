@@ -83,6 +83,7 @@ pub mod vars;
 pub mod ws;
 pub mod tunnel;
 pub mod official;
+pub mod lobby;
 
 use std::cell::Cell;
 use std::collections::HashMap;
