@@ -163,6 +163,9 @@ const EARLY_LEAVE: f64 = 20.0;
 const EARLY_LEAVE_RAIL: f64 = 120.0;
 /// A layover waits for the departure however long (a tour's bus in on its previous trip).
 const LAYOVER_WAIT: f64 = 1800.0;
+/// An untimed intermediate stop has only an interpolated departure. Holding to that
+/// estimate for many minutes can block the stop and the lane behind it on mod maps.
+const INTERPOLATED_STOP_WAIT: f64 = 120.0;
 
 /// How long a bus arriving at `now` stands at a stop it is to leave at `depart`.
 fn early_wait(depart: f64, now: f64, layover: bool, rail: bool) -> f64 {
@@ -389,6 +392,15 @@ impl BusService {
         !timed_only || self.waits_here(layover, rail, early)
     }
 
+    fn stop_wait(&self, depart: f64, now: f64, timed_only: bool, layover: bool, rail: bool) -> f64 {
+        let timed_stop = self.waits_here(layover, rail, depart - now);
+        if !self.holds_for_departure(timed_only, layover, rail, depart - now) {
+            return 0.0;
+        }
+        let scheduled = early_wait(depart, now, layover, rail);
+        if timed_stop { scheduled } else { scheduled.min(INTERPOLATED_STOP_WAIT) }
+    }
+
     /// Arrived at the front stop: what now.
     fn arrive(&mut self, ctx: &Ctx, depart: f64, at: (usize, f32)) {
         if omsi_cfg::flags::OMSI_DEBUG_STOPS.is_set() {
@@ -400,11 +412,7 @@ impl BusService {
         // a time on holds the bus for it; elsewhere its time is the running time shared out,
         // and an early bus serves and drives on. Without it (the default) the bus waits at
         // every stop it serves, as in Omsi.exe
-        let wait = if self.holds_for_departure(ctx.timed_waits_only, layover, rail, depart - ctx.day_time) {
-            early_wait(depart, ctx.day_time, layover, rail)
-        } else {
-            0.0
-        };
+        let wait = self.stop_wait(depart, ctx.day_time, ctx.timed_waits_only, layover, rail);
         self.leave_at = ctx.day_time + wait;
         self.arrived_at = ctx.day_time;
         self.boarding = boarding_time(ctx.id);
@@ -420,11 +428,13 @@ impl BusService {
         self.delay = (ctx.day_time + (self.boarding as f64).max(wait)) - depart;
         if ctx.debug {
             log::info!(
-                "t={:.1}: timetable bus {} at its stop, {:.0} s to its departure ({:?}) at {:?}",
+                "t={:.1}: timetable bus {} at its stop, {:.0} s to its departure, waiting {:.0} s ({:?}, timed {}) at {:?}",
                 ctx.day_time,
                 ctx.id,
                 depart - ctx.day_time,
+                wait,
                 self.phase,
+                self.waits_here(layover, rail, depart - ctx.day_time),
                 ctx.net.lanes.get(at.0).map(|l| { let p = l.at(at.1).0; (p.x.round(), p.y.round()) })
             );
         }
@@ -765,6 +775,23 @@ mod tests {
         assert!(s.holds_for_departure(true, false, false, 100.0));
         // the wait itself is OMSI's: until 20 s before the departure
         assert_eq!(early_wait(200.0, 100.0, false, false), 80.0);
+    }
+
+    #[test]
+    fn interpolated_intermediate_stop_cannot_hold_a_bus_for_many_minutes() {
+        let stop = |id: i64| Stop::from_tuple((0, 0.0, 0.0, 1200.0, id, 0.0));
+        let mut service = BusService::new(vec![stop(2), stop(3)]);
+        service.last_stop = Some(3);
+        assert!(!service.waits_here(false, false, 1200.0));
+        assert_eq!(service.stop_wait(1200.0, 0.0, false, false, false), 120.0);
+        assert_eq!(service.stop_wait(1200.0, 0.0, true, false, false), 0.0);
+        service.holds.push(2);
+        assert!(service.waits_here(false, false, 1200.0));
+        assert_eq!(service.stop_wait(1200.0, 0.0, false, false, false), 1180.0);
+        service.holds.clear();
+        service.stops.pop_front();
+        assert!(service.waits_here(false, false, 1200.0), "the terminus still keeps its layover");
+        assert_eq!(service.stop_wait(1200.0, 0.0, false, false, false), 1180.0);
     }
 
     #[test]
