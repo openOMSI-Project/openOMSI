@@ -514,6 +514,15 @@ Depot files can also be placed in a top-level `HOFs/` folder. Every vehicle can 
 vehicle folder and `HOFs/` contain the same file name, the vehicle's own copy takes
 priority (the launcher's depot list shows the shared ones after the bus's own).
 
+When a mod map is installed in the openOMSI content folder, its HOF names from
+`maps/<map>/ailists.cfg` are checked when the map list is read. If the matching `.hof` is
+available, openOMSI adds it to vehicle folders that already contain a vehicle-local HOF
+but lack that file. The copies are kept in openOMSI's writable content folder; the original
+OMSI installation is not changed. Missing source files or copy errors are shown as warnings
+on the launcher's **Mods** page. The **Add HOF files to buses** button on that page lets you
+choose one or more `.hof` files manually and copies them into vehicle folders that already
+contain a local HOF file. Existing copies are left untouched.
+
 Installing a mod: the launcher's **Mods** page opens the system's folder / file picker
 (Finder, Explorer, GTK) for a mod folder or a `.zip`, `.7z` or `.rar` archive and sorts it
 into place (OMSI-style folders anywhere inside are merged; a lone bus, map, object or

@@ -2432,6 +2432,12 @@ pub fn mods(l: &mut Launcher, area: Rect) {
         }
     }
     y += 52.0;
+    if l.ui.button("mod-add-hofs", Rect::new(inner.x, y, inner.w, 36.0), &omsi_ui::tr("Add HOF files to buses"), Some("add_to_drive"), ButtonKind::Normal) {
+        if let Some(files) = core::pick_hofs(&omsi_ui::tr("Choose HOF files"), &omsi_ui::tr("OMSI depot files")) {
+            l.state.add_hofs(files);
+        }
+    }
+    y += 46.0;
     l.ui.label(Rect::new(inner.x, y, inner.w, 20.0), "Archive install mode");
     y += 22.0;
     let mut m = l.state.mod_mode;
@@ -2587,6 +2593,16 @@ fn mod_list(l: &mut Launcher, c: Rect) {
         crate::updater::open_url(&status.content_dir);
     }
     y += 26.0;
+    if !status.hof_warnings.is_empty() {
+        let text = "Some map HOF files could not be added. Check launcher.log for details.";
+        let text_h = l.ui.paragraph_height(&text, inner.w - 54.0, 11.5, Weight::Regular);
+        let warning = Rect::new(inner.x, y, inner.w, text_h + 36.0);
+        l.ui.p().rounded(warning, 8.0, WARN.alpha(0.11));
+        l.ui.icon("warning", Vec2::new(warning.x + 17.0, warning.y + 17.0), 16.0, WARN);
+        l.ui.text_in(&omsi_ui::tr("Map HOF issue"), Rect::new(warning.x + 32.0, warning.y + 7.0, warning.w - 42.0, 18.0), 12.0, Weight::Bold, WARN, Align::Left);
+        l.ui.paragraph(&text, Vec2::new(warning.x + 32.0, warning.y + 25.0), warning.w - 42.0, 11.5, Weight::Regular, WARN);
+        y += warning.h + 8.0;
+    }
     // the search, and the filters with how many each holds
     let mut q = std::mem::take(&mut l.pages.mod_search);
     l.ui.text_input("mods-search", Rect::new(inner.x, y, inner.w, 34.0), &mut q, "Search mods…", Some("search"));

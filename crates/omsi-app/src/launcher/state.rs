@@ -28,6 +28,7 @@ pub enum Msg {
     Stopped { pid: u32, result: Result<bool, String> },
     LogTail { pid: u32, lines: Vec<String> },
     Mods(Result<core::ModsStatus, String>),
+    HofsAdded(Result<(), String>),
     /// A mod switched on or off, or removed (its name), or why not.
     ModChanged { result: Result<String, String>, done: &'static str },
     ModInfo(Result<core::install::SourceInfo, String>),
@@ -509,6 +510,17 @@ impl State {
     pub fn mod_remove(&mut self, id: String) {
         self.mod_busy = Some(id.clone());
         self.spawn(move || Msg::ModChanged { result: core::mod_remove(&id).map_err(|e| format!("{e:#}")), done: "deleted" });
+    }
+
+    /// Add selected depot files to every eligible bus folder.
+    pub fn add_hofs(&mut self, files: Vec<std::path::PathBuf>) {
+        self.mod_busy = Some("__hof_copy__".into());
+        self.spawn(move || Msg::HofsAdded(
+            core::add_hofs_to_vehicle_folders(&files).map(|_| ()).map_err(|e| {
+                core::log_to_file(&format!("HOF copy failed: {e:#}"));
+                omsi_ui::tr("HOF copy failed. Check launcher.log for details.").into_owned()
+            }),
+        ));
     }
 
     pub fn check_join(&mut self) {
@@ -1110,9 +1122,19 @@ impl State {
                 self.mods = Some(m);
             }
             Msg::Mods(Err(e)) => self.set_status(e, true),
+            Msg::HofsAdded(result) => {
+                self.mod_busy = None;
+                match result {
+                    Ok(()) => self.set_status(omsi_ui::tr("HOF files added to eligible bus folders.").into_owned(), false),
+                    Err(e) => self.set_status(e, true),
+                }
+                self.load_mods();
+                self.load_content();
+            }
             Msg::ModChanged { result, done } => {
                 self.mod_busy = None;
                 match result {
+                    Ok(name) if done.is_empty() => self.set_status(name, false),
                     Ok(name) => self.set_status(format!("{name} {done}"), false),
                     Err(e) => self.set_status(format!("Not done: {e}"), true),
                 }
