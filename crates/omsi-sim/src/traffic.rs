@@ -587,13 +587,15 @@ impl Network {
         along >= 8.0 - 1e-3
     }
 
-    /// Where on lane `b`, beside `a` (see `parallel`), the car at distance `s` along `a` is:
-    /// the same distance on lanes that start together, else the point of `b` beside it.
+    /// Where on lane `b`, beside `a` (see `parallel`), the car at distance `s` along `a` is.
+    /// Even lanes that start together can have very different lengths after a fork: mapping
+    /// by their length ratio would aim a lane change far ahead on the longer branch.
     pub fn beside_s(&self, a: usize, b: usize, s: f32) -> f32 {
         let (la, lb) = (&self.lanes[a], &self.lanes[b]);
         if (lb.start() - la.start()).truncate().length() < 8.0 {
-            let frac = if la.length() > 0.0 { s / la.length() } else { 0.0 };
-            return frac * lb.length();
+            if let Some((at, _)) = lb.nearest_point(la.at(s.clamp(0.0, la.length())).0) {
+                return at;
+            }
         }
         (s + self.beside_delta(a, b)).clamp(0.0, lb.length())
     }
@@ -2915,6 +2917,38 @@ mod tests {
         );
         let wait = net.route_change_wait_distance(0, 1, 10.0);
         assert!(wait > 0.0 && wait < 30.0, "wait before the branches part: {wait}");
+    }
+
+    #[test]
+    fn timetable_change_to_a_longer_branch_stays_beside_the_bus() {
+        let lane = |points| LaneBuilder::polyline(points, LaneKind::Street, 3.0);
+        let mut main = lane(vec![DVec3::new(0.0, 0.0, 0.0), DVec3::new(0.0, 60.0, 0.0)]);
+        let mut branch = lane(vec![DVec3::new(3.5, 0.0, 0.0), DVec3::new(3.5, 25.0, 0.0), DVec3::new(3.5, 30.0, 0.0), DVec3::new(100.0, 30.0, 0.0)]);
+        main.key = Some(LaneKey { tile: (0, 0), id: 1, path: 0 });
+        branch.key = Some(LaneKey { tile: (0, 0), id: 1, path: 1 });
+        let net = Network { lanes: vec![main, branch], ..Default::default() };
+        assert!(net.parallel(0, 1));
+        assert!(net.route_change_locally_possible(0, 1, 10.0));
+        assert!((net.beside_s(0, 1, 10.0) - 10.0).abs() < 0.01);
+
+        let mut car = AiState::new(0, 10.0, 7);
+        car.set_route(&net, vec![0, 1], 10.0);
+        car.speed = 3.0;
+        car.start_route_change(&net, 1, 2);
+        let at = car.change.expect("lane change started");
+        assert!((at.s_to - 10.0).abs() < 0.01);
+        let mut prev = car.way_point(&net, 0.0);
+        for _ in 0..300 {
+            assert!(car.drive(&net, 1.0 / 30.0, None, None));
+            let p = car.way_point(&net, 0.0);
+            assert!((p - prev).length() < 0.3, "lane change jumped from {prev:?} to {p:?}");
+            prev = p;
+            if car.change.is_none() {
+                break;
+            }
+        }
+        assert_eq!(car.lane, 1);
+        assert!(prev.x > 3.0 && prev.x < 4.0 && prev.y < 30.0, "bus crossed the branch's turn: {prev:?}");
     }
 
     #[test]
