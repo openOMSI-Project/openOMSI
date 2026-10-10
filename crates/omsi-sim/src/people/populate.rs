@@ -246,6 +246,21 @@ impl PeopleSim {
         }
     }
 
+    /// The trips due at the stops soon (`due_dests`) made anew by `due` for game time
+    /// `day_time` once a game minute has gone by since they last were (#1415). Made once
+    /// only, at the game's start, they leave every stop without a trip in its first quarter
+    /// of an hour without people for the rest of the session.
+    pub fn keep_due_dests(
+        &mut self,
+        day_time: f64,
+        due: impl FnOnce(f64) -> HashMap<i64, HashSet<String>>,
+    ) {
+        if (day_time - self.due_at).abs() >= 60.0 {
+            self.due_dests = Some(due(day_time));
+            self.due_at = day_time;
+        }
+    }
+
     /// A destination drawn from stop `id`'s (sub_61baa8): by weight; none when the weights
     /// leave the draw over. Also the stop's line record it matched.
     pub fn draw_dest(&mut self, id: i64) -> (Option<String>, Option<usize>) {

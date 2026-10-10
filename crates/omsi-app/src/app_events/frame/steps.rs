@@ -134,6 +134,18 @@ pub(crate) fn humans_by_hour(
     h.delay = duty.map(|d| d.delay(time)).unwrap_or(0.0);
 }
 
+/// The trips due at the stops soon, the ones the people turning up there wait for: made
+/// anew once a game minute, on the traffic's clock (#1415).
+pub(crate) fn humans_due_trips(
+    h: &mut humans::Humans,
+    schedule: Option<&schedule::Schedule>,
+    traffic: Option<&traffic::Traffic>,
+) {
+    if let (Some(s), Some(t)) = (schedule, traffic) {
+        h.keep_due_dests(t.day_time, |at| s.due_destinations(at));
+    }
+}
+
 /// What the bus's scripts are told of the surroundings: the light around it, the sun's
 /// height and the weather (`wetness`: the roads').
 pub(crate) fn tell_surroundings(
