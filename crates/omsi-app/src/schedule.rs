@@ -138,7 +138,6 @@ impl Schedule {
         world: &World,
         traffic: Option<&Traffic>,
         duty: Option<&PlayerDuty>,
-        player_hof: Option<&omsi_vehicle::Hof>,
         clock: &omsi_sim::SimClock,
     ) {
         let now = clock.time;
@@ -152,7 +151,7 @@ impl Schedule {
         }
         let (wanted, wanted_names) = (boards.wanted.clone(), boards.wanted_names.clone());
         let (by_stop, departures) =
-            self.sim.make_boards(traffic.map(|t| &t.sim), wanted, wanted_names, duty, player_hof, clock);
+            self.sim.make_boards(traffic.map(|t| &t.sim), wanted, wanted_names, duty, clock);
         boards.by_stop = by_stop;
         boards.departures = departures;
         boards.departures_gen = boards.departures_gen.wrapping_add(1);

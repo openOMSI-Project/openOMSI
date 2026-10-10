@@ -131,7 +131,6 @@ impl Offscreen<'_> {
             ref mut schedule,
             ref world,
             ref duty,
-            ref player_ref,
             ref renderer,
             ref mut scene,
             ref camera,
@@ -155,9 +154,6 @@ impl Offscreen<'_> {
                     world,
                     traffic.as_ref(),
                     duty.as_ref(),
-                    player_ref
-                        .as_ref()
-                        .and_then(|p| p.vehicle.host.hof.as_deref()),
                     clock,
                 );
                 n = world.update_scripted(

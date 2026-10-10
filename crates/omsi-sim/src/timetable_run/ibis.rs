@@ -776,22 +776,3 @@ pub(crate) fn set_destination_at(
         hof.termini[ti].texture_id.clone(),
     );
 }
-
-/// What a bus's displays call its terminus: the depot file's first string for it (what the
-/// IBIS shows, in capitals - the stock departure display's font has no small letters, and
-/// the trip's "Bauernhof" came out as a lone "B"), else the timetable's name in capitals
-/// (a train has no depot file).
-pub fn terminus_text(hof: Option<&omsi_vehicle::Hof>, terminus: &str) -> String {
-    let name = terminus.trim();
-    hof.and_then(|h| {
-        h.termini.iter().find(|t| {
-            t.texture_id.trim().eq_ignore_ascii_case(name)
-                || t.strings
-                .iter()
-                .any(|s| s.trim().eq_ignore_ascii_case(name))
-        })
-    })
-        .and_then(|t| t.strings.first())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| name.to_uppercase())
-}

@@ -235,9 +235,6 @@ impl App {
                 w,
                 traffic,
                 self.session.duty.as_ref(),
-                self.player
-                    .as_ref()
-                    .and_then(|p| p.vehicle.host.hof.as_deref()),
                 &self.clock,
             );
             *self.perf.profile.entry("scripted.boards").or_default() += __tb.elapsed().as_secs_f64();

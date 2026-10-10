@@ -257,7 +257,7 @@ fn trip_times_from_the_profile() {
     );
 }
 
-fn planned(departure: f64, stops: &[(f64, f64, f64)]) -> PlannedTrip {
+pub(super) fn planned(departure: f64, stops: &[(f64, f64, f64)]) -> PlannedTrip {
     let stops: Vec<PlannedStop> = stops
         .iter()
         .enumerate()
@@ -351,7 +351,7 @@ fn timetable_test_vehicle_with_door(door: &str) -> crate::VehicleInstance {
 }
 
 /// A vehicle that declares the IBIS variables a destination is written to.
-fn ibis_test_vehicle() -> crate::VehicleInstance {
+pub(super) fn ibis_test_vehicle() -> crate::VehicleInstance {
     script_test_vehicle("{frame}\n{end}\n", "IBIS_LinieKurs\nIBIS_TerminusIndex\nIBIS_TerminusCode\n", "IBIS_terminus_name\n")
 }
 

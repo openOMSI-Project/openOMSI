@@ -450,11 +450,10 @@ pub(crate) fn departure_boards(
     world: &World,
     traffic: Option<&traffic::Traffic>,
     duty: Option<&schedule::PlayerDuty>,
-    player_hof: Option<&omsi_vehicle::Hof>,
     clock: &omsi_sim::SimClock,
 ) {
     match schedule {
-        Some(s) => s.update_boards(world, traffic, duty, player_hof, clock),
+        Some(s) => s.update_boards(world, traffic, duty, clock),
         None => world.timetable_boards.lock().clock = Some(clock.clone()),
     }
 }
