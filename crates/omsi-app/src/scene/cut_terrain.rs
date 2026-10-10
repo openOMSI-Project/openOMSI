@@ -91,7 +91,7 @@ impl World {
         let tile_terrain = self.terrains.read().get(&key).cloned();
         p.hole_walls = tile_terrain
             .as_ref()
-            .map(|terrain| omsi_geometry::terrain_hole_walls(&hole_rims, terrain))
+            .map(|terrain| omsi_geometry::terrain_hole_walls_with_roads(&hole_rims, terrain, &ts.drive))
             .unwrap_or_default();
         // How much of the ground the old cut rule ("anything below the terrain takes
         // it away") would have removed with nothing to put in its place: a hole in
