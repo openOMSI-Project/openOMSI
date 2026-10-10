@@ -566,15 +566,25 @@ impl App {
                 }
                 self.on_cursor(p.x, p.y);
             }
-            // the list follows the finger, line for line
+            // The shell's pause menu owns its scroll areas (rail, pages and lists).
+            // The legacy menu_top belongs to the old renderer, so moving it here no
+            // longer scrolls anything on Android (#2108).
             Role::Menu => {
                 if self.input.touch.fingers[k].moved {
-                    // (no line lit under a finger that scrolls)
-                    self.on_cursor(-1e4, -1e4);
-                    let (start, row_h) = self.ui.as_ref().map(|u| (u.menu_start as f32, u.menu_row_h.max(1.0))).unwrap_or((0.0, 1.0));
-                    let top = self.menus.menu_top.unwrap_or(start) - (p.y - last.y) / row_h;
-                    let (n, rows) = (self.menu_len() as f32, self.ui.as_ref().map(|u| u.menu_rows).unwrap_or(0) as f32);
-                    self.menus.menu_top = Some(top.clamp(0.0, (n - rows).max(0.0)));
+                    if self.shell_takes_mouse() {
+                        // Keep the pointer under the finger: the shell sends the
+                        // wheel to whichever scroll area was touched, including
+                        // nested lists. Dragging upwards must scroll down.
+                        self.shell.pointer(p.x, p.y);
+                        self.shell.wheel(touch_menu_scroll_lines(p.y - last.y, self.shell.scale));
+                    } else {
+                        // Legacy UI / VR still uses menu_top, in rows rather than pixels.
+                        self.on_cursor(-1e4, -1e4);
+                        let (start, row_h) = self.ui.as_ref().map(|u| (u.menu_start as f32, u.menu_row_h.max(1.0))).unwrap_or((0.0, 1.0));
+                        let top = self.menus.menu_top.unwrap_or(start) - (p.y - last.y) / row_h;
+                        let (n, rows) = (self.menu_len() as f32, self.ui.as_ref().map(|u| u.menu_rows).unwrap_or(0) as f32);
+                        self.menus.menu_top = Some(top.clamp(0.0, (n - rows).max(0.0)));
+                    }
                 } else {
                     self.on_cursor(p.x, p.y);
                 }
@@ -653,8 +663,9 @@ impl App {
                     self.on_cursor(p.x, p.y);
                     self.left_button(event_loop, true);
                     self.left_button(event_loop, false);
-                } else {
-                    // (the fraction of a line left over is rounded, as the menu shows it)
+                } else if !self.shell_takes_mouse() {
+                    // Only the legacy menu scrolls by whole rows; the shell's
+                    // scroll areas retain their own smooth pixel positions.
                     self.menus.menu_top = self.menus.menu_top.map(f32::round);
                 }
             }
@@ -1133,6 +1144,13 @@ fn touch_lock_angle(s: &crate::settings::Settings) -> f32 {
     (lock_to_lock.clamp(90.0, 2880.0) * 0.5).to_radians()
 }
 
+/// Convert a vertical finger drag (physical pixels, down positive) to the
+/// shell toolkit's wheel units. The toolkit scrolls 42 logical pixels per unit;
+/// preserving the entire displacement also works with high-DPI screens.
+fn touch_menu_scroll_lines(delta_y: f32, scale: f32) -> f32 {
+    delta_y / (42.0 * scale.max(0.25))
+}
+
 /// The wheel's turn as the bus gets it: one to one, the drawn wheel and the bus's wheel
 /// turn alike (a curve that was gentle round the middle made the bus turn faster and
 /// faster as the finger went on round).
@@ -1151,6 +1169,16 @@ mod tests {
     fn the_information_bar_keeps_clear_of_the_buttons_along_the_top() {
         assert_eq!(super::info_room(1280.0, 14.0, 278.0, 914.0, 56.0, 1.0), [286.0, 906.0, 14.0]);
         assert_eq!(super::info_room(720.0, 14.0, 278.0, 470.0, 56.0, 1.0), [14.0, 706.0, 64.0]);
+    }
+
+    #[test]
+    fn a_drag_scrolls_the_shell_in_pixels_at_any_screen_density() {
+        // Finger up => negative wheel => the menu moves down.
+        assert_eq!(super::touch_menu_scroll_lines(-84.0, 1.0), -2.0);
+        assert_eq!(super::touch_menu_scroll_lines(84.0, 1.0), 2.0);
+        // Twice the physical displacement at twice the scale is identical.
+        assert_eq!(super::touch_menu_scroll_lines(-168.0, 2.0), -2.0);
+        assert_eq!(super::touch_menu_scroll_lines(0.0, 2.0), 0.0);
     }
 
     #[test]
