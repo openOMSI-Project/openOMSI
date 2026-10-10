@@ -16,8 +16,8 @@ pub(crate) enum GrabMode {
     Locked,
     /// The cursor is hidden, kept in the window and put back in its middle before an edge.
     Warp,
-    /// The system lets the window neither hold nor move the cursor: it stays visible and
-    /// free, and its movement steers.
+    /// The cursor stays visible and free, by choice or when the system cannot hold it;
+    /// its position steers.
     Plain,
 }
 
@@ -65,6 +65,13 @@ impl MouseGrab {
     pub(crate) fn cursor_at(&mut self, x: f32, y: f32, from: (f32, f32), size: (f32, f32)) -> CursorStep {
         if self.mode == Some(GrabMode::Locked) {
             return CursorStep::Ignore;
+        }
+        if self.mode == Some(GrabMode::Plain) {
+            // The visible crosshair is the steering point. Counting deltas here keeps
+            // an offset when steering recentres or the free cursor moves during a pause.
+            self.at = Some((x, y));
+            self.last = Some((x, y));
+            return CursorStep::Moved { warp: false };
         }
         let centre = (size.0 * 0.5, size.1 * 0.5);
         let outer = (x - centre.0).abs() > size.0 * 0.25 || (y - centre.1).abs() > size.1 * 0.25;
@@ -423,5 +430,55 @@ mod tests {
         g.pause();
         assert_eq!(g.cursor_at(1590.0, 450.0, (1599.0, 450.0), SIZE), CursorStep::Moved { warp: false });
         assert_eq!(g.at, Some((1890.0, 450.0)));
+    }
+
+    #[test]
+    fn legacy_cursor_stays_aligned_after_reenabling_and_recentering() {
+        let centre = (800.0, 450.0);
+        for before in [(1400.0, 700.0), (200.0, 200.0)] {
+            let mut g = MouseGrab {
+                mode: Some(GrabMode::Plain),
+                ..Default::default()
+            };
+            g.cursor_at(before.0, before.1, centre, SIZE);
+            // O or right-click releases the cursor and clears the steering point.
+            g.pause();
+            g.at = None;
+            // A cursor report can arrive after re-enabling, before the next frame
+            // recentres the steering point and the system cursor.
+            g.cursor_at(before.0, before.1, before, SIZE);
+            g.at = Some(centre);
+            assert_eq!(
+                g.cursor_at(centre.0, centre.1, centre, SIZE),
+                CursorStep::Moved { warp: false }
+            );
+            assert_eq!(g.at, Some(centre));
+            assert_eq!(g.window_point(SIZE), Some(centre));
+            assert_eq!(
+                crate::player::mouse_steering(g.at.unwrap().0, SIZE.0, 0.0),
+                0.0
+            );
+
+            g.cursor_at(900.0, 500.0, centre, SIZE);
+            assert_eq!(g.at, Some((900.0, 500.0)));
+        }
+    }
+
+    #[test]
+    fn legacy_cursor_resumes_at_its_actual_position_after_a_pause() {
+        let mut g = MouseGrab {
+            mode: Some(GrabMode::Plain),
+            at: Some((1400.0, 700.0)),
+            ..Default::default()
+        };
+        g.pause();
+        // A menu or look-around moved the free cursor while steering was paused.
+        assert_eq!(
+            g.cursor_at(300.0, 200.0, (300.0, 200.0), SIZE),
+            CursorStep::Moved { warp: false }
+        );
+        assert_eq!(g.at, Some((300.0, 200.0)));
+        g.cursor_at(800.0, 450.0, (300.0, 200.0), SIZE);
+        assert_eq!(g.at, Some((800.0, 450.0)));
     }
 }
