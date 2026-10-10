@@ -1179,7 +1179,9 @@ fn shade_enhanced(in: FsIn, puddle_weight: ptr<function, vec2<f32>>, capture: bo
             // it shows at night) went past the tone curve's knee and bleached its colours -
             // the Procity's red and blue gauges pink and lavender (#827). (An LED panel's
             // light map stays as it was: its dots are meant to burn above their colour.)
-            emit = emit + max(display_level(tex.rgb) * display_dim(enh.exposure.y) - rgb, vec3<f32>(0.0)) * w;
+            // The map's script variable controls its backlight. Dimming every light-mapped
+            // surface as a cab screen hid instrument backlights even with the lights on.
+            emit = emit + max(display_level(tex.rgb) * enh.exposure.y - rgb, vec3<f32>(0.0)) * w;
         }
     }
     if (material.emissive.w < -1.5) {
