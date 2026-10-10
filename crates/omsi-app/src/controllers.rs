@@ -611,7 +611,7 @@ impl Devices {
             for (_, pad) in g.gamepads() {
                 let mapped = pad.mapping_source() != gilrs::MappingSource::None;
                 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-                let force_feedback_wheel = mapped && self.linux_ff_wheel(pad.name());
+                let force_feedback_wheel = self.linux_ff_wheel(pad.name());
                 #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
                 let force_feedback_wheel = false;
                 #[allow(unused_mut)]
@@ -652,7 +652,7 @@ impl Devices {
                         gamepad_triggers(&mut slots, trigger(gilrs::Button::LeftTrigger2), trigger(gilrs::Button::RightTrigger2));
                     }
                     slots
-                }, gamepad, ff: pad.is_ff_supported(), ff_capable: pad.is_ff_supported(), buttons });
+                }, gamepad, ff: pad.is_ff_supported() || force_feedback_wheel, ff_capable: pad.is_ff_supported() || force_feedback_wheel, buttons });
             }
         }
         // (and a wheel gilrs does not list at all: one whose only axes are the simulation
