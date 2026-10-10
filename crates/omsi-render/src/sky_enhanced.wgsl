@@ -29,6 +29,28 @@ const CLOUD_SHAPE_PERIOD: f32 = 13000.0;
 const CLOUD_DETAIL_PERIOD: f32 = 420.0;
 const CLOUD_DETAIL_STRENGTH: f32 = 0.3;
 const CLOUD_EDGE_SOFTNESS: f32 = 0.12;
+// How much cloud stands inside a heap, over the whole of what it has rather than as a step.
+// The rim above saturates a tenth of the way in and then says nothing more, so a heap's
+// middle was as thick as its neighbour's and a deck's whole underside came out one flat
+// grey with no picture in it (seen from below at a cover of 0.75 and up, where the gaps
+// between heaps show the overcast table rather than blue and there is nothing else left to
+// carry a shape). The heap's depth is now read over `CLOUD_BODY_RANGE` of the same margin,
+// at `CLOUD_BODY_WEIGHT` of the result - a thin veil stays a veil, a deep heap is twice as
+// thick as a shallow one standing beside it, and the rim itself is untouched.
+const CLOUD_BODY_RANGE: f32 = 0.7;
+const CLOUD_BODY_WEIGHT: f32 = 0.65;
+// How much deeper than the mean heap this one stands. The extinction follows it: a deep heap
+// is a longer column of droplets than the shallow one beside it, and it reads darker from
+// below because less of the sky's light comes down through it - the deck's underside then
+// carries the shape of its own heaps instead of the one flat grey it was (which is what the
+// cover's top half looked like from underneath, whatever the weather said). A heap's height
+// goes with `0.7 + b` in `cloud_base_shape`, and the map's median heap has `b = 0.30`
+// (measured), so the typical cloud comes out at 1.0 and the spread - half as thick to nearly
+// three times - is what is new.
+fn cloud_depth(b: f32) -> f32 {
+    let k = 0.7 + b;
+    return k * k;
+}
 const CLOUD_BOTTOM_SOFTNESS: f32 = 0.2;
 const CLOUD_MAX_DIST: f32 = 60000.0;
 const CLOUD_MS_GAIN: f32 = 2.4;
@@ -89,8 +111,10 @@ fn cloud_coverage(p: vec2<f32>) -> f32 {
     return clamp(0.3 + cover * 0.55 + (field - 0.5) * 0.25, 0.0, 1.0);
 }
 
-// The heap before its billows (h: 0 at the base, 1 at the top of the layer).
-fn cloud_base_shape(p: vec3<f32>, h: f32, lod: f32) -> f32 {
+// The heap before its billows (h: 0 at the base, 1 at the top of the layer). The map's
+// rounding channel comes back with it, for the extinction to follow the heap's own depth
+// (`cloud_depth`).
+fn cloud_base_shape(p: vec3<f32>, h: f32, lod: f32) -> vec2<f32> {
     let drift = camera.clouds.yz * 2500.0;
     let s = textureSampleLevel(t_cloud_shape, s_cloud, (p.xy + drift) / CLOUD_SHAPE_PERIOD, lod);
     let lo = s.g - 1.0;
@@ -98,7 +122,7 @@ fn cloud_base_shape(p: vec3<f32>, h: f32, lod: f32) -> f32 {
     // was small rose as a column with a flat lid against the top of the layer)
     let n = h * h * (0.7 + s.b) + pow(1.0 - h, 16.0);
     let m = (s.r - n - lo) / (1.0 - lo);
-    return m * (linearstep(0.0, 0.1, h) - linearstep(0.6, 1.0, h));
+    return vec2<f32>(m * (linearstep(0.0, 0.1, h) - linearstep(0.6, 1.0, h)), s.b);
 }
 
 // Extinction (1/m) at p; `detail` false for the light towards the sun far from the point.
@@ -106,7 +130,8 @@ fn cloud_sigma(p: vec3<f32>, h: f32, coverage: f32, lod: f32, detail: bool) -> f
     if (h <= 0.0 || h >= 1.0) {
         return 0.0;
     }
-    var m = cloud_base_shape(p, h, lod);
+    let shape = cloud_base_shape(p, h, lod);
+    var m = shape.x;
     // (the billows only take away)
     if (m + coverage - 1.0 <= 0.0) {
         return 0.0;
@@ -117,7 +142,10 @@ fn cloud_sigma(p: vec3<f32>, h: f32, coverage: f32, lod: f32, detail: bool) -> f
         let dl = textureSampleLevel(t_cloud_detail, s_cloud, q, max(lod - 2.0, 0.0)).r;
         m = m - dl * smoothstep(1.0, 0.5, m) * CLOUD_DETAIL_STRENGTH;
     }
-    m = smoothstep(0.0, CLOUD_EDGE_SOFTNESS, m + coverage - 1.0);
+    let margin = m + coverage - 1.0;
+    let edge = smoothstep(0.0, CLOUD_EDGE_SOFTNESS, margin);
+    let body = clamp(margin / CLOUD_BODY_RANGE, 0.0, 1.0);
+    m = edge * mix(1.0, body, CLOUD_BODY_WEIGHT) * cloud_depth(shape.y);
     m = m * min(h / CLOUD_BOTTOM_SOFTNESS, 1.0);
     return m * CLOUD_SIGMA;
 }
@@ -188,7 +216,18 @@ fn cloud_layer(d: vec3<f32>, below: vec3<f32>, pix: f32) -> vec4<f32> {
             // (single scattering and three octaves hold only part of the light a cloud
             // scatters on inside it; a cumulus's sunlit side is about as bright as white
             // paper in the sun, E/π, which this factor brings it to)
-            let amb = mix(ground * 0.45 + sky_top * 0.55, sky_top * 1.1, clamp(h * 1.4, 0.0, 1.0));
+            // The sky's own light is read through how much cloud stands over this point:
+            // `od` is the depth towards the sun, the local measure of it, and its exponent
+            // here is far gentler than the light's own. At the absolute depth of a real
+            // layer the sun's term is long dead, and a deck whose underside was lit by
+            // `amb` alone came out as one flat grey sheet with no heaps in it, at any cover
+            // above a half (there the gaps between heaps show the overcast table rather
+            // than blue, so nothing was left to give it a shape). Read softer, the same
+            // depth leaves an overcast's underside a picture of itself - thicker where its
+            // heaps stand, paler where the deck thins - and deepens a cumulus's shadowed
+            // side without touching its sunlit top, where the depth towards the sun is
+            // small.
+            let amb = mix(ground * 0.45 + sky_top * 0.55, sky_top * 1.1, clamp(h * 1.4, 0.0, 1.0)) * (0.40 + 0.60 * exp(-od * 0.055));
             let light = direct * CLOUD_MS_GAIN + amb;
             // Frostbite: the light scattered over the step, dimmed by the cloud before it
             let dt = exp(-sigma * ds);
