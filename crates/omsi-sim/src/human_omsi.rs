@@ -217,6 +217,10 @@ impl OmsiRig {
 /// knee's angle over the phase's fraction, in units of the leg's swing angle.
 const THIGH_CURVE: [(f32, f32); 4] = [(0.0, 0.75), (0.2, 1.1), (0.8, -1.1), (1.0, 0.75)];
 const KNEE_CURVE: [(f32, f32); 4] = [(0.0, 1.0), (0.2, 0.0), (0.8, 0.0), (1.0, 1.0)];
+/// The knee through a running stride: never straight - a little bent under
+/// the body while the foot is down, a short stance - and folded well up behind as the leg
+/// swings through (the heel kick).
+const RUN_KNEE_CURVE: [(f32, f32); 5] = [(0.0, 1.0), (0.22, 0.2), (0.5, 0.15), (0.72, 0.3), (1.0, 1.0)];
 
 /// sub_7f061c: piecewise linear, the first or last value outside the points.
 fn curve(c: &[(f32, f32)], x: f32) -> f32 {
@@ -245,6 +249,19 @@ fn frac(x: f32) -> f32 {
 }
 
 const DEG: f32 = std::f32::consts::PI / 180.0;
+
+/// The run (`crate::human::run_factor`), at a full run: how much longer the
+/// stride gets, the most the knees bend (degrees, through `RUN_KNEE_CURVE`), the lean
+/// forward (degrees), how much more the arms swing from the shoulder, the elbows' bend
+/// (degrees) and how much of the walk's dip at every step is left (a runner barely dips:
+/// with it doubled they crouched at every step). The leg's swing grows with the stride
+/// already; on top of that the knees had folded through the thighs.
+const RUN_STRIDE: f32 = 0.4;
+const RUN_KNEE_MAX: f32 = 105.0;
+const RUN_LEAN: f32 = 6.0;
+const RUN_ARM_SWING: f32 = 0.6;
+const RUN_ELBOW: f32 = 85.0;
+const RUN_BOB: f32 = 0.35;
 /// The original's degree-to-radian factor (a 10-byte constant, 0.01745...).
 const RAD: f32 = 0.017_453_292;
 
@@ -304,7 +321,10 @@ impl OmsiAnim {
         let mut a = [0.0f32; 30];
         // the stride used at this speed (+0x2d8 times |v| / 1.2, at most 1)
         let rel = (inp.speed.abs() / 1.2).min(1.0);
-        let stride = rel * rig.stride;
+        // (from 2 m/s the walk turns into a run - a longer stride, the knees higher, a lean
+        // forward, the elbows bent; nothing changes at a walking pace)
+        let run = if inp.kind == 1 { crate::human::run_factor(inp.speed.abs()) } else { 0.0 };
+        let stride = rel * rig.stride * (1.0 + RUN_STRIDE * run);
         // stooping under a low ceiling
         let l20 = inp.room_height - rig.waist.y;
         let l24 = rig.height - rig.waist.y;
@@ -347,17 +367,26 @@ impl OmsiAnim {
                 let p = self.phase;
                 let f_half = frac(p + 0.5);
                 let f = frac(p);
+                // (the walk's knee; running, the knee of a run blended in)
+                let knee = |x: f32| {
+                    let walk = curve(&KNEE_CURVE, x) * swing * 1.5 * 2.0;
+                    if run > 0.0 {
+                        walk + (curve(&RUN_KNEE_CURVE, x) * RUN_KNEE_MAX - walk) * run
+                    } else {
+                        walk
+                    }
+                };
                 a[0] = curve(&THIGH_CURVE, f_half) * swing;
-                a[4] = curve(&KNEE_CURVE, f_half) * swing * 1.5 * 2.0;
+                a[4] = knee(f_half);
                 a[1] = curve(&THIGH_CURVE, f) * swing;
-                a[5] = curve(&KNEE_CURVE, f) * swing * 1.5 * 2.0;
+                a[5] = knee(f);
                 let spread = -(rig.feet_dist / (3.0 * rig.hip.y)) / DEG;
                 a[2] = spread;
                 a[3] = spread;
                 let l24 = ((4.0 * std::f32::consts::PI * p).cos() - 1.0) / 2.0;
-                bob = (1.0 - (std::f32::consts::PI / 180.0 * swing).cos()) * (0.8 * rig.hip.y) * l24;
+                bob = (1.0 - (std::f32::consts::PI / 180.0 * swing).cos()) * (0.8 * rig.hip.y) * l24 * (1.0 - (1.0 - RUN_BOB) * run);
                 a[11] -= swing * l24 * rig.waist_bend;
-                a[12] += swing * l24 * rig.waist_bend;
+                a[12] += swing * l24 * rig.waist_bend + RUN_LEAN * run;
                 a[29] = (2.0 * std::f32::consts::PI * p).sin() * 5.0;
                 a[10] = (2.0 * std::f32::consts::PI * p).sin() * rig.hip_turn;
             }
@@ -401,8 +430,9 @@ impl OmsiAnim {
                 a[13] = -3.0;
                 a[15] = rig.beta - 3.0;
                 a[17] = -30.0;
-                a[19] = (sin2 - 0.2) * (upright * rig.arm_swing * swing) + stoop * 0.5;
-                a[21] = (sin2 + 1.0) * (upright * rig.arm_swing * swing) * 1.5;
+                a[19] = (sin2 - 0.2) * (upright * rig.arm_swing * swing) * (1.0 + RUN_ARM_SWING * run) + stoop * 0.5;
+                let walk_elbow = (sin2 + 1.0) * (upright * rig.arm_swing * swing) * 1.5;
+                a[21] = walk_elbow + (RUN_ELBOW + 15.0 * sin2 - walk_elbow) * run;
             }
             _ => {
                 a[13] = -3.0;
@@ -458,8 +488,9 @@ impl OmsiAnim {
                     a[14] = -3.0;
                     a[16] = rig.beta - 3.0;
                     a[18] = -30.0;
-                    a[20] = (-sin2 - 0.2) * (upright * rig.arm_swing * swing) + stoop * 0.5;
-                    a[22] = (-sin2 + 1.0) * (upright * rig.arm_swing * swing) * 1.2;
+                    a[20] = (-sin2 - 0.2) * (upright * rig.arm_swing * swing) * (1.0 + RUN_ARM_SWING * run) + stoop * 0.5;
+                    let walk_elbow = (-sin2 + 1.0) * (upright * rig.arm_swing * swing) * 1.2;
+                    a[22] = walk_elbow + (RUN_ELBOW - 15.0 * sin2 - walk_elbow) * run;
                 }
                 _ => {
                     a[14] = -3.0;
@@ -669,6 +700,36 @@ mod tests {
         assert!((4..=7).contains(&steps), "{steps}");
         // the thigh swings by 1.1 x (1.4 / (4 x 0.92)) rad = 24 degrees
         assert!((max_thigh - 24.0).abs() < 1.5, "{max_thigh}");
+    }
+
+    /// A run takes longer strides than a walk sped up would, swings the legs
+    /// and the knees further, leans forward and bends the elbows; a walk stays as it was.
+    #[test]
+    fn running_lengthens_the_stride_and_bends_the_elbows() {
+        let r = rig();
+        let go = |speed: f32| {
+            let mut an = OmsiAnim::default();
+            let (mut steps, mut thigh, mut knee, mut elbow, mut lean) = (0u32, 0f32, 0f32, 0f32, 0f32);
+            for _ in 0..300 {
+                let ev = an.advance(&r, &AnimInput { kind: 1, speed, moved: speed * 0.016, room_height: 50.0, dt_ms: 16.0, ..Default::default() });
+                steps += ev.step as u32;
+                thigh = thigh.max(an.angles[0].abs());
+                knee = knee.max(an.angles[4]);
+                elbow += an.angles[21] / 300.0;
+                lean = lean.max(an.angles[12]);
+            }
+            (steps as f32 / (speed * 300.0 * 0.016), thigh, knee, elbow, lean)
+        };
+        let (walk_steps, walk_thigh, walk_knee, walk_elbow, walk_lean) = go(1.2);
+        let (run_steps, run_thigh, run_knee, run_elbow, run_lean) = go(3.4);
+        assert!(run_steps < walk_steps * 0.75, "fewer steps a metre: {run_steps} vs {walk_steps}");
+        assert!(run_thigh > walk_thigh * 1.3 && run_knee > walk_knee * 1.2, "thigh {run_thigh} knee {run_knee}");
+        assert!(run_knee <= 105.0, "the knee no more than a right angle and a bit: {run_knee}");
+        assert!(run_elbow > 60.0 && walk_elbow < 40.0, "elbows {run_elbow} vs {walk_elbow}");
+        assert!(run_lean > walk_lean + 4.0, "lean {run_lean} vs {walk_lean}");
+        // under 2 m/s nothing of the run: the thigh as `walking_swings_the_legs_and_plays_steps`
+        let (_, thigh_15, ..) = go(1.9);
+        assert!((thigh_15 - 24.0).abs() < 1.5, "{thigh_15}");
     }
 
     #[test]

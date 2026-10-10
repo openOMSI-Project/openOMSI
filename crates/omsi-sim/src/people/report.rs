@@ -112,6 +112,12 @@ impl PeopleSim {
                         waiting.insert(s);
                     }
                 }
+                // somebody late, still on the way up to the stop
+                Task::WalkingToBusstop if x.late.is_some() && x.inside.is_none() => {
+                    if let Some(s) = x.stop {
+                        waiting.insert(s);
+                    }
+                }
                 _ => {}
             }
         }
