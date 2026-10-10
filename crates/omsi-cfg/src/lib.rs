@@ -641,7 +641,21 @@ fn mirrored_base(base: &Path, root: &Path, roots: &[PathBuf]) -> Option<PathBuf>
     if owner == root {
         return None;
     }
-    base.strip_prefix(owner).ok().map(|suffix| root.join(suffix))
+    base.strip_prefix(owner).ok().map(|suffix| {
+        // The suffix is spelled as in `base`'s root, which need not be how `root` spells it:
+        // a mod that ships `Vehicles/Foo/texture/...` next to the original pack's
+        // `Vehicles/Foo/Texture`. A case-sensitive file system (Linux) would not find the
+        // original's folder under the mod's spelling, so walk the suffix case-insensitively.
+        let parts: Vec<String> = suffix
+            .components()
+            .filter_map(|c| match c {
+                std::path::Component::Normal(n) => Some(n.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect();
+        let refs: Vec<&str> = parts.iter().map(String::as_str).collect();
+        resolve_existing(root, &refs).unwrap_or_else(|| root.join(suffix))
+    })
 }
 
 /// Case-insensitive walk of the components `rel` from `base` using the cached directory
@@ -1011,6 +1025,27 @@ pub fn ensure_content_layout(dir: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mods_lowercase_texture_folder_does_not_hide_the_originals() {
+        // A mod ships `Vehicles/Pack/texture/..` (a livery) next to the original pack's
+        // `Vehicles/Pack/Texture/..`: a file asked for from the mod's folder is found in the
+        // original's, whatever the case of the folder, as on a case-insensitive file system
+        let t = std::env::temp_dir().join(format!("omsi-cfg-mirror-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let (mods, omsi) = (t.join("mods"), t.join("omsi"));
+        std::fs::create_dir_all(mods.join("Vehicles/Pack/texture")).unwrap();
+        std::fs::create_dir_all(omsi.join("Vehicles/Pack/Texture")).unwrap();
+        std::fs::write(omsi.join("Vehicles/Pack/Texture/black.dds"), b"x").unwrap();
+        let roots = vec![mods.clone(), omsi.clone()];
+        let mirrored = mirrored_base(&mods.join("Vehicles/Pack/texture"), &omsi, &roots).unwrap();
+        assert_eq!(mirrored, omsi.join("Vehicles/Pack/Texture"));
+        assert!(resolve_existing(&mirrored, &["black.dds"]).is_some());
+        // a folder the other root does not have keeps the plain spelling
+        let none = mirrored_base(&mods.join("Vehicles/Other/texture"), &omsi, &roots).unwrap();
+        assert_eq!(none, omsi.join("Vehicles/Other/texture"));
+        std::fs::remove_dir_all(&t).unwrap();
+    }
 
     #[test]
     fn writable_check() {
