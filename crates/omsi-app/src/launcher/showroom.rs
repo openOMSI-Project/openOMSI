@@ -50,6 +50,44 @@ struct Shown {
     lighting: Lighting,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PreviewView {
+    #[default]
+    Outside,
+    Passenger,
+    Driver,
+}
+
+fn authored_camera(def: &omsi_vehicle::Vehicle, view: PreviewView) -> Option<&omsi_vehicle::Camera> {
+    match view {
+        PreviewView::Outside => None,
+        PreviewView::Passenger => def.cameras_pax.first(),
+        PreviewView::Driver => def.cameras_driver.get(def.camera_std).or(def.cameras_driver.first()),
+    }
+}
+
+impl Shown {
+    // Coupled parts can supply the passenger cameras of an articulated bus.
+    fn inside_camera(&self, view: PreviewView, look: (f32, f32), zoom: f32) -> Option<Camera> {
+        let vehicle = self.vehicle.as_ref()?;
+        let camera = |c: &omsi_vehicle::Camera, world: (DVec3, f32, f32, f32)| {
+            let (position, yaw, pitch, roll) = world;
+            Camera { position, yaw, pitch: pitch.clamp(-89.0, 89.0), roll,
+                fov_deg: (c.fov * zoom).clamp(20.0, 100.0), near: 0.1, far: 6000.0 }
+        };
+        let turned = |c: &omsi_vehicle::Camera| omsi_vehicle::Camera {
+            yaw: c.yaw + look.0, pitch: (c.pitch + look.1).clamp(-89.0, 89.0), ..c.clone()
+        };
+        if let Some(c) = authored_camera(&vehicle.ty.def, view) {
+            return Some(camera(c, vehicle.camera_world_full(&turned(c))));
+        }
+        vehicle.trailers.iter().find_map(|t| {
+            let c = authored_camera(&t.ty.def, view)?;
+            Some(camera(c, t.camera_world_full(&turned(c))))
+        })
+    }
+}
+
 pub struct Showroom {
     shown: Option<Shown>,
     wanted: Option<Look>,
@@ -65,6 +103,9 @@ pub struct Showroom {
     pitch_to: f32,
     zoom_to: f32,
     pub auto_turn: bool,
+    pub view: PreviewView,
+    inside_look: (f32, f32),
+    inside_zoom: f32,
     idle: f32,
     /// Where the bus should appear on screen: the share of the width its centre is at.
     pub focus_x: f32,
@@ -135,6 +176,9 @@ impl Showroom {
             pitch_to: 8.0,
             zoom_to: 1.0,
             auto_turn: false,
+            view: PreviewView::Outside,
+            inside_look: (0.0, 0.0),
+            inside_zoom: 1.0,
             idle: 0.0,
             focus_x: 0.5,
             focus_now: 0.5,
@@ -155,13 +199,41 @@ impl Showroom {
 
     /// The mouse dragged over the empty part of the window (degrees), or turned the wheel.
     pub fn orbit(&mut self, dx: f32, dy: f32) {
+        if self.view != PreviewView::Outside {
+            self.inside_look.0 += dx * 0.35;
+            self.inside_look.1 = (self.inside_look.1 - dy * 0.25).clamp(-85.0, 85.0);
+            self.dirty = true;
+            self.idle = 0.0;
+            return;
+        }
         self.yaw_to += dx * 0.35;
         self.pitch_to = (self.pitch_to + dy * 0.25).clamp(-4.0, 55.0);
         self.idle = 0.0;
     }
     pub fn zoom_by(&mut self, k: f32) {
+        if self.view != PreviewView::Outside {
+            self.inside_zoom = (self.inside_zoom * k).clamp(0.5, 1.5);
+            self.dirty = true;
+            self.idle = 0.0;
+            return;
+        }
         self.zoom_to = (self.zoom_to * k).clamp(0.55, 2.2);
         self.idle = 0.0;
+    }
+
+    pub fn can_view(&self, view: PreviewView) -> bool {
+        self.shown.as_ref().is_some_and(|s| s.vehicle.is_some()
+            && (view == PreviewView::Outside || s.inside_camera(view, (0.0, 0.0), 1.0).is_some()))
+    }
+
+    pub fn set_view(&mut self, view: PreviewView) {
+        if self.view != view && self.can_view(view) {
+            self.view = view;
+            self.inside_look = (0.0, 0.0);
+            self.inside_zoom = 1.0;
+            self.idle = 0.0;
+            self.dirty = true;
+        }
     }
 
     /// Per frame: start loading what is wanted, take over what finished loading, move the
@@ -174,6 +246,12 @@ impl Showroom {
                 Ok(Ok(ready)) => {
                     self.loading = None;
                     self.shown = Some(self.place(renderer, ready));
+                    // A different vehicle may not define the previously selected camera.
+                    if !self.can_view(self.view) {
+                        self.view = PreviewView::Outside;
+                    }
+                    self.inside_look = (0.0, 0.0);
+                    self.inside_zoom = 1.0;
                     self.error = None;
                     self.dirty = true;
                     swapped = true;
@@ -220,7 +298,7 @@ impl Showroom {
         self.busy = self.loading.is_some();
         // camera
         self.idle += dt;
-        if self.auto_turn && self.idle > 4.0 {
+        if self.auto_turn && self.view == PreviewView::Outside && self.idle > 4.0 {
             self.yaw_to += dt * 6.0;
         }
         let k = 1.0 - (-dt / 0.18).exp();
@@ -232,12 +310,6 @@ impl Showroom {
         self.pitch += (self.pitch_to - self.pitch) * k;
         self.zoom += (self.zoom_to - self.zoom) * k;
         self.focus_now += (self.focus_x - self.focus_now) * (1.0 - (-dt / 0.35).exp());
-        // the bus's own state, whenever the picture is drawn again
-        if let (true, Some(s)) = (self.dirty, self.shown.as_mut()) {
-            if let (Some(v), Some(r)) = (s.vehicle.as_mut(), s.render.as_mut()) {
-                player::sync_vehicle_transforms(renderer, &mut s.scene, v, r, &mut s.trailers, false);
-            }
-        }
         swapped
     }
 
@@ -379,6 +451,16 @@ impl Showroom {
     fn render(&mut self, renderer: &mut Renderer, target: &wgpu::TextureView, w: u32, h: u32) {
         let (yaw, pitch, zoom, focus) = (self.yaw, self.pitch, self.zoom, self.focus_now);
         let Some(s) = self.shown.as_mut() else { return };
+        // View buttons run after update. Apply the matching interior/exterior meshes
+        // when drawing, so the camera and the visible model change in the same frame.
+        if let (Some(v), Some(r)) = (s.vehicle.as_mut(), s.render.as_mut()) {
+            player::sync_vehicle_transforms(renderer, &mut s.scene, v, r, &mut s.trailers, self.view != PreviewView::Outside);
+        }
+        if let Some(cam) = s.inside_camera(self.view, self.inside_look, self.inside_zoom) {
+            s.scene.overlays.clear();
+            renderer.render(&mut s.scene, target, w, h, &cam, &s.lighting);
+            return;
+        }
         let fov = 30.0f32;
         let aspect = w as f32 / h.max(1) as f32;
         // far enough that the whole bus fits the free part of the window
@@ -410,6 +492,37 @@ impl Showroom {
         self.shown.as_ref().map(|s| s.vehicle.is_some()).unwrap_or(false) && self.target.is_some()
     }
 
+}
+
+#[cfg(test)]
+mod preview_view_tests {
+    use super::*;
+
+    #[test]
+    fn uses_the_authored_standard_driver_camera_and_passenger_camera() {
+        let mut def = omsi_vehicle::Vehicle::default();
+        def.cameras_driver = vec![omsi_vehicle::Camera { yaw: 10.0, ..Default::default() }, omsi_vehicle::Camera { yaw: 35.0, ..Default::default() }];
+        def.camera_std = 1;
+        def.cameras_pax = vec![omsi_vehicle::Camera { yaw: 180.0, ..Default::default() }];
+        assert_eq!(authored_camera(&def, PreviewView::Driver).unwrap().yaw, 35.0);
+        assert_eq!(authored_camera(&def, PreviewView::Passenger).unwrap().yaw, 180.0);
+        def.camera_std = 99;
+        assert_eq!(authored_camera(&def, PreviewView::Driver).unwrap().yaw, 10.0);
+        assert!(authored_camera(&def, PreviewView::Outside).is_none());
+        assert!(authored_camera(&omsi_vehicle::Vehicle::default(), PreviewView::Passenger).is_none());
+    }
+
+    #[test]
+    fn looking_and_zooming_inside_preserves_the_exterior_orbit() {
+        let mut showroom = Showroom::new();
+        showroom.view = PreviewView::Passenger;
+        let exterior = (showroom.yaw_to, showroom.pitch_to, showroom.zoom_to);
+        showroom.orbit(100.0, 100.0);
+        showroom.zoom_by(0.8);
+        assert_eq!((showroom.yaw_to, showroom.pitch_to, showroom.zoom_to), exterior);
+        assert_eq!(showroom.inside_look, (35.0, -25.0));
+        assert!((showroom.inside_zoom - 0.8).abs() < 1e-6);
+    }
 }
 
 /// The light of the look's time and weather, with the sun's shadow under the bus. Always

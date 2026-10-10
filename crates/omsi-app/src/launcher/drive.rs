@@ -183,7 +183,38 @@ pub fn draw(l: &mut Launcher, area: Rect) {
     if tab == 2 {
         l.map_interact(lay.view, lay.clear);
     } else {
+        preview_views(l, lay.view);
         l.showroom_pointer(lay.view);
+    }
+}
+
+fn preview_views(l: &mut Launcher, r: Rect) {
+    use super::showroom::PreviewView;
+    let views = [
+        (PreviewView::Outside, "Outside view", "directions_bus"),
+        (PreviewView::Passenger, "Passenger view", "airline_seat_recline_normal"),
+        (PreviewView::Driver, "Driver's view", "person"),
+    ];
+    let labels: Vec<String> = views.iter().map(|(_, label, _)| omsi_ui::tr(label).into_owned()).collect();
+    let widths: Vec<f32> = labels.iter().map(|label| l.ui.width(label, 13.0, Weight::Medium) + 46.0).collect();
+    let row = widths.iter().sum::<f32>() + 12.0 <= r.w - 24.0;
+    let mut x = r.x + 12.0;
+    let mut y = r.y + 12.0;
+    for (k, (view, label, icon)) in views.iter().enumerate() {
+        let button = Rect::new(x, y, widths[k].min(r.w - 24.0), 34.0);
+        let enabled = l.showroom.can_view(*view);
+        let name = format!("preview-view-{k}");
+        let kind = if l.showroom.view == *view { ButtonKind::Primary } else { ButtonKind::Normal };
+        if enabled {
+            if l.ui.button(&name, button, label, Some(icon), kind) {
+                l.showroom.set_view(*view);
+            }
+        } else {
+            l.ui.solid(button);
+            l.ui.p().rounded(button, 6.0, FIELD);
+            l.ui.text_in(label, button.pad(8.0, 0.0), 13.0, Weight::Medium, TEXT_FAINT, Align::Center);
+        }
+        if row { x += widths[k] + 6.0; } else { y += 40.0; }
     }
 }
 
