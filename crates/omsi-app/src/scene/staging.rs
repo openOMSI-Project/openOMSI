@@ -198,21 +198,68 @@ pub(super) fn is_white_lightmap(rgba: &[u8]) -> bool {
     !rgba.is_empty() && rgba.chunks_exact(4).all(|p| p[0] >= 242 && p[1] >= 242 && p[2] >= 242)
 }
 
-/// Whether the picture at `path` has no transparent texel at all (no alpha channel, or one
-/// that is 255 throughout), read once per file. A `[matl_alpha] 2` slot that names one has
-/// nothing to blend by, so its fragments are drawn opaque (`World::type_gpu`): the GG2 signs'
-/// pictures (`directions\temp_1.png`, `terminal_east_2.tga`) are like that - an alpha channel
-/// that never goes below 255 - and left a no-write blend, the surface phases drawn after them
-/// ate the signs' blue and the gantries' bare panels.
-pub(super) fn picture_is_opaque(path: &Path) -> bool {
-    static MEMO: std::sync::OnceLock<Mutex<HashMap<PathBuf, bool>>> = std::sync::OnceLock::new();
+/// A texel is solid from here on (0.90 of full): the parked Hong Kong buses' paint is
+/// 245/255 (0.96) and a blend of that over the scenery behind it is invisible.
+const BLEND_SOLID_ALPHA: u8 = 230;
+/// How much of a picture may carry a *partial* alpha and still be a cut-out: one texel in
+/// this many. Measured over the shapes that come up: a cut-out's antialiased outline is a
+/// fraction of a percent (the parked buses' body pictures 0.31 - 0.47 %), while a soft
+/// shadow blob is 7.75 % and a genuinely translucent side panel 69 %.
+const CUTOUT_FADE_DIVISOR: usize = 64;
+
+/// What a `[matl_alpha] 2` slot has to blend by - read from its picture, once per file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BlendFade {
+    /// No alpha channel, or one that is 255 throughout: there is nothing to blend by, so
+    /// the slot has to be drawn opaque.
+    Solid,
+    /// The alpha is a cut-out - every texel is clear (0) or solid, and only the
+    /// antialiased outline lies in between: the slot has to be drawn alpha-tested, so that
+    /// its solid part writes depth.
+    Cutout,
+    /// Real partial transparency - glass, a feathered road border: the slot stays a blend.
+    Partial,
+}
+
+/// How the picture at `path` reads as the transparency of a `[matl_alpha] 2` slot (read once
+/// per file). A slot whose picture has nothing to blend by is drawn opaque (the GG2 signs'
+/// pictures, `directions\temp_1.png`, `terminal_east_2.tga`, are 255 throughout), and one
+/// whose picture is a cut-out is drawn alpha-tested: left a no-write blend, the phases drawn
+/// after it - the surfaces of every road and pavement are drawn after every
+/// `[rendertype] surface` object - came over it and ate its texture, which is what the parked
+/// buses (`Sceneryobjects\M3 Obj\Citybus\5xx.sco` and its kin) showed as a bus with its
+/// picture eaten away by the scenery round it.
+pub(super) fn picture_blend_fade(path: &Path) -> BlendFade {
+    static MEMO: std::sync::OnceLock<Mutex<HashMap<PathBuf, BlendFade>>> = std::sync::OnceLock::new();
     let memo = MEMO.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(v) = memo.lock().get(path) {
         return *v;
     }
-    let v = omsi_texture::decode_file(path)
-        .map(|i| !i.has_alpha || i.rgba.chunks_exact(4).all(|p| p[3] == 255))
-        .unwrap_or(false);
+    let v = match omsi_texture::decode_file(path) {
+        // a picture that cannot be read has to keep the blend it declared
+        Err(_) => BlendFade::Partial,
+        Ok(i) if !i.has_alpha => BlendFade::Solid,
+        Ok(i) => {
+            let mut texels = 0usize;
+            let mut fading = 0usize;
+            let mut below_full = false;
+            for p in i.rgba.chunks_exact(4) {
+                texels += 1;
+                let a = p[3];
+                below_full |= a != 255;
+                if a != 0 && a < BLEND_SOLID_ALPHA {
+                    fading += 1;
+                }
+            }
+            if !below_full {
+                BlendFade::Solid
+            } else if fading * CUTOUT_FADE_DIVISOR <= texels {
+                BlendFade::Cutout
+            } else {
+                BlendFade::Partial
+            }
+        }
+    };
     memo.lock().insert(path.to_path_buf(), v);
     v
 }

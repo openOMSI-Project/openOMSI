@@ -322,3 +322,40 @@ fn matl_glow_gives_a_material_its_own_light() {
     assert_eq!(glow_mask(&[&mapped]), None);
     assert!(own_light_slot(&[&mapped]) && own_light_slot(&[&lit]) && !own_light_slot(&[&plain]));
 }
+
+/// A `[matl_alpha] 2` slot's picture decides how the slot is drawn: nothing to blend by
+/// (opaque), a cut-out (the parked HK buses' bodies, drawn alpha-tested so the object writes
+/// depth), or real partial transparency (a soft shadow blob, a translucent side: a blend).
+#[test]
+fn a_pictures_alpha_decides_how_a_blend_is_drawn() {
+    use super::staging::{picture_blend_fade, BlendFade};
+    let dir = std::env::temp_dir().join(format!("omsi_blend_fade_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let write = |name: &str, alphas: &[u8]| {
+        let mut b = vec![0u8; 18];
+        b[2] = 2; // uncompressed true-colour
+        b[12..14].copy_from_slice(&(alphas.len() as u16).to_le_bytes());
+        b[14..16].copy_from_slice(&1u16.to_le_bytes());
+        b[16] = 32;
+        b[17] = 0x08 | 0x20; // 8 alpha bits, top-down
+        for &a in alphas {
+            b.extend_from_slice(&[10, 20, 30, a]);
+        }
+        let p = dir.join(name);
+        std::fs::write(&p, b).unwrap();
+        p
+    };
+    // 255 throughout: the GG2 signs' pictures, nothing to blend by
+    assert_eq!(picture_blend_fade(&write("solid.tga", &[255; 64])), BlendFade::Solid);
+    // a cut-out: clear and solid, with one antialiased outline texel (the buses: 0.3-0.5 %
+    // of the texels are like it)
+    let mut cut = vec![255u8; 64];
+    cut[..4].fill(0);
+    cut[4] = 128;
+    assert_eq!(picture_blend_fade(&write("cutout.tga", &cut)), BlendFade::Cutout);
+    // real partial transparency: glass, a feathered road border, a soft shadow blob
+    assert_eq!(picture_blend_fade(&write("glass.tga", &[128; 64])), BlendFade::Partial);
+    // a missing picture keeps the blend it declared
+    assert_eq!(picture_blend_fade(&dir.join("absent.tga")), BlendFade::Partial);
+    std::fs::remove_dir_all(dir).unwrap();
+}
