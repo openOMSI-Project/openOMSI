@@ -29,6 +29,8 @@ enum Btn {
     Hide,
     /// The n-th door, front to back (`Shift + n`).
     Door(usize),
+    /// One direct OMSI trigger group (0, 1, or combined 2+3).
+    DirectDoor(usize),
     StopBrake,
     ParkingBrake,
     /// A gear action (`automatic_D`, `kw_s_plus` ...) and its letter.
@@ -59,8 +61,27 @@ enum Btn {
 impl Btn {
     /// Held down while the finger stays (a push button), rather than a tap.
     fn held(self) -> bool {
-        matches!(self, Btn::Door(_) | Btn::Horn | Btn::Engine)
+        matches!(self, Btn::Door(_) | Btn::DirectDoor(_) | Btn::Horn | Btn::Engine)
     }
+}
+
+/// The physical layout requested for direct mobile door controls. Button 3 operates
+/// both 2 and 3; 4 is not an independent control and must not appear.
+const DIRECT_DOOR_GROUPS: [&[&str]; 3] = [
+    &["bus_doorfront0"],
+    &["bus_doorfront1"],
+    &["bus_doorfront2", "bus_doorfront3"],
+];
+
+/// Display a group only when the bus actually exposes one of its triggers.
+fn direct_door_buttons<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<usize> {
+    let names: Vec<&str> = names.into_iter().collect();
+    DIRECT_DOOR_GROUPS
+        .iter()
+        .enumerate()
+        .filter(|(_, group)| group.iter().any(|cmd| names.iter().any(|n| n.eq_ignore_ascii_case(cmd))))
+        .map(|(index, _)| index)
+        .collect()
 }
 
 /// A control on the screen this frame.
@@ -386,13 +407,24 @@ impl App {
             push(&mut b, Btn::ParkingBrake, rb(bx, h - pad - br, br), "local_parking", "", pb_on, true);
             let sb_on = p.vehicle.var("bremse_halte_sw").or_else(|| p.vehicle.var("haltestellenbremse")).is_some_and(|v| v > 0.5);
             push(&mut b, Btn::StopBrake, rb(bx, h - pad - br * 3.0 - 10.0 * u, br), "back_hand", "", sb_on, true);
-            // the doors: one button for each door, front to back, above the gearbox
-            let doors = crate::player::door_keys(&p.vehicle.ty).len().clamp(1, 4);
+            // Preserve the current door detection in Standard mode. Direct mode
+            // uses 0, 1 and combined 2+3; the fourth trigger button is not shown.
+            let door_buttons: Vec<Btn> = if self.settings.touch_door_mode == "direct" {
+                direct_door_buttons(p.vehicle.ty.program.triggers.keys().map(String::as_str))
+                    .into_iter()
+                    .map(Btn::DirectDoor)
+                    .collect()
+            } else {
+                (1..=crate::player::door_keys(&p.vehicle.ty).len().clamp(1, 4))
+                    .map(Btn::Door)
+                    .collect()
+            };
+            let doors = door_buttons.len();
             let dr = 23.0 * u;
             let dy = gy - 12.0 * u - dr;
-            for k in 0..doors {
+            for (k, action) in door_buttons.into_iter().enumerate() {
                 let dx = t.throttle_r.right() - dr - (doors - 1 - k) as f32 * (dr * 2.0 + 10.0 * u);
-                push(&mut b, Btn::Door(k + 1), rb(dx, dy, dr), "door_sliding", &format!("{}", k + 1), false, true);
+                push(&mut b, action, rb(dx, dy, dr), "door_sliding", &(k + 1).to_string(), false, true);
             }
             // the indicators and the horn beside the wheel
             let ir = 23.0 * u;
@@ -796,6 +828,16 @@ impl App {
                 let code = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4][(n - 1).min(3)];
                 self.tap_key(event_loop, code, down, down);
             }
+            Btn::DirectDoor(group) => {
+                if let Some(names) = DIRECT_DOOR_GROUPS.get(group) {
+                    for name in *names {
+                        // A partial group is valid for buses exposing only one trigger.
+                        if self.player.as_ref().is_some_and(|p| p.vehicle.ty.program.trigger(name).is_some()) {
+                            self.vehicle_action(name, down);
+                        }
+                    }
+                }
+            }
             Btn::StopBrake => {
                 self.vehicle_action("bus_dooraft", true);
                 self.vehicle_action("bus_dooraft", false);
@@ -1142,7 +1184,21 @@ fn steer_curve(s: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::touch_lock_angle;
+    use super::{direct_door_buttons, touch_lock_angle, DIRECT_DOOR_GROUPS};
+
+    #[test]
+    fn direct_door_buttons_are_independent_zero_one_and_combined_two_three() {
+        assert_eq!(DIRECT_DOOR_GROUPS, [
+            &["bus_doorfront0"][..],
+            &["bus_doorfront1"][..],
+            &["bus_doorfront2", "bus_doorfront3"][..],
+        ]);
+        assert_eq!(direct_door_buttons(["bus_doorfront0", "bus_doorfront1", "bus_doorfront2", "bus_doorfront3", "bus_doorfront4"]), vec![0, 1, 2]);
+        assert_eq!(direct_door_buttons(["bus_doorfront3", "bus_doorfront1", "bus_doorfront4"]), vec![1, 2]);
+        assert_eq!(direct_door_buttons(["BUS_DOORFRONT0", "bus_doorfront2", "bus_dooraft"]), vec![0, 2]);
+        assert!(direct_door_buttons(["bus_doorfront4", "bus_doorfront5", "bus_doorfrontX", "bus_doorfront01"]).is_empty());
+    }
+
     use crate::settings::Settings;
 
     /// The information bar keeps to the gap between the buttons along the top (it lay under

@@ -675,6 +675,11 @@ fn graphics_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, cols: [Rect; 2]) ->
 /// Controls page).
 fn driving_tab(ui: &mut Ui, s: &mut Value, dirty: &mut f32, out: &mut Outside, cols: [Rect; 2]) -> [f32; 2] {
     let mut c = Col::new(ui, cols[0], "Keyboard & mouse");
+    if super::mobile::mobile() {
+        c.section(ui, "Touch controls");
+        sel_setting(ui, s, dirty, "s-touch-doors", c.row(), "Door buttons", "touch_door_mode", &[("standard", "Standard (physical doors)"), ("direct", "Direct OMSI triggers")]);
+        c.section(ui, "Keyboard & mouse");
+    }
     sel_setting(ui, s, dirty, "s-keys", c.row(), "Driving keys", "drive_keys", &[("omsi", "Custom controls (Controls page)"), ("simple", "W A S D + arrows"), ("wasd", "W A S D only"), ("arrows", "Arrow keys only")]);
     toggle_setting(ui, s, dirty, c.row(), "Steering linearity (keys at OMSI's steady pace)", "steering_linear");
     toggle_setting(ui, s, dirty, c.row(), "Old Steering (the wheel stays, turn it back yourself)", "old_steering");
