@@ -77,11 +77,19 @@ fn src(uv: vec2<f32>, texel: vec2<f32>, x: f32, y: f32) -> vec3<f32> {
 // images", 1995). The alpha carries the picture's whole luminance down the chain for the
 // metering.
 const GLARE_WHITE: f32 = 1.0;
+fn is_screen_mask(m: vec4<f32>) -> bool {
+    // Clear panes attenuate both screen channels together. Condensation adds only to
+    // r; water also has b. Recover the screen code before interpreting a low r as mist.
+    let code = m.g / max(m.r, 1e-3);
+    return m.r >= 0.5 || (m.r > 0.004 && m.b < 0.004 &&
+        ((code > 0.2 && code < 0.3) || (code > 0.9 && code < 1.1)));
+}
+
 fn src_unmasked(uv: vec2<f32>, texel: vec2<f32>, x: f32, y: f32) -> vec4<f32> {
     let at = uv + vec2<f32>(x, y) * texel;
     let m = textureSampleLevel(t_base, s_lin, at, 0.0);
     let c = clean(textureSampleLevel(t_src, s_lin, at, 0.0).rgb);
-    let screen = step(0.5, m.r);
+    let screen = select(0.0, 1.0, is_screen_mask(m));
     let led = step(0.5, m.g);
     let picture = c * (1.0 - screen);
     let over = min(max(picture - vec3<f32>(GLARE_WHITE), vec3<f32>(0.0)), vec3<f32>(64.0)) + c * (led * p.c.w) * screen;
@@ -268,8 +276,9 @@ const MIST_MASK: f32 = 0.24;
 fn misted(uv: vec2<f32>, c: vec3<f32>) -> vec3<f32> {
     let dims = vec2<f32>(textureDimensions(t_src));
     let px = vec2<i32>(uv * dims);
-    let m = textureLoad(t_mask, clamp(px, vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1)), 0).r;
-    if (m < 0.004 || m >= 0.5) {
+    let mask = textureLoad(t_mask, clamp(px, vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1)), 0);
+    let m = mask.r;
+    if (m < 0.004 || is_screen_mask(mask)) {
         return c;
     }
     let fog = clamp(m / MIST_MASK, 0.0, 1.0);
@@ -280,8 +289,8 @@ fn misted(uv: vec2<f32>, c: vec3<f32>) -> vec3<f32> {
         let a = f32(k) * 2.3999632;
         let r = sqrt(f32(k) / 23.0) * radius;
         let q = uv + vec2<f32>(cos(a), sin(a)) * r / dims;
-        let qm = textureLoad(t_mask, clamp(vec2<i32>(q * dims), vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1)), 0).r;
-        if (qm > 0.004 && qm < 0.5) {
+        let qm = textureLoad(t_mask, clamp(vec2<i32>(q * dims), vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1)), 0);
+        if (qm.r > 0.004 && !is_screen_mask(qm)) {
             sum = sum + clean(textureSampleLevel(t_src, s_lin, q, 0.0).rgb);
             w = w + 1.0;
         }
@@ -363,7 +372,7 @@ fn fs_fxaa(in: VsOut) -> @location(0) vec4<f32> {
     let rgbm = textureSampleLevel(t_src, s_lin, uv, 0.0);
     // the bus's own screens as they are: FXAA took half the contrast out of their
     // letters (the screen mask is this pass's t_base)
-    if (textureSampleLevel(t_base, s_lin, uv, 0.0).r > 0.5) {
+    if (is_screen_mask(textureSampleLevel(t_base, s_lin, uv, 0.0))) {
         return vec4<f32>(from_srgb(rgbm.rgb), 1.0);
     }
     let m = rgbm.a;

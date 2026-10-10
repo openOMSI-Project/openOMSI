@@ -1061,6 +1061,7 @@ pub struct MaterialExtra {
     /// the IBIS, the matrix displays, the dashboard's LCDs. The enhanced picture's glow
     /// and FXAA leave it alone (see `MASK_FORMAT`): FXAA took half the contrast out of
     /// their letters and they read as blurred.
+    /// Its mask remains identifiable through a clear pane so it cannot be blurred as mist.
     pub screen: bool,
     /// An LED matrix - a display whose lit dots are the `\S:n` script texture's
     /// (`[matl_transmap]`), the Krueger and K++ destination panels: the dots are the
@@ -9657,6 +9658,104 @@ mod tests {
         // and the lamps seen from beside the lot, at eye height, veil the eye as well
         let eye = Camera { position: DVec3::new(0.0, -40.0, 1.7), pitch: 0.0, ..cam };
         assert!(glare_veil(&lights, DVec3::ZERO, eye.position.as_vec3(), eye.forward()) > 1e-5);
+    }
+
+    #[test]
+    #[ignore = "requires a graphics adapter; run with --ignored on a GPU host"]
+    fn transparent_led_layer_preserves_the_glow_mask() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let mut renderer = pollster::block_on(Renderer::new_with(
+            &instance, None, Some(wgpu::TextureFormat::Rgba8UnormSrgb),
+            RenderOptions { msaa: 1, ssao: false, shadow_size: 1024, fxaa: false, render_scale: 1.0, ..Default::default() },
+        )).expect("test renderer");
+        let mut scene = renderer.new_scene();
+        let mesh = renderer.add_mesh(&mut scene, &MeshData {
+            positions: vec![Vec3::new(-2.0, 4.0, -0.5), Vec3::new(2.0, 4.1, -0.5), Vec3::new(2.0, 4.1, 0.5), Vec3::new(-2.0, 4.0, 0.5)],
+            normals: vec![-Vec3::Y; 4],
+            uvs: vec![glam::Vec2::ZERO, glam::Vec2::X, glam::Vec2::ONE, glam::Vec2::Y],
+            ranges: vec![(0, 6, 0)], indices: vec![0, 1, 2, 0, 2, 3], one_sided: false,
+        });
+        let background = renderer.add_material(&mut scene, None, AlphaMode::Opaque, [0.2, 0.2, 0.2, 1.0], true);
+        renderer.add_instance(&mut scene, mesh, DVec3::ZERO, Mat4::IDENTITY, vec![background]);
+        let camera = Camera { position: DVec3::ZERO, yaw: 0.0, pitch: 0.0, roll: 0.0, fov_deg: 90.0, near: 0.1, far: 100.0 };
+        let lighting = Lighting { enhanced: true, shadows: false, fog_density: 0.0, ..Default::default() };
+        let bare = renderer.render_to_image(&mut scene, 128, 128, &camera, &lighting).unwrap();
+        let mask = renderer.add_texture(&mut scene, &omsi_texture::Image { width: 1, height: 1, rgba: vec![255, 255, 255, 0], has_alpha: true }, false);
+        let material = renderer.add_material_extra(&mut scene, None, AlphaMode::Blend,
+            [1.0; 4], false, Some((mask, true)), None, None, None, [0.0; 3],
+            MaterialExtra { screen: true, led: true, ..Default::default() });
+        renderer.add_instance(&mut scene, mesh, DVec3::ZERO, Mat4::IDENTITY, vec![material]);
+        let covered = renderer.render_to_image(&mut scene, 128, 128, &camera, &lighting).unwrap();
+        let mut max_error = 0;
+        for y in 60..68 {
+            for x in 40..88 {
+                let i = (y * 128 + x) * 4;
+                max_error = max_error.max(bare[i].abs_diff(covered[i]));
+            }
+        }
+        assert!(max_error <= 1, "invisible LED layer makes its background glow: max error {max_error}");
+    }
+
+    #[test]
+    #[ignore = "requires a graphics adapter; run with --ignored on a GPU host"]
+    fn display_behind_a_pane_keeps_its_pixel_contrast() {
+        let mut renderer = smoke_test_renderer();
+        let mut scene = renderer.new_scene();
+        let mesh = renderer.add_mesh(&mut scene, &MeshData {
+            positions: vec![Vec3::new(-2.0, 4.0, -1.0), Vec3::new(2.0, 4.0, -1.0), Vec3::new(2.0, 4.0, 1.0), Vec3::new(-2.0, 4.0, 1.0)],
+            normals: vec![-Vec3::Y; 4],
+            uvs: vec![glam::Vec2::ZERO, glam::Vec2::X, glam::Vec2::ONE, glam::Vec2::Y],
+            ranges: vec![(0, 6, 0)], indices: vec![0, 1, 2, 0, 2, 3], one_sided: false,
+        });
+        let picture = renderer.add_texture(&mut scene, &omsi_texture::Image {
+            width: 64, height: 32, rgba: (0..32).flat_map(|y| (0..64).flat_map(move |x| {
+                let c = if x % 4 == 0 || y % 7 == 0 { 220 } else { 0 };
+                [c, c, c, 255]
+            })).collect(), has_alpha: true,
+        }, false);
+        let pane = renderer.add_texture(&mut scene, &omsi_texture::Image {
+            width: 1, height: 1, rgba: vec![0, 0, 0, 184], has_alpha: true,
+        }, false);
+        let glass = renderer.add_material_extra(&mut scene, Some(pane), AlphaMode::Blend,
+            [1.0; 4], true, None, None, None, None, [0.0; 3],
+            MaterialExtra { glass: true, no_z_write: true, ..Default::default() });
+        let protected_glass = renderer.add_material_extra(&mut scene, Some(pane), AlphaMode::Blend,
+            [1.0; 4], true, None, None, None, None, [0.0; 3],
+            MaterialExtra { screen: true, glass: true, no_z_write: true, ..Default::default() });
+        let camera = Camera { position: DVec3::ZERO, yaw: 0.0, pitch: 0.0, roll: 0.0, fov_deg: 90.0, near: 0.1, far: 100.0 };
+        let lighting = Lighting { enhanced: true, shadows: false, fog_density: 0.0, ..Default::default() };
+        for led in [false, true] {
+            scene.instances.clear();
+            let material = renderer.add_material_extra(&mut scene, Some(picture), AlphaMode::Blend,
+                [1.0; 4], true, None, None, None, None, [0.0; 3],
+                MaterialExtra { screen: true, led, ..Default::default() });
+            renderer.add_instance(&mut scene, mesh, DVec3::ZERO, Mat4::IDENTITY, vec![material]);
+            let pane_instance = renderer.add_instance(&mut scene, mesh, DVec3::new(0.0, -0.1, 0.0), Mat4::IDENTITY, vec![glass]);
+            renderer.options.fxaa = false;
+            let plain = renderer.render_to_image(&mut scene, 128, 128, &camera, &lighting).unwrap();
+            renderer.options.fxaa = true;
+            let antialiased = renderer.render_to_image(&mut scene, 128, 128, &camera, &lighting).unwrap();
+            let mut error = 0;
+            for y in 55..73 {
+                for x in 38..90 {
+                    let i = (y * 128 + x) * 4;
+                    for channel in 0..3 { error = error.max(plain[i + channel].abs_diff(antialiased[i + channel])); }
+                }
+            }
+            assert!(error <= 1, "display blurred through its pane (LED={led}): {error}");
+            // Identical clear-pane colour, with the display marker held above the mist
+            // range: changing coverage of the marker must not add condensation blur.
+            renderer.set_material(&mut scene, pane_instance, 0, protected_glass);
+            let protected = renderer.render_to_image(&mut scene, 128, 128, &camera, &lighting).unwrap();
+            let mut mist_error = 0;
+            for y in 55..73 {
+                for x in 38..90 {
+                    let i = (y * 128 + x) * 4;
+                    for channel in 0..3 { mist_error = mist_error.max(antialiased[i + channel].abs_diff(protected[i + channel])); }
+                }
+            }
+            assert!(mist_error <= 1, "clear pane was mistaken for condensation (LED={led}): {mist_error}");
+        }
     }
 
     /// A textured material can have black diffuse but white ambient (depot interiors).

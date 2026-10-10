@@ -369,7 +369,7 @@ fn perturb_normal(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>, tn: vec3<f32>) -> v
 
 // The enhanced pass's two targets: the picture, and the screen mask (r: 1 on the bus's own
 // screens, carried by the coverage of what is drawn over them; g: 1 on an LED panel's own
-// dots, see MASK_FORMAT; b is the reflected-light weight of wet puddles).
+// dots, 0.25 on other screens, see MASK_FORMAT; b is wet puddles' reflected-light weight).
 struct EnhancedOut {
     @location(0) color: vec4<f32>,
     @location(1) mask: vec4<f32>,
@@ -394,17 +394,21 @@ fn fs_enhanced(in: FsIn) -> EnhancedOut {
     let led = select(0.0, 1.0, material.emissive.w < -1.5);
     var out: EnhancedOut;
     out.color = c;
-    // The sub-0.5 range of g carries water's occluded sky weight; LED detection uses
-    // step(0.5, g). This keeps scene hits independent of sky ambient occlusion.
+    // Non-LED screens carry g = r / 4. The ratio survives a clear pane's coverage
+    // blending, so a faded screen marker cannot be mistaken for condensation.
+    // Water keeps its occluded sky weight in g and reflection weight in b.
     // A vehicle's shadow is light blocked from the road, not a new dry surface. Its
     // colour still blends normally, but it must preserve the road's reflection mask.
-    let coverage = select(select(c.a, 1.0, screen), 0.0, in.params2.w > 1.5);
+    // A transparent screen layer must leave the masks underneath intact. Otherwise
+    // unused LED colour layers make the whole panel's background bloom as lit dots.
+    let coverage = select(c.a, 0.0, in.params2.w > 1.5);
     // (r under 0.5: how much light the player's bus's misted glass scatters there, for the
     // tone mapping's blur - post.wgsl `misted`. The mask is blended by the coverage, so the
     // share is divided by it to land as MIST_MASK x the share over what lies behind;
     // a misted pane's coverage is at least half its share, see `shade_enhanced`)
     let mist = select(0.0, glass_fog * MIST_MASK / max(coverage, 1e-3), glass_fog > 0.001);
-    out.mask = vec4<f32>(select(min(mist, 0.49), 1.0, screen), max(led, puddle_weight.y * 0.49), puddle_weight.x, coverage);
+    let screen_code = select(0.25, 1.0, led > 0.5);
+    out.mask = vec4<f32>(select(min(mist, 0.49), 1.0, screen), select(max(led, puddle_weight.y * 0.49), screen_code, screen), puddle_weight.x, coverage);
     //RT out.gbuf = rt_gbuf;
     //RT out.aux = rt_aux;
     return out;
