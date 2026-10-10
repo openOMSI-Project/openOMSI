@@ -410,18 +410,29 @@ impl World {
                 // the bare gantry panel. (Not a slot that has no texture on purpose:
                 // `[useTextTexture]` / `[useScriptTexture]` draw their own picture, which
                 // blends by its alpha.)
-                let opaque_blend = if !surface_phase || transmap.is_some() || faded || generated || is_null_texture(&m.texture) {
-                    false
+                //
+                // A picture whose alpha is a cut-out (clear or solid, only its antialiased
+                // outline between: see `picture_blend_fade`) is the same case one step on -
+                // nothing to blend by but the cut-away part - and is drawn alpha-tested so
+                // that the solid part of the object writes depth.
+                let blend_fade = if !surface_phase || transmap.is_some() || faded || generated || is_null_texture(&m.texture) {
+                    None
                 } else if tex.is_none() {
-                    true
+                    Some(super::staging::BlendFade::Solid)
                 } else {
                     let dirs_ref: Vec<&Path> = dirs.iter().map(|p| p.as_path()).collect();
-                    omsi_texture::find_texture(&m.texture, &dirs_ref).is_some_and(|p| super::staging::picture_is_opaque(&p))
+                    omsi_texture::find_texture(&m.texture, &dirs_ref).map(|p| super::staging::picture_blend_fade(&p))
                 };
-                let alpha = if alpha == AlphaMode::Blend && opaque_blend {
-                    AlphaMode::Opaque
-                } else {
-                    alpha
+                let alpha = match (alpha, blend_fade) {
+                    (AlphaMode::Blend, Some(super::staging::BlendFade::Solid)) => AlphaMode::Opaque,
+                    // A cut-out alpha has nothing to blend by either, and a blend leaves the
+                    // slot without depth: every road and pavement spline of the map is drawn in
+                    // the phase AFTER the `[rendertype] surface` object, and a no-write blend
+                    // let them come straight over it and eat its picture (the parked Hong Kong
+                    // buses). Alpha-tested, the solid part of the object writes depth and the
+                    // cut-away part is discarded, which is the picture Omsi.exe shows.
+                    (AlphaMode::Blend, Some(super::staging::BlendFade::Cutout)) => AlphaMode::Test,
+                    _ => alpha,
                 };
                 // [matl_envmap]: the same reflection rule as on vehicles (factor x mask; a
                 // texture without an alpha channel reads as a full mask)
