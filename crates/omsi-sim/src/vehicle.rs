@@ -1765,7 +1765,9 @@ impl VehicleInstance {
                 let ws = self.physics.wheels[ai][si].clone();
                 self.put(w[0], ws.rotation_deg.to_radians());
                 self.put(w[1], ws.rpm);
-                self.put(w[2], if ai == self.steered_axle() { steer } else { 0.0 });
+                if !self.ty.def.is_rail() {
+                    self.put(w[2], if ai == self.steered_axle() { steer } else { 0.0 });
+                }
                 self.put(w[3], ws.suspension);
             }
         }
@@ -2690,6 +2692,9 @@ impl VehicleInstance {
 
     /// Coupled vehicles follow and animate from this vehicle's variables.
     fn update_trailers(&mut self, dt: f32) {
+        if self.ty.def.is_rail() && self.trailers.iter().any(|t| t.track.is_some()) {
+            return;
+        }
         let mut trailers = std::mem::take(&mut self.trailers);
         let mut lead: Option<(DVec3, Mat4, f64)> = None;
         for t in &mut trailers {
@@ -2705,18 +2710,39 @@ impl VehicleInstance {
     pub fn retrail(&mut self, dt: f32, at_behind: &dyn Fn(f64) -> Option<DVec3>) {
         let mut trailers = std::mem::take(&mut self.trailers);
         let mut lead: Option<(DVec3, Mat4, f64)> = None;
-        let (mut prev_c, mut b_prev) = (self.position, 0.0f64);
-        for t in &mut trailers {
+        // Cumulative distance along the track behind the vehicle's front origin
+        let mut lead_coupling_behind = if self.ty.def.is_rail() {
+            // Front vehicle origin to its rear coupling
+            let (back, _) = coupling_points(&self.ty, false, &trailers[0].ty, false);
+            back.y.abs() as f64
+        } else {
+            0.0f64
+        };
+        let mut prev_c = self.position;
+        let mut b_prev = 0.0f64;
+
+        for (_i, t) in trailers.iter_mut().enumerate() {
             let (lp, lr) = lead.map(|(p, r, _)| (p, r)).unwrap_or((self.position, self.body_rotation()));
             let c = t.coupling_point(lp, lr);
-            let b_c = b_prev + (c - prev_c).truncate().length();
-            if let Some(p) = at_behind(b_c + t.pivot_length() as f64) {
-                t.place_on_track(p);
+            if self.ty.def.is_rail() {
+                // Distance along the track to this unit's turning axle/pivot:
+                let pivot_dist = lead_coupling_behind + t.pivot_length() as f64;
+                if let Some(p) = at_behind(pivot_dist) {
+                    t.place_on_track(p);
+                }
+                // Advance lead_coupling_behind by this unit's length between its couplings
+                let unit_coupling_span = (t.coupling_front.y - t.coupling_back.y).abs() as f64;
+                lead_coupling_behind += unit_coupling_span;
+            } else {
+                let b_c = b_prev + (c - prev_c).truncate().length();
+                if let Some(p) = at_behind(b_c + t.pivot_length() as f64) {
+                    t.place_on_track(p);
+                }
+                b_prev = b_c;
+                prev_c = c;
             }
             t.update(self, dt, lead);
             lead = Some((t.position, t.body_rotation(), t.heading));
-            prev_c = c;
-            b_prev = b_c;
         }
         self.trailers = trailers;
     }
@@ -3702,6 +3728,15 @@ impl TrailerPart {
         let turning_line = (ty.def.rot_pnt_long != 0.0 && !ty.def.axles.is_empty()).then_some(ty.def.rot_pnt_long);
         let axle_long = if let Some(r) = turning_line {
             r
+        } else if let Some(b) = ty.def.boogies {
+            // Rail vehicle with [boogies]: turning pivot is at the rear bogie (-b.abs() * 0.5)
+            // clamped so it doesn't fall behind the rear coupling
+            let rear_bogie = -b.abs() * 0.5;
+            rear_bogie.max(coupling_back.y)
+        } else if ty.def.is_rail() {
+            // Rail vehicle without [boogies] (e.g. hanging bridge section):
+            // pivot is at rear coupling
+            coupling_back.y
         } else if body_reversed(&ty.def, reversed) {
             let a = ty.def.axles.iter().map(|a| a.long).fold(f32::MIN, f32::max);
             if a == f32::MIN {
@@ -3716,6 +3751,16 @@ impl TrailerPart {
             } else {
                 a
             }
+        };
+        let length = if ty.def.is_rail() {
+            let len = (coupling_front.y - axle_long).abs();
+            if len < 0.1 {
+                (coupling_front.y - coupling_back.y).abs().max(0.5)
+            } else {
+                len
+            }
+        } else {
+            (coupling_front.y - axle_long).abs()
         };
         let wheel_radius = ty
             .def
@@ -3767,7 +3812,7 @@ impl TrailerPart {
             position: DVec3::ZERO,
             heading: 0.0,
             pivot: None,
-            length: (coupling_front.y - axle_long).abs(),
+            length,
             coupling_front,
             coupling_back,
             axle_long,
@@ -4006,12 +4051,9 @@ impl TrailerPart {
         }
         let lift = sag.iter().sum::<f32>() as f64 / sag.len().max(1) as f64;
         self.ground_lift = lift as f32;
-        // On rails: the track's height where it was put on it (the ground probe found the
-        // platform edge or the embankment beside a bend, and the car jumped up and down).
-        let on_track = self
-            .track
-            .filter(|t| (t.truncate() - new_pivot.truncate()).length() < 1.0)
-            .map(|t| t.z);
+        // On rails: the track's height where it was put on it (self.track is set by
+        // retrail; we don't reject it with a distance threshold on curves).
+        let on_track = self.track.map(|t| t.z);
         // the height of the part's origin over its axle (where the ground has none: level
         // with the coupling, as before)
         let level = c.z - self.coupling_front.z as f64;
@@ -4039,48 +4081,68 @@ impl TrailerPart {
         // stand lower than the coupling on a grade, but never metres under it: that is the
         // road under a bridge seen through a gap in the deck (#135).
         let ground_z = ground_z.filter(|z| if main.contact.is_some() { z + lift - level > -3.0 } else { (z + lift - level).abs() < 1.5 });
-        let axle_z = match on_track.or(ground_z.map(|z| z + lift)) {
-            Some(z) if on_track.is_some() => z,
-            Some(z) if main.contact.is_some() && dt > 0.0 => {
-                // On the road the part stands on its springs as the part in front does in
-                // Omsi.exe (each section is a body of its own on the same wheel springs): a
-                // bump under its axle is a jolt that swings out, not a height eased into over
-                // a sixth of a second, which smoothed every bump away under the rear of an
-                // articulated bus. (Sprung at about 1.6 Hz, a little damped, as a bus body.)
-                let from = prev_z.unwrap_or(z);
-                if (z - from).abs() > 0.5 {
-                    self.axle_vz = 0.0;
-                    z
-                } else {
-                    let (w, zeta) = (2.0 * std::f64::consts::PI * 1.6, 0.35);
-                    let h = (dt as f64).min(0.05);
-                    let acc = w * w * (z - from) - 2.0 * zeta * w * self.axle_vz;
-                    self.axle_vz = (self.axle_vz + acc * h).clamp(-3.0, 3.0);
-                    from + self.axle_vz * h
+        let axle_z = if let Some(z) = on_track {
+            // Rail vehicles (vehtype == 3) bypass terrain raycasts and suspension height relaxation
+            // entirely: vertical coordinate z is locked rigidly to the rail track spline geometry.
+            z
+        } else {
+            match ground_z.map(|z| z + lift) {
+                Some(z) if main.contact.is_some() && dt > 0.0 => {
+                    // On the road the part stands on its springs as the part in front does in
+                    // Omsi.exe (each section is a body of its own on the same wheel springs): a
+                    // bump under its axle is a jolt that swings out, not a height eased into over
+                    // a sixth of a second, which smoothed every bump away under the rear of an
+                    // articulated bus. (Sprung at about 1.6 Hz, a little damped, as a bus body.)
+                    let from = prev_z.unwrap_or(z);
+                    if (z - from).abs() > 0.5 {
+                        self.axle_vz = 0.0;
+                        z
+                    } else {
+                        let (w, zeta) = (2.0 * std::f64::consts::PI * 1.6, 0.35);
+                        let h = (dt as f64).min(0.05);
+                        let acc = w * w * (z - from) - 2.0 * zeta * w * self.axle_vz;
+                        self.axle_vz = (self.axle_vz + acc * h).clamp(-3.0, 3.0);
+                        from + self.axle_vz * h
+                    }
                 }
-            }
-            Some(z) => {
-                // The sampled surface is not perfectly smooth (a centimetre of wobble along
-                // the railway ballast every metre or two), and a car that follows every
-                // sample shivers up and down. Ease towards it instead: a slope still comes
-                // through within a fraction of a second, the wobble does not.
-                let from = prev_z.unwrap_or(z);
-                let dz = z - from;
-                if dz.abs() > 0.5 {
-                    z
-                } else {
-                    from + dz * (dt as f64 * 6.0).min(1.0)
+                Some(z) => {
+                    let from = prev_z.unwrap_or(z);
+                    let dz = z - from;
+                    if dz.abs() > 0.5 {
+                        z
+                    } else {
+                        from + dz * (dt as f64 * 6.0).min(1.0)
+                    }
                 }
+                None => level,
             }
-            None => level,
         };
         self.axle_z = Some(axle_z);
         // The part hangs at the coupling in front and stands on its axle behind: its pitch is
-        // the slope between them (it was drawn level at the axle's height, and on a grade or
-        // a crest the joint came apart by a hand's breadth or more). It leans as the vehicle
-        // it is coupled to does.
-        let rise = c.z - (axle_z + self.coupling_front.z as f64);
-        self.pitch = (rise.atan2(self.length.max(0.5) as f64).to_degrees() as f32).clamp(-15.0, 15.0);
+        // the slope between them.
+        let dz = c.z - (axle_z + self.coupling_front.z as f64);
+        let run = if let Some(track_p) = self.track {
+            (c.truncate() - track_p.truncate()).length().max(0.5)
+        } else {
+            self.length.max(0.5) as f64
+        };
+        let mut pitch = (dz.atan2(run).to_degrees() as f32).clamp(-30.0, 30.0);
+        if let Some([_, bmax, _, kind]) = self.ty.def.coupling_front_character {
+            if kind != 0.0 && bmax > 0.0 {
+                let lead_pitch = {
+                    let f = lead_rot.transform_vector3(Vec3::Y);
+                    let h = lead_heading.to_radians();
+                    let along = f.x as f64 * h.sin() + f.y as f64 * h.cos();
+                    (f.z as f64).atan2(along.abs().max(1e-6) * along.signum()).to_degrees() as f32
+                };
+                let lead_pitch = if lead_pitch.abs() > 90.0 { lead_pitch - 180.0 * lead_pitch.signum() } else { lead_pitch };
+                let rel = lead_pitch - pitch;
+                if rel.abs() > bmax {
+                    pitch = lead_pitch - rel.clamp(-bmax, bmax);
+                }
+            }
+        }
+        self.pitch = pitch;
         self.bank = main.bank;
         // the trailer origin: coupling_front sits at c
         let rot = self.body_rotation();
@@ -4094,16 +4156,31 @@ impl TrailerPart {
         if !ai && on_track.is_none() && dt > 0.0 && shows {
             self.spring_wheels(main, rot);
         }
-        // The joint's angles (degrees) for its plates and bellows and for the scripts: alpha
-        // about the vertical axis - the stock articulation.osc's jackknife protection brakes
-        // at |alpha| > 47° - and beta about the transverse axis. (The horizontal angle went
-        // to beta: the protection never engaged, the bellows turned in the wrong plane.)
-        // The part in front is drawn pitched, this one level: beta is that difference, the
-        // part in front's pitch less this one's. (Taken the other way round, the Agora L's
-        // joint arch and bellows - `anim_rot articulation_0_beta` - tilted away from the rear
-        // section instead of towards it, twice the angle apart at the far ring.)
-        // (the pitch of the part in front as it travels, read off its rotation: forward along
-        // its heading, whichever way its model is turned)
+        if omsi_cfg::flags::OMSI_DEBUG_TRAILER.is_set() {
+            log::info!(
+                "trailer: rest {:?} sag {:?} lift {lift:.3} ground {ground_z:?} z {:.3}",
+                self.rest,
+                sag,
+                self.position.z
+            );
+            for (i, m) in self.ty.meshes.iter().enumerate() {
+                let file = &self.ty.model.meshes[m.def_index].file;
+                if file.to_ascii_lowercase().contains("rad") {
+                    log::info!(
+                        "  {file}: pivot w {:?} transform w {:?}",
+                        m.pivot.w_axis.truncate(),
+                        self.mesh_transforms[i].w_axis.truncate()
+                    );
+                }
+            }
+        }
+        self.update_visuals_only(main, dt, lead);
+        let _ = self.axle_long;
+    }
+
+    fn update_visuals_only(&mut self, main: &mut VehicleInstance, dt: f32, lead: Option<(DVec3, Mat4, f64)>) {
+        let (_lead_pos, lead_rot, lead_heading) =
+            lead.unwrap_or((main.position, main.body_rotation(), main.heading));
         let lead_pitch = {
             let f = lead_rot.transform_vector3(Vec3::Y);
             let h = lead_heading.to_radians();
@@ -4112,9 +4189,6 @@ impl TrailerPart {
         };
         let lead_pitch = if lead_pitch.abs() > 90.0 { lead_pitch - 180.0 * lead_pitch.signum() } else { lead_pitch };
         let alpha = ((lead_heading - self.heading + 540.0) % 360.0) - 180.0;
-        // (the part in front's pitch less this one's, as Omsi.exe's beta runs (0x7de798: it
-        // grows as the rear axle sinks): taken the other way round the bellows bent away
-        // from the rear section on any grade, their folds sheared and a gap opened at one end)
         let beta = lead_pitch - self.pitch as f64;
         if let Some(id) = self.v_alpha {
             main.state.vars[id as usize] = (alpha * ARTICULATION_SIGN) as f32;
@@ -4122,12 +4196,9 @@ impl TrailerPart {
         if let Some(id) = self.v_beta {
             main.state.vars[id as usize] = beta as f32;
         }
-        // wheels of this part
         let rpm =
             main.physics.velocity_kmh() / 3.6 / (2.0 * std::f32::consts::PI * self.wheel_radius)
                 * 60.0;
-        // radians, like every `Wheel_Rotation_*` (the degrees written here before spun the
-        // rear section's wheels 57 times too fast: a flicker instead of a rolling wheel)
         let rot = (self.odometer / self.wheel_radius).rem_euclid(std::f32::consts::TAU);
         for a in 0..self.axle_count {
             for side in ["L", "R"] {
@@ -4148,28 +4219,9 @@ impl TrailerPart {
             self.mesh_transforms[i] = a.update(dt, &main.state.vars);
         }
         crate::anim::apply_parents(&self.animators, &mut self.mesh_transforms);
-        if omsi_cfg::flags::OMSI_DEBUG_TRAILER.is_set() {
-            log::info!(
-                "trailer: rest {:?} sag {:?} lift {lift:.3} ground {ground_z:?} z {:.3}",
-                self.rest,
-                sag,
-                self.position.z
-            );
-            for (i, m) in self.ty.meshes.iter().enumerate() {
-                let file = &self.ty.model.meshes[m.def_index].file;
-                if file.to_ascii_lowercase().contains("rad") {
-                    log::info!(
-                        "  {file}: pivot w {:?} transform w {:?}",
-                        m.pivot.w_axis.truncate(),
-                        self.mesh_transforms[i].w_axis.truncate()
-                    );
-                }
-            }
-        }
         self.props_plan.refresh(&self.ty, &main.var_index);
         self.props_plan
             .apply(&main.state.vars, &mut self.mesh_props);
-        let _ = self.axle_long;
     }
 }
 

@@ -73,11 +73,12 @@ pub(crate) fn attach(p: &mut Player, net: &Network, reach: f64) -> Option<RailDr
     // the track behind it, for its coupled parts: walked backwards from where it stands
     let mut back = r.clone();
     let mut points = Vec::new();
-    let steps = (TRAIL / 2.0).round() as i32;
+    let step_dist = 0.5;
+    let steps = (TRAIL / step_dist).round() as i32;
     for k in 1..=steps {
-        back.step(net, None, -2.0, 0);
+        back.step(net, None, -step_dist as f32, 0);
         let (pos, _) = net.lanes[back.lane].at(back.s);
-        points.push((-2.0 * k as f64, pos));
+        points.push((-step_dist * k as f64, pos));
     }
     let (here, _) = net.lanes[lane].at(s);
     r.trail = points.into_iter().rev().chain(std::iter::once((0.0, here))).collect();
@@ -117,9 +118,18 @@ fn nearest_rail(net: &Network, p: DVec3, heading: f64, reach: f64, within: Optio
 
 /// The trail's point at travelled distance `u` (between its samples; None beyond its ends).
 pub(crate) fn point_at(trail: &std::collections::VecDeque<(f64, DVec3)>, u: f64) -> Option<DVec3> {
+    if trail.is_empty() {
+        return None;
+    }
+    if u <= trail.front().unwrap().0 {
+        return Some(trail.front().unwrap().1);
+    }
+    if u >= trail.back().unwrap().0 {
+        return Some(trail.back().unwrap().1);
+    }
     let i = trail.iter().position(|(v, _)| *v >= u)?;
     if i == 0 {
-        return (trail[0].0 - u < 0.01).then_some(trail[0].1);
+        return Some(trail[0].1);
     }
     let (a, b) = (trail[i - 1], trail[i]);
     let t = ((u - a.0) / (b.0 - a.0).max(1e-6)).clamp(0.0, 1.0);
@@ -133,11 +143,11 @@ fn angle_diff(a: f64, b: f64) -> f64 {
 impl RailDrive {
     /// Move `ds` metres (forward along the vehicle, negative backwards) and put the
     /// vehicle there. `blinker`: 1 left, 2 right (the branch at the next fork).
-    pub(crate) fn advance(&mut self, p: &mut Player, net: &Network, world: &World, ds: f32, blinker: u8) {
+    pub(crate) fn advance(&mut self, p: &mut Player, net: &Network, world: &World, dt: f32, ds: f32, blinker: u8) {
         if !self.step(net, Some(world), ds, blinker) {
             p.vehicle.set_speed(0.0);
         }
-        let bogie_dist = p.vehicle.ty.def.boogies.map(|b| b.abs()).filter(|&b| b > 0.5)
+        let bogie_dist = p.vehicle.ty.def.boogies.map(|b| b.abs() * 0.5).filter(|&b| b > 0.25)
             .or_else(|| {
                 let axles = &p.vehicle.ty.def.axles;
                 if axles.len() >= 2 {
@@ -150,13 +160,30 @@ impl RailDrive {
                 }
             });
 
+        let center_y = if p.vehicle.ty.def.is_rail() {
+            if p.vehicle.ty.def.rot_pnt_long != 0.0 {
+                p.vehicle.ty.def.rot_pnt_long
+            } else if p.vehicle.ty.def.axles.len() >= 4 {
+                // If 4 axles (2 bogies), center_y is the midpoint between front and rear bogie centers
+                let mut longs: Vec<f32> = p.vehicle.ty.def.axles.iter().map(|a| a.long).collect();
+                longs.sort_by(|a, b| b.partial_cmp(a).unwrap());
+                let b0 = (longs[0] + longs[1]) * 0.5;
+                let b1 = (longs[longs.len() - 2] + longs[longs.len() - 1]) * 0.5;
+                (b0 + b1) * 0.5
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
         let (pos, heading, pitch) = if let Some(l) = bogie_dist {
             let mut front_probe = self.clone();
-            front_probe.step(net, Some(world), l, blinker);
+            front_probe.step(net, Some(world), center_y + l, blinker);
             let (pos_f, h_f) = net.lanes[front_probe.lane].at(front_probe.s);
 
             let mut rear_probe = self.clone();
-            rear_probe.step(net, Some(world), -l, blinker);
+            rear_probe.step(net, Some(world), center_y - l, blinker);
             let (pos_r, h_r) = net.lanes[rear_probe.lane].at(rear_probe.s);
 
             let diff = pos_f - pos_r;
@@ -190,13 +217,26 @@ impl RailDrive {
             v.set_var("Axle_Steering_1_L", bogie_1_rad);
             v.set_var("Axle_Steering_1_R", bogie_1_rad);
 
-            ((pos_f + pos_r) * 0.5, h, p_deg)
+            let inv_r_f = bogie_0_rad / l.max(0.1);
+            let inv_r_r = bogie_1_rad / l.max(0.1);
+            v.set_var("boogie_0_invradius", inv_r_f);
+            v.set_var("boogie_1_invradius", inv_r_r);
+
+            let bogie_midpoint = (pos_f + pos_r) * 0.5;
+            let car_pos = if center_y.abs() > 0.001 {
+                let h_rad = h.to_radians();
+                bogie_midpoint - DVec3::new(h_rad.sin(), h_rad.cos(), 0.0) * center_y as f64
+            } else {
+                bogie_midpoint
+            };
+            (car_pos, h, p_deg)
         } else {
             let (pos, h) = net.lanes[self.lane].at(self.s);
             let heading = if self.along { h as f64 } else { (h as f64 + 180.0).rem_euclid(360.0) };
             (pos, heading, 0.0)
         };
 
+        let track_pos = net.lanes[self.lane].at(self.s).0;
         let v = &mut p.vehicle;
         v.position = pos;
         v.heading = heading;
@@ -206,14 +246,15 @@ impl RailDrive {
         let mut c = v.physics.controls;
         c.steering = 0.0;
         v.set_controls(c);
-        // the trail, and the coupled parts on it
+        // the trail, and the coupled parts on it: store the rail centerline position at u,
+        // so that trailing cars and bogies are placed on the track and not chord-inset
         self.u += ds as f64;
-        if self.trail.back().map(|b| (self.u - b.0).abs() > 0.5).unwrap_or(true) {
+        if self.trail.back().map(|b| (self.u - b.0).abs() > 0.1).unwrap_or(true) {
             // (backing up takes the trail back with it)
             while self.trail.back().is_some_and(|b| b.0 > self.u) {
                 self.trail.pop_back();
             }
-            self.trail.push_back((self.u, pos));
+            self.trail.push_back((self.u, track_pos));
             while self.trail.front().is_some_and(|f| self.u - f.0 > TRAIL) {
                 self.trail.pop_front();
             }
@@ -222,7 +263,7 @@ impl RailDrive {
             let trail = &self.trail;
             let u = self.u;
             let r_probe = self.clone();
-            v.retrail(0.0, &|d| {
+            v.retrail(dt, &|d| {
                 point_at(trail, u - d).or_else(|| {
                     let mut probe = r_probe.clone();
                     probe.step(net, None, -d as f32, 0);
@@ -339,7 +380,7 @@ pub(crate) fn frame(p: &mut Player, net: Option<&Network>, world: &World, dt: f3
     let Some(net) = net else { return };
     if p.rail.is_none() {
         if let Some(mut r) = attach(p, net, 3000.0) {
-            r.advance(p, net, world, 0.0, 0);
+            r.advance(p, net, world, dt, 0.0, 0);
             p.rail = Some(r);
         }
         return;
@@ -379,7 +420,7 @@ pub(crate) fn frame(p: &mut Player, net: Option<&Network>, world: &World, dt: f3
     let ds = p.vehicle.physics.speed * dt;
     let blinker = blinker_of(&p.vehicle);
     if let Some(mut r) = p.rail.take() {
-        r.advance(p, net, world, ds, blinker);
+        r.advance(p, net, world, dt, ds, blinker);
         p.rail = Some(r);
     }
 }
