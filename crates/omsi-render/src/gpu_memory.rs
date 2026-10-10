@@ -115,9 +115,18 @@ pub(super) fn adapter_vram_mb(adapter: &wgpu::Adapter, info: &wgpu::AdapterInfo,
     }
 }
 
+/// What the driver says it really hands out (MB): the memory budget, the amount the
+/// adapter may take all together. None where nothing is told, as on the older phones
+/// whose allowance stays the 1000 MB guess (#323).
+fn budget_mb(mem: Option<&wgpu::AdapterMemoryInfo>) -> Option<u64> {
+    let m = mem?;
+    let budget = m.budget_bytes? >> 20;
+    (budget > 0).then_some(budget)
+}
+
 /// Conservative texture allowance in MB, distinct from physical VRAM.
 /// Low-memory discrete GPUs need room for render targets and driver allocations.
-pub(super) fn texture_allowance_mb(info: &wgpu::AdapterInfo, vram: Option<u64>) -> u64 {
+pub(super) fn texture_allowance_mb(info: &wgpu::AdapterInfo, vram: Option<u64>, mem: Option<&wgpu::AdapterMemoryInfo>) -> u64 {
     let discrete_allowance = |fallback| {
         vram.filter(|v| *v >= 512).map_or(fallback, |v| {
             if v <= 2560 { v * 35 / 100 }
@@ -128,7 +137,14 @@ pub(super) fn texture_allowance_mb(info: &wgpu::AdapterInfo, vram: Option<u64>) 
     match info.device_type {
         wgpu::DeviceType::DiscreteGpu => discrete_allowance(1600),
         wgpu::DeviceType::IntegratedGpu if info.backend == wgpu::Backend::Metal => 3000,
-        wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::VirtualGpu => 1000,
+        // (an APU's memory is the system's own and its driver tells how much it really
+        // hands out: 1000 was a guess for the chips that report nothing, and on a desktop
+        // APU with 11 GB of budget it kept a mod's 4k livery on its low mip levels -
+        // the discrete branch's 3/10 share now, up to 4000)
+        wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::VirtualGpu => {
+            let guess = 1000;
+            budget_mb(mem).filter(|b| *b >= 2_600).map_or(guess, |b| (b * 3 / 10).min(4_000))
+        }
         _ => discrete_allowance(800),
     }
 }
