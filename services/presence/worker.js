@@ -22,6 +22,12 @@ const ALIVE_MS = 25 * 60 * 1000;
 const WINDOW_MS = 10 * 60 * 1000;
 const windowStart = (now) => Math.floor(now / WINDOW_MS) * WINDOW_MS;
 const SYSTEMS = ["windows", "macos", "linux", "android"];
+// More sessions than this are not believed: the counter is a small number, and nobody
+// is to fill the object's memory with made-up ids (a new id over it is not counted).
+const MAX_SESSIONS = 50_000;
+// How often the stale sessions are forgotten by pings alone (a counter nobody reads keeps no
+// dead ones: they went only when somebody asked for the count).
+const FORGET_EVERY_MS = 60 * 1000;
 
 export class Presence extends DurableObject {
   // (in memory, not in the object's storage: a session lives 25 minutes, so a restarted
@@ -30,6 +36,7 @@ export class Presence extends DurableObject {
     super(ctx, env);
     this.sessions = new Map();
     this.snapshot = null;
+    this.forgotten = 0;
   }
 
   forget(now) {
@@ -39,7 +46,14 @@ export class Presence extends DurableObject {
   }
 
   async ping(id, os, v) {
-    this.sessions.set(id, { seen: Date.now(), os, v });
+    const now = Date.now();
+    if (now - this.forgotten > FORGET_EVERY_MS) {
+      this.forget(now);
+      this.forgotten = now;
+    }
+    // (a session already counted is always renewed; only a new one meets the limit)
+    if (!this.sessions.has(id) && this.sessions.size >= MAX_SESSIONS) return;
+    this.sessions.set(id, { seen: now, os, v });
   }
 
   async bye(id) {
@@ -90,8 +104,10 @@ export default {
     try {
       return await handle(request, env, ctx);
     } catch (e) {
-      // (the counter unreachable: say why, and ask the games to wait as for a 429)
-      return new Response(`openOMSI presence: ${e}\n`, { status: 503, headers: { "Content-Type": "text/plain", "Retry-After": "1800", ...CORS } });
+      // (the counter unreachable: ask the games to wait as for a 429; the reason stays in the
+      // worker's log, it is nothing for whoever asked)
+      console.error("openOMSI presence:", e);
+      return new Response("openOMSI presence: unavailable\n", { status: 503, headers: { "Content-Type": "text/plain", "Retry-After": "1800", ...CORS } });
     }
   },
 };

@@ -50,6 +50,11 @@ jobs:
               echo "| Platform | Download |"
               echo "| --- | --- |"
               for name in $(gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[].name' | sort); do
+                # (a fork's workflow names its artifacts itself: only plain names go into the
+                # comment, so that none can add a link or markup of its own to it)
+                case "$name" in
+                  *[!A-Za-z0-9._-]*) continue ;;
+                esac
                 case "$name" in
                   windows-*) what="Windows ${name#windows-} (game and dedicated server)" ;;
                   linux-*) what="Linux ${name#linux-} (game and dedicated server)" ;;
