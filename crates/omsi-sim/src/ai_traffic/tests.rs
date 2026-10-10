@@ -673,6 +673,49 @@ mod headless_tests {
         assert!(t.cars.is_empty(), "the car still stands at s {:.1}", t.cars[0].state.s);
     }
 
+    /// A car coming up the road to a bus standing in its bay beside it, 150 m on: the bus
+    /// is the player's or a LAN player's, indicating out of the stop or not. Where the car
+    /// is after `secs` (its front, m north), its speed and what held it.
+    fn bus_in_its_bay(lan: bool, indicating: bool, secs: f32) -> (f64, f32, &'static str) {
+        let f = Fixture::new();
+        let mut t = traffic(&f, road(&[400.0]));
+        let id = add_car(&mut t, &f, 0, 60.0, 0x5EED);
+        // (3.5 m to the right of the lane's middle: out of the car's way)
+        let bus: PlayerBox = (DVec3::new(3.5, 150.0, 0.0), 0.0, 6.0, 1.25, 0.0);
+        let blinker = if indicating { 1 } else { 0 };
+        for _ in 0..(secs / 0.05) as usize {
+            if lan {
+                t.others = vec![(7, bus)];
+                t.other_blinkers = [(7, blinker)].into_iter().collect();
+                t.tick(0.05, None);
+            } else {
+                t.player_blinker = blinker;
+                t.tick(0.05, Some(bus));
+            }
+        }
+        let c = car(&t, id);
+        (
+            c.vehicle.position.y + c.state.front as f64,
+            c.state.speed,
+            c.why.0,
+        )
+    }
+
+    #[test]
+    fn a_lan_players_bus_indicating_is_let_out_of_its_stop_as_the_players_is() {
+        // (on a dedicated server every bus is a LAN player's: the cars let none of them out)
+        for lan in [false, true] {
+            let (front, speed, why) = bus_in_its_bay(lan, true, 15.0);
+            assert!(
+                front < 144.0 && speed < 0.1 && why == "let_out",
+                "lan {lan}: the car's front at {front:.1} m, {speed:.1} m/s, held by {why:?}"
+            );
+            // not indicating: the bus stays in its bay, the car drives on past it
+            let (front, _, _) = bus_in_its_bay(lan, false, 25.0);
+            assert!(front > 160.0, "lan {lan}: the car's front at {front:.1} m");
+        }
+    }
+
     #[test]
     fn the_same_start_makes_the_same_traffic() {
         let run = || {

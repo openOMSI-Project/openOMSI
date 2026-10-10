@@ -349,12 +349,19 @@ impl TrafficSim {
     /// the road), as OMSI's traffic lets a bus leave its stop. Only a car going the bus's
     /// way that can still stop comfortably: one already beside the bus, or too close to
     /// stop, drives on. The gap from the car's front, or None.
-    pub fn letting_out(&self, i: usize, player: &PlayerBox) -> Option<f32> {
+    /// `signal`: the bus's indicator towards the traffic, (seconds since it last showed,
+    /// seconds it has been indicating) - the player's or a LAN player's (`others_signal`).
+    pub fn letting_out(&self, i: usize, player: &PlayerBox, signal: (f32, f32)) -> Option<f32> {
         let car = &self.cars[i];
         let st = &car.state;
         let (centre, heading, half_len, _, speed) = *player;
+        let (signal_age, signalling) = signal;
         // (a bus that indicates and stays for long is not waited for: it is passed)
-        if self.player_signal_age > 1.0 || speed.abs() > 3.0 || (self.player_signalling > 20.0 && speed.abs() < 0.3) || (car.vehicle.position - centre).length() > 120.0 {
+        if signal_age > 1.0
+            || speed.abs() > 3.0
+            || (signalling > 20.0 && speed.abs() < 0.3)
+            || (car.vehicle.position - centre).length() > 120.0
+        {
             return None;
         }
         let h = heading.to_radians();
